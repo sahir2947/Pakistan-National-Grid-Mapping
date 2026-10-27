@@ -23,13 +23,13 @@ To eliminate processing overhead and reduce database index sizes, the master bou
 
 Quadrant Shard Code	Regional Alignment	Database Shard Table Target
 00
-	South-West (Gwadar / Coast)	master_cells_q00
+	South-West (Karachi / Quetta / Gwadar)	master_cells_q00
 01
-	North-West (Quetta / Afghan Border)	master_cells_q01
+	North-West (Pishin / Chaman / Afghan Border)	master_cells_q01
 10
-	South-East (Karachi / Sindh)	master_cells_q10
+	South-East (Multan / Bahawalpur / Thar)	master_cells_q10
 11
-	North-East (Lahore / Islamabad / GB)	master_cells_q11
+	North-East (Lahore / Islamabad / Peshawar / GB)	master_cells_q11
 
 
 3. Two-Layer Grid Hierarchy
