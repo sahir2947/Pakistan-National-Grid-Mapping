@@ -101,8 +101,8 @@ v0.1 is the **grid itself**: a Python library and a static database.
 | 2 | Cells inside each quadrant | ~1 km × 1 km cells | §3.3–3.4 |
 | 3 | Sub-cells inside each cell | 5 × 5 = 25 sub-cells of ~200 m × 200 m | §3.5 |
 | 4 | Sizes may flex to fill the quadrant | Each row's cells are stretched slightly so the row fills the quadrant exactly, leaving no gaps or partial cells | §3.3–3.4 |
-| 5 | Every cell unique within its quadrant | Unique (row, column) pair packed into one integer | §4 |
-| 6 | Every sub-cell unique within its cell | Index 0–24 | §4 |
+| 5 | Every cell unique | Cell ID (quadrant + row + column) is unique across the whole grid | §4.5 |
+| 6 | Every sub-cell unique | Sub-cell ID (cell ID + index 0–24) is unique across the whole grid | §4.5 |
 | 7 | Centroids for every cell and sub-cell | Area-weighted centre on the WGS 84 ellipsoid | §3.7 |
 | 8 | Corrects for Earth's curvature | All sizes measured on the WGS 84 ellipsoid | §3.3–3.4 |
 | 9 | Linked to real GPS points | Every boundary is a line of latitude or longitude | §3.6 |
@@ -311,7 +311,33 @@ sub      = sub_id & 0x1F
 | Cell | `11-0140-0518` | Zones, batching |
 | Sub-cell + offset | `11-0140-0518-01 W60 S18` | Door-level location: metres from the centroid |
 
-### 4.5 Why this layout
+### 4.5 Uniqueness
+
+Row and column numbers start from 0 in every quadrant, and sub-cell numbers
+0–24 repeat in every cell. Because each **ID includes the levels above it**,
+every ID is still unique across the whole grid:
+
+| Identifier | Unique within |
+|---|---|
+| Row, column | its quadrant |
+| Sub-cell number (0–24) | its cell |
+| **Cell ID** | **the whole grid** (2,353,170 distinct IDs) |
+| **Sub-cell ID** | **the whole grid** (58,829,250 distinct IDs) |
+
+For example, row 140, column 518 exists in all four quadrants, but the
+quadrant bits make each one a different cell:
+
+| Code | Cell ID |
+|---|---|
+| `00-0140-0518` | 143,878 |
+| `01-0140-0518` | 1,192,454 |
+| `10-0140-0518` | 2,241,030 |
+| `11-0140-0518` | 3,289,606 |
+
+An app stores the single integer ID and never needs a separate quadrant
+column to tell cells apart.
+
+### 4.6 Why this layout
 
 - **No link tables.** Every sub-cell ID contains its parent cell's ID, and
   every cell ID contains its quadrant.
