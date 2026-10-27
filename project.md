@@ -150,16 +150,19 @@ The rectangle is split at its midlines: **30.258° N** and **68.900° E**.
 
 | Code | Quadrant | Example region | Area (km²) | Rows | Cells |
 |------|----------|----------------|-----------:|-----:|------:|
-| `00` | South-West | Gwadar / Makran coast | 608,168 | 756 | 608,259 |
-| `01` | North-West | Quetta / Afghan border | 568,079 | 757 | 568,326 |
-| `10` | South-East | Karachi / Sindh | 608,168 | 756 | 608,259 |
-| `11` | North-East | Lahore / Islamabad / GB | 568,079 | 757 | 568,326 |
+| `00` | South-West | Karachi, Quetta, Gwadar, Hyderabad, Sukkur | 608,168 | 756 | 608,259 |
+| `01` | North-West | Pishin, Chaman (northern Balochistan); mostly Afghanistan and Iran | 568,079 | 757 | 568,326 |
+| `10` | South-East | Multan, Bahawalpur, Dera Ghazi Khan, Thar | 608,168 | 756 | 608,259 |
+| `11` | North-East | Lahore, Islamabad, Peshawar, Zhob, Gilgit-Baltistan | 568,079 | 757 | 568,326 |
 | | **Total** | | **2,352,494** | | **2,353,170** |
 
 - In each code, the **first bit** is east (1) or west (0) and the **second
   bit** is north (1) or south (0).
 - The southern quadrants are larger because a degree of longitude is wider
   further south.
+- The midlines are geometric, not regional: Quetta (30.18° N) is just south of
+  30.258° N, and Karachi (67.0° E) is west of 68.9° E, so both are in `00`.
+  Check a place's quadrant with `pakgrid locate` or the map viewer.
 
 ### 3.3 Rows (north–south)
 
