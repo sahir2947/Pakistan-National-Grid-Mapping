@@ -4,8 +4,8 @@
 
     with Grid.open("pakgrid_v1.sqlite") as grid:
         loc = grid.locate(31.5204, 74.3587, accuracy_m=5)
-        loc.code          # '11-0140-0518-01'
-        loc.offset.text   # 'W60 S18'
+        loc.code          # '11-0140-0471-00'
+        loc.offset.text   # 'W23 S18'
 """
 
 __version__ = "0.1.0"

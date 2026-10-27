@@ -15,11 +15,11 @@ WGS84_F = 1 / 298.257223563
 SOUTH = 23.436
 NORTH = 37.080
 WEST = 60.800
-EAST = 77.000
+EAST = 78.000
 
 # Midlines that split the rectangle into four quadrants.
 MID_LAT = 30.258
-MID_LON = 68.900
+MID_LON = 69.400
 
 # Target cell size and the number of sub-cells along each side of a cell.
 CELL_SIZE_M = 1000.0

@@ -17,7 +17,7 @@ def test_build_is_deterministic(tmp_path, lahore_db):
     assert again.read_bytes() == lahore_db.read_bytes()
     with Grid.open(lahore_db) as grid:
         assert grid.meta["content_sha256"] == report.content_sha256
-    assert report.cells == 8_462 and report.sub_cells == 8_462 * 25
+    assert report.cells == 8_985 and report.sub_cells == 8_985 * 25
 
 
 def test_build_refuses_to_overwrite(tmp_path):
@@ -72,13 +72,13 @@ def test_open_missing_file(tmp_path):
 def test_cli(lahore_db, tmp_path, capsys):
     assert main(["locate", "31.5204", "74.3587", "--accuracy", "5", "--db", str(lahore_db)]) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["sub_cell"]["code"] == "11-0140-0518-01" and out["confident"] is True
+    assert out["sub_cell"]["code"] == "11-0140-0471-00" and out["confident"] is True
 
-    assert main(["show", "11-0140-0518", "--db", str(lahore_db)]) == 0
-    assert json.loads(capsys.readouterr().out)["centroid"] == [31.5241703, 74.3614434]
+    assert main(["show", "11-0140-0471", "--db", str(lahore_db)]) == 0
+    assert json.loads(capsys.readouterr().out)["centroid"] == [31.5241703, 74.3631579]
 
     assert main(["info", "--db", str(lahore_db)]) == 0
-    assert json.loads(capsys.readouterr().out)["total_cells"] == 2_353_170
+    assert json.loads(capsys.readouterr().out)["total_cells"] == 2_498_422
 
     assert main(["verify", "--db", str(lahore_db)]) == 0
     assert "FAIL" not in capsys.readouterr().out

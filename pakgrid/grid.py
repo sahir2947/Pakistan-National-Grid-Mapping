@@ -76,7 +76,7 @@ class Offset:
 
     @property
     def text(self):
-        """Short form such as 'W60 S18' (metres west/east, south/north)."""
+        """Short form such as 'W23 S18' (metres west/east, south/north)."""
         ew = "E" if self.east_m >= 0 else "W"
         ns = "N" if self.north_m >= 0 else "S"
         return f"{ew}{round(abs(self.east_m))} {ns}{round(abs(self.north_m))}"
@@ -224,7 +224,7 @@ class Grid:
     # -- Lookup by ID ----------------------------------------------------
 
     def cell(self, cell):
-        """A cell's boundaries and centroid, by ID or code such as '11-0140-0518'."""
+        """A cell's boundaries and centroid, by ID or code such as '11-0140-0471'."""
         cid = self._resolve(cell, "cell")
         q, row, col = ids.split_cell_id(cid)
         s, w, n, e, clat, clon = self.store.cell(cid)
@@ -232,7 +232,7 @@ class Grid:
                     Bounds.from_e7(s, w, n, e), (clat / SCALE, clon / SCALE))
 
     def sub_cell(self, sub_cell):
-        """A sub-cell's boundaries and centroid, by ID or code such as '11-0140-0518-01'."""
+        """A sub-cell's boundaries and centroid, by ID or code such as '11-0140-0471-00'."""
         sid = self._resolve(sub_cell, "sub")
         cid, sub = ids.split_sub_cell_id(sid)
         return _sub_cell_from_record(cid, sub, self.store.sub_record(cid))
@@ -282,7 +282,7 @@ class Grid:
 
     @staticmethod
     def to_text(item_id, level="sub"):
-        """'11-0140-0518-01' from a sub-cell ID, or '11-0140-0518' from a cell ID with level='cell'."""
+        """'11-0140-0471-00' from a sub-cell ID, or '11-0140-0471' from a cell ID with level='cell'."""
         return ids.cell_code(item_id) if level == "cell" else ids.sub_cell_code(item_id)
 
     def from_text(self, code):

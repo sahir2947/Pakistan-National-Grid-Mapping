@@ -7,13 +7,13 @@ A map page that shows the Pakistan National Grid on OpenStreetMap:
 - ~1 km cells from zoom 11, and ~200 m sub-cells (numbered 0–24) from zoom 14
 
 Tap anywhere to see that point's cell and sub-cell: codes, IDs, boundaries,
-centroids, and the offset from the sub-cell's centroid (for example `W60 S18`).
+centroids, and the offset from the sub-cell's centroid (for example `W23 S18`).
 **My location** does the same for your phone's GPS position and shows whether
 the reading is accurate enough to be sure of the block.
 
-Search accepts a code (`11-0140-0518-01` or `11-0140-0518`) or `lat, lon`.
+Search accepts a code (`11-0140-0471-00` or `11-0140-0471`) or `lat, lon`.
 The address bar updates as you select, so a link such as
-`index.html#11-0140-0518-01` opens straight at that block.
+`index.html#11-0140-0471-00` opens straight at that block.
 
 ## Running it
 

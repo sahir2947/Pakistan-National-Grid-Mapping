@@ -12,12 +12,12 @@ def test_gauss_legendre_integrates_polynomials_exactly():
 
 def test_total_area():
     total = geodesy.rect_area(spec.SOUTH, spec.NORTH, spec.WEST, spec.EAST) / 1e6
-    assert total == pytest.approx(2_352_494, abs=1)
+    assert total == pytest.approx(2_497_710, abs=1)
 
 
 def test_quadrant_areas():
     areas = [geodesy.rect_area(*spec.quadrant_bounds(q)) / 1e6 for q in range(4)]
-    assert [round(a) for a in areas] == [608_168, 568_079, 608_168, 568_079]
+    assert [round(a) for a in areas] == [645_709, 603_146, 645_709, 603_146]
 
 
 def test_cells_fill_each_quadrant_exactly():

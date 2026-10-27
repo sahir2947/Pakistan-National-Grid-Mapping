@@ -10,19 +10,19 @@ from pakgrid.layout import (EAST_E7, MID_LAT_E7, MID_LON_E7, NORTH_E7, SOUTH_E7,
 
 def test_counts(layout):
     assert [ql.nrows for ql in layout.quadrants] == [756, 757, 756, 757]
-    assert [ql.ncells for ql in layout.quadrants] == [608_259, 568_326, 608_259, 568_326]
-    assert layout.total_cells == 2_353_170
-    assert layout.total_sub_cells == 58_829_250
+    assert [ql.ncells for ql in layout.quadrants] == [645_806, 603_405, 645_806, 603_405]
+    assert layout.total_cells == 2_498_422
+    assert layout.total_sub_cells == 62_460_550
 
 
 def test_rows_and_columns_fit_10_bits(layout):
     assert max(ql.nrows for ql in layout.quadrants) <= 1023
-    assert max(max(ql.ncols) for ql in layout.quadrants) == 828
+    assert max(max(ql.ncols) for ql in layout.quadrants) == 879
 
 
 def test_lahore_row(layout):
     ql = layout.quadrants[3]
-    assert (ql.ncols[0], ql.ncols[140], ql.ncols[756]) == (779, 769, 720)
+    assert (ql.ncols[0], ql.ncols[140], ql.ncols[756]) == (828, 817, 765)
 
 
 def test_cell_sizes(layout):
@@ -163,7 +163,7 @@ def test_items_in_area_matches_brute_force(layout, level):
 
 
 def test_items_in_area_whole_grid_counts(layout):
-    assert len(layout.items_in_area(SOUTH_E7, WEST_E7, NORTH_E7, EAST_E7, "cell")) == 2_353_170
+    assert len(layout.items_in_area(SOUTH_E7, WEST_E7, NORTH_E7, EAST_E7, "cell")) == 2_498_422
 
 
 def test_items_in_area_outside_is_empty(layout):

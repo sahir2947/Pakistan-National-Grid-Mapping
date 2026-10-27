@@ -57,7 +57,7 @@
 <div id="map"></div>
 <form class="bar" id="search">
   <input id="q" type="search" autocomplete="off" spellcheck="false"
-         placeholder="Code (11-0140-0518-01) or lat, lon (31.5204, 74.3587)" aria-label="Search">
+         placeholder="Code (11-0140-0471-00) or lat, lon (31.5204, 74.3587)" aria-label="Search">
   <button class="primary" type="submit">Go</button>
   <button type="button" id="me" title="Find my grid block">My location</button>
 </form>
@@ -300,7 +300,7 @@
     if (parsed) { select({ loc: parsed, fly: true, instant: instant }); return; }
     var m = /^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/.exec(text);
     if (m) { selectPoint(+m[1], +m[2], true, undefined, instant); return; }
-    flash("Enter a grid code such as 11-0140-0518-01, or lat, lon");
+    flash("Enter a grid code such as 11-0140-0471-00, or lat, lon");
   }
 
   document.getElementById("search").addEventListener("submit", function (e) {

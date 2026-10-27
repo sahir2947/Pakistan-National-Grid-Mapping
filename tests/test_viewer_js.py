@@ -82,7 +82,7 @@ def test_javascript_rejects_points_outside():
     js = f"""
     const P = require('{VIEWER}/pakgrid.js');
     const g = new P.Grid(require('{VIEWER}/layout.js'));
-    console.log(JSON.stringify([g.locate(23.0, 70), g.locate(30, 78), g.parseCode('11-0800-0000'),
+    console.log(JSON.stringify([g.locate(23.0, 70), g.locate(30, 79), g.parseCode('11-0800-0000'),
                                 g.parseCode('11-0140-0518-01')]));
     """
     out = json.loads(subprocess.run([NODE, "-e", js], capture_output=True, text=True, check=True).stdout)

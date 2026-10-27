@@ -5,20 +5,20 @@ from pakgrid.errors import InvalidIdError
 
 
 def test_lahore_example():
-    cid = ids.cell_id(3, 140, 518)
-    assert cid == 3_289_606
-    sid = ids.sub_cell_id(cid, 1)
-    assert sid == 105_267_393
-    assert ids.split_cell_id(cid) == (3, 140, 518)
-    assert ids.split_sub_cell_id(sid) == (cid, 1)
+    cid = ids.cell_id(3, 140, 471)
+    assert cid == 3_289_559
+    sid = ids.sub_cell_id(cid, 0)
+    assert sid == 105_265_888
+    assert ids.split_cell_id(cid) == (3, 140, 471)
+    assert ids.split_sub_cell_id(sid) == (cid, 0)
     assert ids.parent(sid) == cid
-    assert ids.cell_code(cid) == "11-0140-0518"
-    assert ids.sub_cell_code(sid) == "11-0140-0518-01"
+    assert ids.cell_code(cid) == "11-0140-0471"
+    assert ids.sub_cell_code(sid) == "11-0140-0471-00"
 
 
 def test_same_row_and_column_in_each_quadrant_are_distinct():
-    got = [ids.cell_id(q, 140, 518) for q in range(4)]
-    assert got == [143_878, 1_192_454, 2_241_030, 3_289_606]
+    got = [ids.cell_id(q, 140, 471) for q in range(4)]
+    assert got == [143_831, 1_192_407, 2_240_983, 3_289_559]
     assert [ids.cell_code(c)[:2] for c in got] == ["00", "01", "10", "11"]
 
 
