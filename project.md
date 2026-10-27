@@ -13,6 +13,11 @@ area, rider zones, and delivery fees.
 Later phases can add a public API, a map website, search and routing. This
 document covers only the **minimum starting point**: the grid itself.
 
+![How a grid code is built: quadrants, rows and columns, sub-cells, and bit packing, worked through for central Lahore](docs/grid_schematic.png)
+
+*Schematic of the grid, worked through for central Lahore
+(`11-0140-0518-01`). Printable A4 version: [docs/grid_schematic.pdf](docs/grid_schematic.pdf).*
+
 ## 2. Minimum scope
 
 | # | Requirement | How it is met |
