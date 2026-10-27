@@ -938,6 +938,12 @@ the same data centre.
 | Determinism | Two builds produce byte-identical files and the same checksum |
 | GPS noise | Simulated noise: the true block is always the result or one of its `candidates` |
 
+
+All tests run automatically on GitHub Actions (`.github/workflows/tests.yml`)
+for Python 3.10, 3.11, 3.12 and 3.13, on every push to `main` and every pull
+request. The workflow also runs `pyflakes`, and checks that the viewer's
+`layout.js` matches the library.
+
 ---
 
 ## 15. Roadmap

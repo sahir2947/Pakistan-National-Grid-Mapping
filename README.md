@@ -123,6 +123,8 @@ Because the engine uses an optimized relational schema layout and basic integer 
 
 ## `pakgrid` library (v0.1)
 
+[![Tests](https://github.com/sahir2947/Pakistan-National-Grid-Mapping/actions/workflows/tests.yml/badge.svg)](https://github.com/sahir2947/Pakistan-National-Grid-Mapping/actions/workflows/tests.yml)
+
 The grid described above is implemented as the Python package `pakgrid`.
 Full design documentation: [project.md](project.md).
 
@@ -158,4 +160,5 @@ publish the repository with GitHub Pages. See [viewer/README.md](viewer/README.m
 For tests or a pilot, build part of the grid, for example
 `pakgrid build -o lahore.sqlite --quadrant 11 --rows 135:146`.
 
-**Tests:** `pip install -e ".[test]"`, then `pytest`.
+**Tests:** `pip install -e ".[test]"`, then `pytest`. GitHub Actions runs them on
+Python 3.10–3.13 for every push to `main` and every pull request.
