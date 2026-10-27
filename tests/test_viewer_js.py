@@ -1,0 +1,89 @@
+"""The map viewer's JavaScript must agree with the Python library (skipped without node)."""
+
+import json
+import random
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from pakgrid import geodesy, ids
+from pakgrid.export import layout_js
+from pakgrid.layout import (EAST_E7, MID_LAT_E7, MID_LON_E7, NORTH_E7, SCALE, SOUTH_E7, WEST_E7, to_e7)
+
+VIEWER = Path(__file__).resolve().parent.parent / "viewer"
+NODE = shutil.which("node")
+
+
+def test_committed_layout_is_up_to_date():
+    assert (VIEWER / "layout.js").read_text() == layout_js(), \
+        "viewer/layout.js is stale: run `pakgrid export-layout`"
+
+
+def _python_answer(layout, lat_e7, lon_e7):
+    q, row, col, sr, sc = layout.locate_e7(lat_e7, lon_e7)
+    ql = layout.quadrants[q]
+    sub = ids.sub_index(sr, sc)
+    i0, j0 = row * 5 + sr, col * 5 + sc
+    s, n = ql.fine_lat(i0), ql.fine_lat(i0 + 1)
+    w, e = ql.fine_lon(row, j0), ql.fine_lon(row, j0 + 1)
+    cs, cn = ql.fine_lat(row * 5), ql.fine_lat(row * 5 + 5)
+    cw, ce = ql.fine_lon(row, col * 5), ql.fine_lon(row, col * 5 + 5)
+    return {
+        "code": ids.sub_cell_code(ids.sub_cell_id(ids.cell_id(q, row, col), sub)),
+        "bounds": [to_e7(s), to_e7(w), to_e7(n), to_e7(e)],
+        "centroid": [to_e7(geodesy.band_centroid_lat(s, n)), to_e7((w + e) / 2)],
+        "cell_centroid": [to_e7(geodesy.band_centroid_lat(cs, cn)), to_e7((cw + ce) / 2)],
+    }
+
+
+_JS = """
+const P = require(process.argv[1] + '/pakgrid.js');
+const g = new P.Grid(require(process.argv[1] + '/layout.js'));
+const pts = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const e7 = (x) => Math.round(x * 1e7);
+const out = pts.map(([lat, lon]) => {
+  const r = g.locate(lat / 1e7, lon / 1e7);
+  if (!r) return null;
+  const sub = r.subRow * 5 + r.subCol;
+  const d = g.describe(r.q, r.row, r.col, sub), c = g.describe(r.q, r.row, r.col, null);
+  const b = d.bounds;
+  return { code: d.code, bounds: [e7(b.south), e7(b.west), e7(b.north), e7(b.east)],
+           centroid: d.centroid.map(e7), cell_centroid: c.centroid.map(e7) };
+});
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_matches_python(layout):
+    rng = random.Random(11)
+    pts = [(rng.randint(SOUTH_E7, NORTH_E7), rng.randint(WEST_E7, EAST_E7)) for _ in range(5000)]
+    # exact edges: midlines, outer edges, and points on cell and sub-cell lines
+    pts += [(MID_LAT_E7, MID_LON_E7), (SOUTH_E7, WEST_E7), (NORTH_E7, EAST_E7), (MID_LAT_E7 - 1, MID_LON_E7 - 1)]
+    ql = layout.quadrants[3]
+    for i in (700, 702, 1000):
+        for j in (2590, 2592, 3000):
+            pts.append((ql.lat_e7[i], ql.fine_lon_e7(i // 5, j)))
+    got = json.loads(subprocess.run([NODE, "-e", _JS, str(VIEWER)], input=json.dumps(pts),
+                                    capture_output=True, text=True, check=True).stdout)
+    for (lat, lon), js in zip(pts, got):
+        py = _python_answer(layout, lat, lon)
+        assert js["code"] == py["code"], (lat / SCALE, lon / SCALE)
+        assert js["bounds"] == py["bounds"]
+        # centroids may differ by 1e-7 degree if a platform's sin/cos differ in the last digit
+        for a, b in zip(js["centroid"] + js["cell_centroid"], py["centroid"] + py["cell_centroid"]):
+            assert abs(a - b) <= 1
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_rejects_points_outside():
+    js = f"""
+    const P = require('{VIEWER}/pakgrid.js');
+    const g = new P.Grid(require('{VIEWER}/layout.js'));
+    console.log(JSON.stringify([g.locate(23.0, 70), g.locate(30, 78), g.parseCode('11-0800-0000'),
+                                g.parseCode('11-0140-0518-01')]));
+    """
+    out = json.loads(subprocess.run([NODE, "-e", js], capture_output=True, text=True, check=True).stdout)
+    assert out == [None, None, None, {"q": 3, "row": 140, "col": 518, "sub": 1}]

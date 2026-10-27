@@ -118,3 +118,44 @@ Because the engine uses an optimized relational schema layout and basic integer 
 [ Courier App Routing Lookup ]
   └── 8. Driver queries database. System returns immutable, pre-calculated 
          fixed center GPS coordinates of that block for absolute route stability.
+
+---
+
+## `pakgrid` library (v0.1)
+
+The grid described above is implemented as the Python package `pakgrid`.
+Full design documentation: [project.md](project.md).
+
+**Requirements:** Python 3.10+, no other dependencies.
+
+```bash
+pip install -e .                 # from this repository
+pakgrid build                    # writes pakgrid_v1.sqlite (~736 MB, ~30 s)
+pakgrid verify                   # checks the file against the grid rules and checksum
+pakgrid locate 31.5204 74.3587 --accuracy 5
+pakgrid show 11-0140-0518-01
+```
+
+```python
+from pakgrid import Grid, direction
+
+with Grid.open("pakgrid_v1.sqlite") as grid:
+    loc = grid.locate(31.5204, 74.3587, accuracy_m=5)
+    loc.code                         # '11-0140-0518-01'
+    loc.offset.text                  # 'W60 S18'  (metres from the block's centroid)
+    loc.confident                    # True
+    grid.cell(loc.cell_id).centroid  # (31.5241703, 74.3614434)
+    grid.neighbours(loc.cell_id)     # touching cells, across quadrant lines too
+
+direction(31.5215, 74.3570, 31.5204, 74.3587, heading=90).turn   # 'bear right'
+```
+
+**Map viewer:** `viewer/index.html` shows the rectangle, quadrants, cells and
+sub-cells on OpenStreetMap; tap anywhere to see its grid code. Run
+`python3 -m http.server -d viewer 8000` and open http://localhost:8000, or
+publish the repository with GitHub Pages. See [viewer/README.md](viewer/README.md).
+
+For tests or a pilot, build part of the grid, for example
+`pakgrid build -o lahore.sqlite --quadrant 11 --rows 135:146`.
+
+**Tests:** `pip install -e ".[test]"`, then `pytest`.

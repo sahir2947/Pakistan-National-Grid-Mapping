@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+
+# Generated grid databases are published as release assets, not committed.
+*.sqlite
+*.sqlite.partial

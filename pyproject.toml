@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pakgrid"
+version = "0.1.0"
+description = "Pakistan National Grid: fixed, numbered ~1 km cells and ~200 m sub-cells with GPS-linked boundaries and centroids"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "pyproj>=3"]
+
+[project.scripts]
+pakgrid = "pakgrid.cli:main"
+
+[tool.setuptools]
+packages = ["pakgrid"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
