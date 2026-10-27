@@ -540,11 +540,28 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 | `pakgrid locate LAT LON [--accuracy M]` | Look up a point; prints JSON |
 | `pakgrid show CODE` | Print a cell's or sub-cell's details as JSON |
 | `pakgrid info` | Print grid and database information |
+| `pakgrid export-layout` | Write `viewer/layout.js`, the row and column counts used by the map viewer |
 
 The database path defaults to `pakgrid_v1.sqlite`, or the `PAKGRID_DB`
 environment variable.
 
-### 7.3 HTTP API (v0.2): 10 endpoints
+### 7.3 Map viewer
+
+`viewer/index.html` is a static web page that draws the grid on OpenStreetMap,
+for checking the grid visually before it is used in an app:
+
+- the rectangle, with its four corner coordinates, plus the quadrants and midlines
+- cells from zoom 11 and sub-cells (numbered 0–24) from zoom 14
+- tap a point or use **My location** to see its codes, IDs, boundaries,
+  centroids, offset and GPS confidence
+- search by code or by `lat, lon`; links such as `#11-0140-0518-01` open at
+  that block
+
+It needs no database. It recomputes the grid from `viewer/layout.js` with the
+same formulas as the library, and `tests/test_viewer_js.py` checks that the
+two agree. See [viewer/README.md](viewer/README.md).
+
+### 7.4 HTTP API (v0.2): 10 endpoints
 
 | Method | Endpoint | Library function |
 |---|---|---|
@@ -923,7 +940,7 @@ the same data centre.
 | Version | Deliverable |
 |---|---|
 | **v0.1 — Grid core** ✅ | Python library, full database (option B), CLI, tests, documentation (implemented) |
-| **v0.2 — Grid API** | HTTP service with the 10 endpoints in §7.3 |
+| **v0.2 — Grid API** | HTTP service with the 10 endpoints in §7.4 |
 | **v0.3 — Dukandaari pilot** | One city (Lahore or Karachi): addresses, batching, rider navigation |
 | **v1.0 — Public release** | Frozen grid v1, Pakistan border flag, published database, documentation |
 | **Later** | Map website with grid overlay (MapLibre + OpenStreetMap), search, road routing, Flutter and JavaScript SDKs |

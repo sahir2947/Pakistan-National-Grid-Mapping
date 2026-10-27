@@ -1,4 +1,4 @@
-"""Command-line tools: pakgrid build | verify | locate | show | info."""
+"""Command-line tools: pakgrid build | verify | locate | show | info | export-layout."""
 
 import argparse
 import json
@@ -39,6 +39,9 @@ def main(argv=None):
     p = sub.add_parser("info", help="print grid and database information")
     p.add_argument("--db", default=DEFAULT_DB)
 
+    p = sub.add_parser("export-layout", help="write the row/column layout for the map viewer")
+    p.add_argument("-o", "--output", default="viewer/layout.js")
+
     args = parser.parse_args(argv)
     try:
         return _COMMANDS[args.command](args)
@@ -66,6 +69,12 @@ def _verify(args):
     return 0 if report.ok else 2
 
 
+def _export_layout(args):
+    from .export import write_layout_js
+    print(f"wrote {write_layout_js(args.output)}")
+    return 0
+
+
 def _with_grid(fn):
     def run(args):
         from .grid import Grid
@@ -88,6 +97,7 @@ _COMMANDS = {
     "locate": _with_grid(lambda grid, a: grid.locate(a.lat, a.lon, a.accuracy).to_dict()),
     "show": _with_grid(_show),
     "info": _with_grid(lambda grid, a: grid.info()),
+    "export-layout": _export_layout,
 }
 
 if __name__ == "__main__":

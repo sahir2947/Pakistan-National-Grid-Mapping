@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pakistan Grid Viewer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2937; --muted: #6b7280; --line: #e5e7eb; --accent: #d9480f;
+    --panel-shadow: 0 2px 12px rgba(0, 0, 0, .18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1f2328; --fg: #e6e8eb; --muted: #9aa3ad; --line: #3a4048; --accent: #ff7a3d; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+               font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #map { position: absolute; inset: 0; }
+  .bar { position: absolute; z-index: 1000; top: 10px; left: 56px; right: 10px; display: flex; gap: 6px;
+         flex-wrap: wrap; max-width: 640px; }
+  .bar input { flex: 1 1 220px; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
+               background: var(--bg); color: var(--fg); font-size: 14px; box-shadow: var(--panel-shadow); }
+  .bar button, .panel button { padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
+               background: var(--bg); color: var(--fg); font-size: 14px; box-shadow: var(--panel-shadow); }
+  .bar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .panel { position: absolute; z-index: 1000; right: 10px; top: 64px; width: 340px; max-height: calc(100% - 84px);
+           overflow: auto; background: var(--bg); border-radius: 10px; box-shadow: var(--panel-shadow); padding: 12px 14px; }
+  .panel h2 { margin: 0 0 2px; font-size: 16px; }
+  .panel h3 { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .code { font: 700 20px/1.2 ui-monospace, Menlo, Consolas, monospace; color: var(--accent); word-break: break-all; }
+  .sub { color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 3px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td:first-child { color: var(--muted); padding-right: 8px; white-space: nowrap; }
+  td.num { font-family: ui-monospace, Menlo, Consolas, monospace; text-align: right; }
+  .status { position: absolute; z-index: 1000; left: 50%; transform: translateX(-50%); bottom: 22px;
+            background: rgba(31, 41, 55, .86); color: #fff; padding: 6px 12px; border-radius: 16px; font-size: 13px;
+            pointer-events: none; white-space: nowrap; }
+  .quad-label { font: 700 22px/1.1 system-ui, sans-serif; color: #111827; text-align: center;
+                text-shadow: 0 0 4px #fff, 0 0 4px #fff; white-space: nowrap; }
+  .quad-label small { display: block; font-size: 12px; font-weight: 500; }
+  .cell-label { font: 600 10px/1 ui-monospace, Menlo, monospace; color: #1e3a8a; text-shadow: 0 0 3px #fff;
+                white-space: nowrap; text-align: center; }
+  .sub-label { font: 600 11px/1 ui-monospace, Menlo, monospace; color: #9a3412; text-shadow: 0 0 3px #fff; text-align: center; }
+  .leaflet-tooltip.corner { font-size: 12px; }
+  .hide { display: none; }
+  @media (max-width: 640px) {
+    .bar { left: 52px; }
+    .panel { left: 10px; right: 10px; top: auto; bottom: 10px; width: auto; max-height: 45%; }
+    .status { bottom: auto; top: 108px; }
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<form class="bar" id="search">
+  <input id="q" type="search" autocomplete="off" spellcheck="false"
+         placeholder="Code (11-0140-0518-01) or lat, lon (31.5204, 74.3587)" aria-label="Search">
+  <button class="primary" type="submit">Go</button>
+  <button type="button" id="me" title="Find my grid block">My location</button>
+</form>
+<div class="panel" id="panel"></div>
+<div class="status" id="status"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="layout.js"></script>
+<script src="pakgrid.js"></script>
+<script>
+(function () {
+  "use strict";
+  var grid = new PakGrid.Grid(PAKGRID_LAYOUT);
+  var B = grid.bounds, M = grid.mid;
+  var CELL_ZOOM = 11, SUB_ZOOM = 14, CELL_LABEL_ZOOM = 13, SUB_LABEL_ZOOM = 16, LIMIT = 6000;
+  var QUAD_COLOURS = ["#3b82f6", "#16a34a", "#f59e0b", "#e11d48"];  // 00 01 10 11
+
+  // Keep the search bar and the info panel from covering what we zoom to.
+  function viewPadding() {
+    return window.innerWidth > 640
+      ? { paddingTopLeft: [20, 70], paddingBottomRight: [370, 20] }
+      : { paddingTopLeft: [20, 120], paddingBottomRight: [20, Math.round(window.innerHeight * 0.47)] };
+  }
+  var map = L.map("map", { zoomControl: true, worldCopyJump: false, zoomSnap: 0.25 })
+    .fitBounds([[B.south, B.west], [B.north, B.east]], viewPadding());
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(map);
+  var canvas = L.canvas({ padding: 0.3 });
+
+  // -- Rectangle, quadrants, midlines and corners ------------------------
+  var frame = L.layerGroup().addTo(map);
+  grid.quadrants.forEach(function (ql) {
+    L.rectangle([[ql.south, ql.west], [ql.north, ql.east]], {
+      color: QUAD_COLOURS[ql.q], weight: 1, fillColor: QUAD_COLOURS[ql.q], fillOpacity: 0.10, interactive: false
+    }).addTo(frame);
+    L.marker([(ql.south + ql.north) / 2, (ql.west + ql.east) / 2], {
+      interactive: false,
+      icon: L.divIcon({ className: "quad-label", iconSize: [160, 60], iconAnchor: [80, 30],
+        html: ql.code + "<small>" + ql.name + "</small><small>" + ql.nrows + " rows · " +
+              ql.ncells.toLocaleString() + " cells</small>" })
+    }).addTo(frame);
+  });
+  L.rectangle([[B.south, B.west], [B.north, B.east]], { color: "#111827", weight: 3, fill: false, interactive: false })
+    .addTo(frame);
+  var dash = { color: "#d9480f", weight: 2, dashArray: "8 6", interactive: false };
+  L.polyline([[M.lat, B.west], [M.lat, B.east]], dash).bindTooltip(M.lat.toFixed(3) + "° N", { sticky: true }).addTo(frame);
+  L.polyline([[B.south, M.lon], [B.north, M.lon]], dash).bindTooltip(M.lon.toFixed(3) + "° E", { sticky: true }).addTo(frame);
+
+  var corners = [
+    ["North-West", B.north, B.west, "right"], ["North-East", B.north, B.east, "left"],
+    ["South-West", B.south, B.west, "right"], ["South-East", B.south, B.east, "left"]
+  ];
+  corners.forEach(function (c) {
+    L.circleMarker([c[1], c[2]], { radius: 6, color: "#111827", fillColor: "#fff", fillOpacity: 1, weight: 2 })
+      .bindTooltip("<b>" + c[0] + "</b><br>" + c[1].toFixed(3) + "° N, " + c[2].toFixed(3) + "° E",
+                   { permanent: true, direction: c[3], className: "corner" })
+      .addTo(frame);
+  });
+
+  // -- Cell and sub-cell lines, drawn only for the visible area -----------
+  var gridLayer = L.layerGroup().addTo(map);
+  var labelLayer = L.layerGroup().addTo(map);
+  var statusEl = document.getElementById("status");
+
+  function drawBoxes(boxes, style) {
+    boxes.forEach(function (b) {
+      L.rectangle([[b[0], b[1]], [b[2], b[3]]], L.extend({ renderer: canvas, fill: false, interactive: false }, style))
+        .addTo(gridLayer);
+    });
+  }
+
+  function drawLabels(boxes, atTop, className, size, text) {
+    boxes.forEach(function (b) {
+      var r = grid.locate((b[0] + b[2]) / 2, (b[1] + b[3]) / 2);
+      if (!r) return;
+      L.marker([atTop ? b[2] : (b[0] + b[2]) / 2, (b[1] + b[3]) / 2], { interactive: false, icon: L.divIcon({
+        className: className, iconSize: size, iconAnchor: [size[0] / 2, atTop ? -4 : size[1] / 2], html: text(r) })
+      }).addTo(labelLayer);
+    });
+  }
+
+  function drawGrid() {
+    gridLayer.clearLayers();
+    labelLayer.clearLayers();
+    var z = map.getZoom(), v = map.getBounds();
+    var cells = null, subs = null, msg;
+    if (z >= CELL_ZOOM) cells = grid.itemsInBox(v.getSouth(), v.getWest(), v.getNorth(), v.getEast(), "cell", LIMIT);
+    if (cells && z >= SUB_ZOOM) subs = grid.itemsInBox(v.getSouth(), v.getWest(), v.getNorth(), v.getEast(), "sub", LIMIT);
+
+    if (z < CELL_ZOOM) msg = "Zoom in to see the ~1 km cells";
+    else if (!cells) msg = "Zoom in a little more to draw the cells";
+    else {
+      msg = cells.length.toLocaleString() + " cells in view";
+      if (subs) msg += " · " + subs.length.toLocaleString() + " sub-cells";
+      else msg += z >= SUB_ZOOM ? " · zoom in to see sub-cells" : " · zoom in to see ~200 m sub-cells";
+    }
+
+    // sub-cells first, so the cell lines stay on top
+    if (subs) drawBoxes(subs, { color: "#ea580c", weight: 0.7, opacity: 0.7 });
+    if (cells) drawBoxes(cells, { color: "#1d4ed8", weight: subs ? 2 : 1, opacity: 0.8 });
+    if (cells && z >= CELL_LABEL_ZOOM && cells.length <= 400) {
+      drawLabels(cells, true, "cell-label", [96, 12], function (r) { return PakGrid.cellCode(r.q, r.row, r.col); });
+    }
+    if (subs && z >= SUB_LABEL_ZOOM && subs.length <= 300) {
+      drawLabels(subs, false, "sub-label", [20, 12], function (r) { return String(r.subRow * 5 + r.subCol); });
+    }
+    statusEl.textContent = msg;
+    statusEl.classList.remove("hide");
+  }
+  map.on("moveend", drawGrid);
+
+  // -- Selection -----------------------------------------------------------
+  var selLayer = L.layerGroup().addTo(map);
+  var panel = document.getElementById("panel");
+
+  function fmt(x) { return x.toFixed(7); }
+  function rowsHtml(rows) {
+    return "<table>" + rows.map(function (r) {
+      return "<tr><td>" + r[0] + "</td><td class='num'>" + r[1] + "</td></tr>";
+    }).join("") + "</table>";
+  }
+  function boundsRows(b) {
+    return [["South", fmt(b.south) + "° N"], ["North", fmt(b.north) + "° N"],
+            ["West", fmt(b.west) + "° E"], ["East", fmt(b.east) + "° E"]];
+  }
+  function sizeText(b) {
+    var m = PakGrid.metresPerDegree((b.south + b.north) / 2);
+    return Math.round((b.east - b.west) * m.lon) + " m × " + Math.round((b.north - b.south) * m.lat) + " m";
+  }
+
+  function showSummary() {
+    var d = PAKGRID_LAYOUT;
+    panel.innerHTML =
+      "<h2>Pakistan National Grid</h2><div class='sub'>Grid version " + d.grid_version + " · " + d.datum +
+      "</div><h3>Rectangle</h3>" + rowsHtml([
+        ["North-West", B.north.toFixed(3) + ", " + B.west.toFixed(3)],
+        ["North-East", B.north.toFixed(3) + ", " + B.east.toFixed(3)],
+        ["South-West", B.south.toFixed(3) + ", " + B.west.toFixed(3)],
+        ["South-East", B.south.toFixed(3) + ", " + B.east.toFixed(3)],
+        ["Midlines", M.lat.toFixed(3) + "° N, " + M.lon.toFixed(3) + "° E"],
+        ["Area", d.area_km2.toLocaleString() + " km²"],
+        ["Cells", d.total_cells.toLocaleString()], ["Sub-cells", d.total_sub_cells.toLocaleString()]
+      ]) + "<h3>Quadrants</h3>" + rowsHtml(grid.quadrants.map(function (q) {
+        return [q.code + " " + q.name, q.areaKm2.toLocaleString() + " km² · " + q.ncells.toLocaleString() + " cells"];
+      })) + "<p class='sub'>Tap the map to see the cell and sub-cell at that point. " +
+      "Cells appear from zoom " + CELL_ZOOM + ", sub-cells from zoom " + SUB_ZOOM + ".</p>";
+  }
+
+  // Select the block at a point (from a tap, a search or GPS), or a block by code.
+  function select(opts) {
+    selLayer.clearLayers();
+    var r = opts.loc;
+    var cell = grid.describe(r.q, r.row, r.col, null);
+    var sub = r.sub == null ? null : grid.describe(r.q, r.row, r.col, r.sub);
+    var cb = cell.bounds;
+    L.rectangle([[cb.south, cb.west], [cb.north, cb.east]], { color: "#d9480f", weight: 3, fill: false,
+      interactive: false }).addTo(selLayer);
+    L.circleMarker(cell.centroid, { radius: 5, color: "#111827", fillColor: "#111827", fillOpacity: 1 })
+      .bindTooltip("Cell centroid").addTo(selLayer);
+    var html = "";
+    if (sub) {
+      var sb = sub.bounds;
+      L.rectangle([[sb.south, sb.west], [sb.north, sb.east]], { color: "#d9480f", weight: 2, fillColor: "#d9480f",
+        fillOpacity: 0.25, interactive: false }).addTo(selLayer);
+      L.circleMarker(sub.centroid, { radius: 5, color: "#d9480f", fillColor: "#fff", fillOpacity: 1, weight: 3 })
+        .bindTooltip("Sub-cell centroid").addTo(selLayer);
+      html += "<div class='code'>" + sub.code + "</div><div class='sub'>Sub-cell ID " + sub.id +
+              " · cell " + cell.code + " (ID " + cell.id + ")</div>";
+    } else {
+      html += "<div class='code'>" + cell.code + "</div><div class='sub'>Cell ID " + cell.id + "</div>";
+    }
+    if (opts.point) {
+      var p = opts.point;
+      L.circleMarker(p, { radius: 6, color: "#2563eb", fillColor: "#2563eb", fillOpacity: 1 }).addTo(selLayer);
+      if (opts.accuracy) {
+        L.circle(p, { radius: opts.accuracy, color: "#2563eb", weight: 1, fillOpacity: 0.08, interactive: false })
+          .addTo(selLayer);
+      }
+      var off = PakGrid.localOffset(sub.centroid[0], sub.centroid[1], p[0], p[1]);
+      L.polyline([sub.centroid, p], { color: "#2563eb", weight: 2, dashArray: "4 4" }).addTo(selLayer);
+      var sb2 = sub.bounds, m = PakGrid.metresPerDegree(sub.centroid[0]);
+      var edge = Math.max(0, Math.min((p[0] - sb2.south) * m.lat, (sb2.north - p[0]) * m.lat,
+                                      (p[1] - sb2.west) * m.lon, (sb2.east - p[1]) * m.lon));
+      var pointRows = [["Point", fmt(p[0]) + ", " + fmt(p[1])],
+                       ["From centroid", off.text + " (" + off.distance.toFixed(1) + " m at " + Math.round(off.bearing) + "°)"],
+                       ["Nearest edge", edge.toFixed(1) + " m"]];
+      if (opts.accuracy) {
+        pointRows.push(["GPS accuracy", Math.round(opts.accuracy) + " m"]);
+        pointRows.push(["Confident", edge >= opts.accuracy ? "yes" : "no: could be a neighbouring block"]);
+      }
+      html += "<h3>Point</h3>" + rowsHtml(pointRows);
+    }
+    html += "<h3>Location in the grid</h3>" + rowsHtml([
+      ["Quadrant", grid.quadrants[r.q].code + " " + grid.quadrants[r.q].name],
+      ["Row / column", r.row + " / " + r.col]].concat(sub ? [["Sub-cell", sub.sub + " (row " +
+        Math.floor(sub.sub / 5) + ", column " + (sub.sub % 5) + ")"]] : []));
+    if (sub) {
+      html += "<h3>Sub-cell · " + sizeText(sub.bounds) + "</h3>" +
+              rowsHtml([["Centroid", fmt(sub.centroid[0]) + ", " + fmt(sub.centroid[1])]].concat(boundsRows(sub.bounds)));
+    }
+    html += "<h3>Cell · " + sizeText(cb) + "</h3>" +
+            rowsHtml([["Centroid", fmt(cell.centroid[0]) + ", " + fmt(cell.centroid[1])]].concat(boundsRows(cb)));
+    html += "<p><button type='button' id='clear'>Clear</button></p>";
+    panel.innerHTML = html;
+    document.getElementById("clear").onclick = function () {
+      selLayer.clearLayers(); showSummary(); history.replaceState(null, "", location.pathname);
+    };
+    if (opts.fly) {
+      var target = sub ? sub.bounds : cb, view = viewPadding();
+      view.maxZoom = sub ? 16 : 14;
+      view.animate = !opts.instant;
+      map.fitBounds([[target.south, target.west], [target.north, target.east]], view);
+    }
+    history.replaceState(null, "", "#" + (opts.point ? opts.point[0].toFixed(7) + "," + opts.point[1].toFixed(7)
+                                                       : (sub ? sub.code : cell.code)));
+  }
+
+  function selectPoint(lat, lon, fly, accuracy, instant) {
+    var r = grid.locate(lat, lon);
+    if (!r) { flash("That point is outside the grid rectangle"); return false; }
+    r.sub = r.subRow * 5 + r.subCol;
+    select({ loc: r, point: [lat, lon], fly: fly, accuracy: accuracy, instant: instant });
+    return true;
+  }
+
+  function flash(text) {
+    statusEl.textContent = text;
+    statusEl.classList.remove("hide");
+    setTimeout(drawGrid, 2500);
+  }
+
+  map.on("click", function (e) { selectPoint(e.latlng.lat, e.latlng.lng, false); });
+
+  function runQuery(text, instant) {
+    text = text.trim();
+    var parsed = grid.parseCode(text);
+    if (parsed) { select({ loc: parsed, fly: true, instant: instant }); return; }
+    var m = /^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/.exec(text);
+    if (m) { selectPoint(+m[1], +m[2], true, undefined, instant); return; }
+    flash("Enter a grid code such as 11-0140-0518-01, or lat, lon");
+  }
+
+  document.getElementById("search").addEventListener("submit", function (e) {
+    e.preventDefault();
+    runQuery(document.getElementById("q").value);
+  });
+
+  document.getElementById("me").addEventListener("click", function () {
+    if (!navigator.geolocation) { flash("This browser cannot share its location"); return; }
+    flash("Finding your location…");
+    navigator.geolocation.getCurrentPosition(function (pos) {
+      selectPoint(pos.coords.latitude, pos.coords.longitude, true, pos.coords.accuracy);
+    }, function (err) { flash("Location unavailable: " + err.message); },
+    { enableHighAccuracy: true, timeout: 15000 });
+  });
+
+  showSummary();
+  drawGrid();
+  if (location.hash.length > 1) runQuery(decodeURIComponent(location.hash.slice(1)), true);
+})();
+</script>
+</body>
+</html>

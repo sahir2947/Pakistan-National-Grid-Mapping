@@ -150,6 +150,11 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 direction(31.5215, 74.3570, 31.5204, 74.3587, heading=90).turn   # 'bear right'
 ```
 
+**Map viewer:** `viewer/index.html` shows the rectangle, quadrants, cells and
+sub-cells on OpenStreetMap; tap anywhere to see its grid code. Run
+`python3 -m http.server -d viewer 8000` and open http://localhost:8000, or
+publish the repository with GitHub Pages. See [viewer/README.md](viewer/README.md).
+
 For tests or a pilot, build part of the grid, for example
 `pakgrid build -o lahore.sqlite --quadrant 11 --rows 135:146`.
 
