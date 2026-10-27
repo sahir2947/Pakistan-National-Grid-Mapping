@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Design draft. Nothing is implemented yet; scope will be refined as the project develops |
+| **Status** | v0.1 library implemented (Python package `pakgrid`, see the README); scope will be refined as the project develops |
 | **Grid version** | v1 (proposed, not yet frozen) |
 | **First user** | Dukandaari app (delivery logistics) |
 | **Licence** | Open source (MIT or Apache-2.0, to be decided) |
@@ -169,7 +169,7 @@ For each quadrant:
 2. **Number of rows** = height ÷ 1,000 m, rounded to the nearest whole number.
 3. Split the quadrant into that many **equal latitude bands**.
 
-Result: every row is **999.0–1,000.3 m** tall, and the rows exactly fill the
+Result: every row is **999.0–1,000.4 m** tall, and the rows exactly fill the
 quadrant. Rows are numbered from 0 at the south edge.
 
 ### 3.4 Columns (east–west) and the curvature correction
@@ -405,7 +405,7 @@ Neighbouring sub-cells share edges, so each edge line is stored only once.
 | Option | How sub-cells are stored | Size of sub-cells | Total with cells |
 |---|---|---|---|
 | A. One row per sub-cell | 58.8 M rows with ID, 4 boundaries, centroid | ~2.3 GB | ~2.4 GB |
-| **B. Packed per cell (chosen)** | 2.35 M packed records, as in §5.2 | **~640 MB** | **~740 MB** |
+| **B. Packed per cell (chosen)** | 2.35 M packed records, as in §5.2 | **~640 MB** | **736 MB** (measured) |
 | C. Calculated from the parent | Not stored | 0 | ~93 MB |
 
 **Option B is chosen.** Every sub-cell's ID, boundaries and centroid are
@@ -415,7 +415,7 @@ per-file limit, which option A does not.
 
 ### 5.4 Memory
 
-Only the `rows` table (~3,000 rows, < 100 KB) is held in memory. The 740 MB
+Only the `rows` table (~3,000 rows, < 100 KB) is held in memory. The 736 MB
 file stays on disk and is read on demand through SQLite and the operating
 system's file cache.
 
@@ -451,8 +451,10 @@ pakgrid/
 ├── geodesy.py    Ellipsoid maths: meridian and parallel lengths, areas, centroids, vectors
 ├── layout.py     Each row's latitude band and column count (~3,000 rows)
 ├── ids.py        Pack/unpack IDs, readable codes, parent/children, validation
+├── errors.py     Exception types
 ├── builder.py    Walks the grid and writes the database (build phase only)
 ├── store.py      Read-only database access; unpacks sub-cell records
+├── verify.py     Checks a database against the grid rules and its checksum
 ├── grid.py       The public Grid class
 ├── navigate.py   Distance, bearing and turn guidance between two points
 └── cli.py        Command-line tools
@@ -466,7 +468,14 @@ tests/            Gap/overlap, round-trip, uniqueness, determinism and accuracy 
 - **No dependencies.** Pure Python 3.10+ with the standard library (`math`,
   `sqlite3`, `struct`). `pyproj` is used only in tests to cross-check the
   geodesy.
-- **Deterministic.** Building twice produces identical files.
+- **Deterministic.** Building twice produces byte-identical files. Every row
+  and column count is far from a rounding boundary, so floating-point
+  differences between platforms cannot change the layout. Centroids could, in
+  rare cases, differ by 1 × 10⁻⁷ degree between platforms; `pakgrid verify`
+  reports this.
+- **Exact point location.** A GPS point is rounded to 10⁻⁷ degree (~1.1 cm)
+  and compared with the stored integer boundaries, so every point falls in
+  exactly one block.
 - **Portable core.** `layout`, `ids` and `navigate` together need only the
   ~100 KB `rows` table. They can be ported to Dart for offline use in Flutter.
 
@@ -476,48 +485,64 @@ tests/            Gap/overlap, round-trip, uniqueness, determinism and accuracy 
 
 ### 7.1 Python library: 14 functions
 
+Integer cell IDs and sub-cell IDs can look alike, so functions that accept
+either take a `level` argument (`"cell"` or `"sub"`). A readable code sets the
+level by itself.
+
 | # | Function | Returns |
 |---|---|---|
 | **Finding a location** | | |
-| 1 | `locate(lat, lon, accuracy_m=None)` | Sub-cell ID, vector from the centroid, confidence, neighbouring candidates |
-| 2 | `locate_many(points)` | The same for many points at once |
+| 1 | `locate(lat, lon, accuracy_m=None)` | `Location`: sub-cell, offset from its centroid, edge distance, confidence and candidates |
+| 2 | `locate_many(points)` | A list of `Location`; each point is `(lat, lon)` or `(lat, lon, accuracy_m)` |
 | **Lookup by ID** | | |
-| 3 | `cell(cell_id)` | Cell boundaries and centroid |
-| 4 | `sub_cell(sub_id)` | Sub-cell boundaries and centroid |
+| 3 | `cell(id_or_code)` | `Cell`: ID, code, quadrant, row, column, bounds, centroid |
+| 4 | `sub_cell(id_or_code)` | `SubCell`: ID, code, parent cell, index 0–24, bounds, centroid |
 | **Hierarchy and area** | | |
-| 5 | `parent(sub_id)` | The cell a sub-cell belongs to |
-| 6 | `children(cell_id)` | The 25 sub-cells of a cell |
-| 7 | `neighbours(id)` | Adjacent cells or sub-cells, across quadrant edges too |
-| 8 | `cells_in_area(south, west, north, east)` | Cells or sub-cells inside an area |
+| 5 | `parent(sub_id)` | The parent cell ID (bit shift; no database access) |
+| 6 | `children(cell)` | The 25 `SubCell`s of a cell, in order 0–24 |
+| 7 | `neighbours(item, level="cell")` | IDs of touching cells or sub-cells, across quadrant lines too |
+| 8 | `cells_in_area(south, west, north, east, level="cell")` | IDs of cells or sub-cells overlapping a box |
 | **Vectors and navigation** | | |
-| 9 | `offset(id, lat, lon)` | Vector from a centroid to a point: east/north metres, distance, bearing |
-| 10 | `from_offset(id, east_m, north_m)` | GPS point from a block ID plus offset |
-| 11 | `direction(from_lat, from_lon, to_lat, to_lon, heading=None)` | Distance (m and ft), bearing, compass words, turn relative to heading |
+| 9 | `offset(item, lat, lon, level="sub")` | `Offset` from a centroid to a point: east/north metres, distance, bearing, text such as `W60 S18` |
+| 10 | `from_offset(item, east_m, north_m, level="sub")` | `(lat, lon)` of a block's centroid plus an offset |
+| 11 | `direction(from_lat, from_lon, to_lat, to_lon, heading=None)` | `Direction`: metres, feet, bearing, compass name, and turn left/right |
 | **Readable codes** | | |
-| 12 | `to_text(id)` | `105267393` → `11-0140-0518-01` |
-| 13 | `from_text(code)` | `11-0140-0518-01` → `105267393`, with format checking |
+| 12 | `to_text(id, level="sub")` | `105267393` → `11-0140-0518-01` |
+| 13 | `from_text(code)` | `11-0140-0518-01` → `105267393`, checked against the grid |
 | **Info** | | |
-| 14 | `info()` | Grid version, corners, counts, checksum |
+| 14 | `info()` | Grid version, corners, counts, database coverage and checksum |
+
+Every result object has a `to_dict()` method that returns JSON-ready data.
 
 ```python
 from pakgrid import Grid
 
-grid = Grid.open("pakgrid_v1.sqlite")
-r = grid.locate(31.5204, 74.3587, accuracy_m=5)
-r.code             # '11-0140-0518-01'
-r.offset_text      # 'W60 S18'
-r.confident        # True
-grid.sub_cell(r.id).centroid   # (31.5205657, 74.3593368)
+with Grid.open("pakgrid_v1.sqlite") as grid:
+    loc = grid.locate(31.5204, 74.3587, accuracy_m=5)
+    loc.code               # '11-0140-0518-01'
+    loc.offset.text        # 'W60 S18'
+    loc.confident          # True
+    loc.sub_cell.centroid  # (31.5205657, 74.3593368)
 ```
+
+**Errors:** `OutsideGridError` (point outside the rectangle),
+`InvalidIdError` (an ID or code that is not in the grid),
+`NotInDatabaseError` (a valid cell missing from a partial build),
+`GridMismatchError` (database built with different grid rules) and
+`IntegrityError` (database contents do not match the layout).
 
 ### 7.2 Command-line tools
 
 | Command | Purpose |
 |---|---|
-| `pakgrid build` | Generate the database from the grid rules |
-| `pakgrid verify` | Check a downloaded database against the rules and its checksum |
-| `pakgrid locate LAT LON` | Look up a point from the terminal |
-| `pakgrid show CODE` | Print a cell's or sub-cell's details |
+| `pakgrid build [-o FILE] [--quadrant CODE] [--rows START:STOP]` | Generate the database; the options build a partial database for tests or pilots |
+| `pakgrid verify [--db FILE] [--full]` | Check a database against the rules and its checksum; `--full` regenerates every record |
+| `pakgrid locate LAT LON [--accuracy M]` | Look up a point; prints JSON |
+| `pakgrid show CODE` | Print a cell's or sub-cell's details as JSON |
+| `pakgrid info` | Print grid and database information |
+
+The database path defaults to `pakgrid_v1.sqlite`, or the `PAKGRID_DB`
+environment variable.
 
 ### 7.3 HTTP API (v0.2): 10 endpoints
 
@@ -753,20 +778,25 @@ POST /addresses
 { "lat": 31.5204, "lon": 74.3587, "accuracy_m": 5, "notes": "House 12, gali 3" }
 ```
 
-**Grid result:**
+**Grid result** (actual output of `Location.to_dict()`):
 ```json
 {
   "grid_version": 1,
+  "point": [31.5204, 74.3587],
   "sub_cell": {
     "id": 105267393,
     "code": "11-0140-0518-01",
+    "cell_id": 3289606,
+    "cell_code": "11-0140-0518",
+    "index": 1,
     "centroid": [31.5205657, 74.3593368],
     "bounds": { "south": 31.5196645, "west": 74.3582835,
                 "north": 31.5214668, "east": 74.3603901 }
   },
   "cell": { "id": 3289606, "code": "11-0140-0518" },
   "offset": { "east_m": -60.5, "north_m": -18.4, "distance_m": 63.2,
-              "bearing_deg": 253, "text": "W60 S18" },
+              "bearing_deg": 253.1, "text": "W60 S18" },
+  "accuracy_m": 5.0,
   "confident": true,
   "edge_distance_m": 39.6,
   "candidates": []
@@ -779,7 +809,7 @@ POST /addresses
 |---|---|
 | Phone ↔ server network | ~50–300 ms |
 | Dukandaari backend and its own database | ~1–10 ms |
-| **Grid lookup** | **~0.012 ms** |
+| **Grid lookup** | **~0.02 ms** |
 
 ### 11.3 Errors
 
@@ -800,45 +830,47 @@ the same data centre.
 
 ## 12. Performance
 
-### 12.1 Measured with a prototype
+### 12.1 Measured on the full v0.1 database
 
 **Test setup:**
 
-- quadrant `11`, with the real layout: 568,326 cells, each with its 25
-  sub-cells packed
-- a 178 MB SQLite database
-- 200,000 random points
-- plain Python 3.13 on one CPU core of a cloud machine, with no tuning
+- the full grid: 2,353,170 cells and 58,829,250 sub-cells in a 736 MB
+  SQLite file
+- 200,000 random points across the whole rectangle
+- Python 3.13 on one CPU core of a cloud machine, with no tuning
 
 | Operation | Per call | Per second |
 |---|---|---|
-| Arithmetic only (point → ID) | 0.5 µs | ~1.8 million |
-| `cell(id)` from the database | 7.5 µs | ~130,000 |
-| Full `locate()` (check, vector, confidence) | 12.4 µs | ~81,000 |
-| `locate_many()` in batches of 900 | 3.5 µs | ~290,000 |
+| Layout only (point → IDs, no database) | 1.9 µs | ~520,000 |
+| `cell(id)` | 9–12 µs | ~85,000–110,000 |
+| `sub_cell(id)` | 15 µs | ~68,000 |
+| `neighbours(cell id)` | 18 µs | ~56,000 |
+| `locate(lat, lon)` | 22 µs | ~46,000 |
+| `locate(lat, lon, accuracy_m=8)`, including candidates | 30 µs | ~33,000 |
 
-**Other results:**
+**Build and verify:**
 
-- **Build time:** 9.9 s for one quadrant, so ~40 s for the full grid
-  (~740 MB).
-- **Memory:** ~58 MB for the whole test process; the grid's own working set is
-  the ~100 KB `rows` table plus the SQLite cache.
+| | Result |
+|---|---|
+| `pakgrid build` (full grid) | 27 s, 736 MB, ~51 MB peak memory |
+| `pakgrid verify --full` | 24 s; regenerates every record and compares |
+| Content SHA-256 (grid v1) | `92853bb6fb9de7fc136c7d5774fc429644b2ae96765228faad13664c94cf52ab` |
+| `Grid.open()` | ~9 ms |
+| Memory while serving lookups | ~4 MB above the Python interpreter |
 
 ### 12.2 In practice
 
 | Scenario | Time |
 |---|---|
-| One address saved | ~0.01 ms |
-| 100,000 orders in a day | ~1 s of total work |
-| Re-assigning 1 million addresses | ~3–4 s |
-| On a phone, offline (arithmetic only) | < 1 µs |
+| One address saved | ~0.02 ms |
+| 100,000 orders in a day | ~2 s of total work |
+| Re-assigning 1 million addresses | ~25 s |
+| On a phone, offline (layout only) | a few µs |
 
 ### 12.3 Caveats
 
 - The first lookups after a restart may take ~1 ms while the operating system
   caches the file.
-- The full database has a slightly deeper index than the one-quadrant test, so
-  lookups stay in the tens of microseconds.
 - If ever needed, multiple processes, an in-memory copy of the database, or a
   compiled core (Rust or C) would each give 5–50× more speed.
 
@@ -890,7 +922,7 @@ the same data centre.
 
 | Version | Deliverable |
 |---|---|
-| **v0.1 — Grid core** | Python library, full database (option B), CLI, tests, documentation |
+| **v0.1 — Grid core** ✅ | Python library, full database (option B), CLI, tests, documentation (implemented) |
 | **v0.2 — Grid API** | HTTP service with the 10 endpoints in §7.3 |
 | **v0.3 — Dukandaari pilot** | One city (Lahore or Karachi): addresses, batching, rider navigation |
 | **v1.0 — Public release** | Frozen grid v1, Pakistan border flag, published database, documentation |
