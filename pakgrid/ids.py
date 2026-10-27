@@ -78,13 +78,13 @@ def split_sub_index(sub):
 
 
 def cell_code(cid):
-    """Readable code of a cell, e.g. '11-0140-0518'."""
+    """Readable code of a cell, e.g. '11-0140-0471'."""
     q, row, col = split_cell_id(cid)
     return f"{q:02b}-{row:04d}-{col:04d}"
 
 
 def sub_cell_code(sid):
-    """Readable code of a sub-cell, e.g. '11-0140-0518-01'."""
+    """Readable code of a sub-cell, e.g. '11-0140-0471-00'."""
     cid, sub = split_sub_cell_id(sid)
     return f"{cell_code(cid)}-{sub:02d}"
 

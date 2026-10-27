@@ -11,7 +11,7 @@
 ![How a grid code is built: quadrants, rows and columns, sub-cells, and bit packing, worked through for central Lahore](docs/grid_schematic.png)
 
 *Schematic of the grid, worked through for central Lahore
-(`11-0140-0518-01`). Printable A4 version: [docs/grid_schematic.pdf](docs/grid_schematic.pdf).*
+(`11-0140-0471-00`). Printable A4 version: [docs/grid_schematic.pdf](docs/grid_schematic.pdf).*
 
 ---
 
@@ -53,14 +53,14 @@ A **fixed national grid** in which every location in Pakistan belongs to
 exactly one permanently numbered block:
 
 - **4 quadrants** divide the country.
-- About **2.35 million cells** of ~1 km × 1 km make up the quadrants.
-- About **58.8 million sub-cells** of ~200 m × 200 m make up the cells.
+- About **2.5 million cells** of ~1 km × 1 km make up the quadrants.
+- About **62.5 million sub-cells** of ~200 m × 200 m make up the cells.
 - Every cell and sub-cell has a fixed ID, fixed boundaries and a fixed
   **centroid** (centre point) with a real GPS coordinate.
 
-A location can then be written as a short code, such as `11-0140-0518-01`.
+A location can then be written as a short code, such as `11-0140-0471-00`.
 For door-level precision, the code can carry an offset from the block's
-centroid: `11-0140-0518-01 W60 S18` (60 m west and 18 m south of the block's
+centroid: `11-0140-0471-00 W23 S18` (23 m west and 18 m south of the block's
 centre).
 
 ### 1.3 Long-term vision
@@ -130,38 +130,40 @@ The grid covers a latitude/longitude rectangle that contains all of Pakistan.
 |---|---|---|
 | South-West | 23.436° N, 60.800° E | Gulf of Oman / Arabian Sea, ~200 km south of Chabahar (Iran) |
 | North-West | 37.080° N, 60.800° E | North-east Iran, near the Turkmenistan border |
-| North-East | 37.080° N, 77.000° E | Xinjiang, China, north of the Karakoram |
-| South-East | 23.436° N, 77.000° E | Madhya Pradesh, India, ~45 km west of Bhopal |
+| North-East | 37.080° N, 78.000° E | Xinjiang, China, in the Kunlun mountains north of the Karakoram |
+| South-East | 23.436° N, 78.000° E | Madhya Pradesh, India, ~60 km east of Bhopal |
 
 - The **south edge** is the Tropic of Cancer, just south of Pakistan's
   southern tip.
 - The **north edge** matches Pakistan's northern limit.
-- The **east edge** is set far enough east to include the far east of
-  Gilgit-Baltistan.
+- The **east edge** (78.0° E) includes all of Gilgit-Baltistan, up to the
+  Karakoram Pass (~77.8° E). It was moved from 77.0° E after checking the
+  grid on the map viewer, which showed 77.0° E cut off a corner of Baltistan.
 
-**Area:** 2,352,494 km² on the WGS 84 ellipsoid. Pakistan, including
-Gilgit-Baltistan and AJK, is about 882,000 km², or **~37%** of the rectangle.
+**Area:** 2,497,710 km² on the WGS 84 ellipsoid. Pakistan, including
+Gilgit-Baltistan and AJK, is about 882,000 km², or **~35%** of the rectangle.
 The rest covers parts of Iran, Afghanistan, China, India and the Arabian Sea.
 Cells outside Pakistan will be flagged later (§5.6); their IDs stay valid.
 
 ### 3.2 Quadrants
 
-The rectangle is split at its midlines: **30.258° N** and **68.900° E**.
+The rectangle is split at its midlines: **30.258° N** and **69.400° E**, the
+middle of the rectangle in each direction.
 
 | Code | Quadrant | Example region | Area (km²) | Rows | Cells |
 |------|----------|----------------|-----------:|-----:|------:|
-| `00` | South-West | Karachi, Quetta, Gwadar, Hyderabad, Sukkur | 608,168 | 756 | 608,259 |
-| `01` | North-West | Pishin, Chaman (northern Balochistan); mostly Afghanistan and Iran | 568,079 | 757 | 568,326 |
-| `10` | South-East | Multan, Bahawalpur, Dera Ghazi Khan, Thar | 608,168 | 756 | 608,259 |
-| `11` | North-East | Lahore, Islamabad, Peshawar, Zhob, Gilgit-Baltistan | 568,079 | 757 | 568,326 |
-| | **Total** | | **2,352,494** | | **2,353,170** |
+| `00` | South-West | Karachi, Quetta, Gwadar, Hyderabad, Sukkur | 645,709 | 756 | 645,806 |
+| `01` | North-West | Pishin, Chaman (northern Balochistan); mostly Afghanistan and Iran | 603,146 | 757 | 603,405 |
+| `10` | South-East | Multan, Bahawalpur, Dera Ghazi Khan, Thar | 645,709 | 756 | 645,806 |
+| `11` | North-East | Lahore, Islamabad, Peshawar, Zhob, Gilgit-Baltistan | 603,146 | 757 | 603,405 |
+| | **Total** | | **2,497,710** | | **2,498,422** |
 
 - In each code, the **first bit** is east (1) or west (0) and the **second
   bit** is north (1) or south (0).
 - The southern quadrants are larger because a degree of longitude is wider
   further south.
 - The midlines are geometric, not regional: Quetta (30.18° N) is just south of
-  30.258° N, and Karachi (67.0° E) is west of 68.9° E, so both are in `00`.
+  30.258° N, and Karachi (67.0° E) is west of 69.4° E, so both are in `00`.
   Check a place's quadrant with `pakgrid locate` or the map viewer.
 
 ### 3.3 Rows (north–south)
@@ -188,8 +190,8 @@ gets its own number of columns**:
 
 Result: every cell is **999.3–1,000.7 m** wide, and every row fills the
 quadrant exactly. Columns are numbered from 0 at the west edge. In quadrant
-`11`, for example, row 0 has 779 columns, row 140 has 769, and row 756 has 720.
-The maximum anywhere is 828.
+`11`, for example, row 0 has 828 columns, row 140 has 817, and row 756 has 765.
+The maximum anywhere is 879.
 
 Because column counts differ from row to row, cells in neighbouring rows are
 **offset sideways, like bricks in a wall**. This matters for neighbours (§8.4)
@@ -238,11 +240,11 @@ for a 1 km cell, but the correct value is the one stored.
 
 | | South / West edge | North / East edge | Centroid |
 |---|---|---|---|
-| Cell `11-0140-0518` | 31.5196645° N, 74.3561769° E | 31.5286764° N, 74.3667100° E | **31.5241703° N, 74.3614434° E** |
-| Sub-cell `11-0140-0518-01` | 31.5196645° N, 74.3582835° E | 31.5214668° N, 74.3603901° E | **31.5205657° N, 74.3593368° E** |
+| Cell `11-0140-0471` | 31.5196645° N, 74.3578947° E | 31.5286764° N, 74.3684211° E | **31.5241703° N, 74.3631579° E** |
+| Sub-cell `11-0140-0471-00` | 31.5196645° N, 74.3578947° E | 31.5214668° N, 74.3600000° E | **31.5205657° N, 74.3589474° E** |
 
-**Total fixed points:** 2,353,170 cell centroids + 58,829,250 sub-cell
-centroids = **61,182,420**.
+**Total fixed points:** 2,498,422 cell centroids + 62,460,550 sub-cell
+centroids = **64,958,972**.
 
 **Notes:**
 
@@ -270,7 +272,7 @@ Sub-cell ID  (27 bits):  [ quadrant : 2 ][ row : 10 ][ column : 10 ][ sub : 5 ]
 |---|---|---|
 | Quadrant | 0–3 | 2 |
 | Row | 0–756 (max 1,023) | 10 |
-| Column | 0–827 (max 1,023) | 10 |
+| Column | 0–878 (max 1,023) | 10 |
 | Sub-cell | 0–24 (max 31) | 5 |
 
 Both IDs fit in a standard **32-bit integer** (4 bytes).
@@ -292,27 +294,27 @@ sub      = sub_id & 0x1F
 
 | Step | Working | Result |
 |---|---|---|
-| Quadrant | north of 30.258°, east of 68.900° | `11` = **3** |
+| Quadrant | north of 30.258°, east of 69.400° | `11` = **3** |
 | Row | (31.5204 − 30.258) ÷ 0.0090119 = 140.08 → floor | **140** |
-| Columns in row 140 | width 769,321 m ÷ 1,000 → 769 columns of 0.0105332° | — |
-| Column | (74.3587 − 68.900) ÷ 0.0105332 = 518.24 → floor | **518** |
-| Sub-cell | 0.08 up → sub-row 0; 0.24 across → sub-col 1; 0 × 5 + 1 | **1** |
-| Cell ID | (3 « 20) \| (140 « 10) \| 518 | **3,289,606** |
-| Sub-cell ID | (3,289,606 « 5) \| 1 | **105,267,393** |
+| Columns in row 140 | width 816,810 m ÷ 1,000 → 817 columns of 0.0105263° | — |
+| Column | (74.3587 − 69.400) ÷ 0.0105263 = 471.08 → floor | **471** |
+| Sub-cell | 0.08 up → sub-row 0; 0.08 across → sub-col 0; 0 × 5 + 0 | **0** |
+| Cell ID | (3 « 20) \| (140 « 10) \| 471 | **3,289,559** |
+| Sub-cell ID | (3,289,559 « 5) \| 0 | **105,265,888** |
 
 ```
- 11  0010001100  1000000110  00001
+ 11  0010001100  0111010111  00000
  ──  ──────────  ──────────  ─────
- Q    row 140    column 518  sub 1
+ Q    row 140    column 471  sub 0
 ```
 
 ### 4.4 Readable codes
 
 | Form | Example | Use |
 |---|---|---|
-| Sub-cell | `11-0140-0518-01` | Shared on a call or by WhatsApp; printed on parcels |
-| Cell | `11-0140-0518` | Zones, batching |
-| Sub-cell + offset | `11-0140-0518-01 W60 S18` | Door-level location: metres from the centroid |
+| Sub-cell | `11-0140-0471-00` | Shared on a call or by WhatsApp; printed on parcels |
+| Cell | `11-0140-0471` | Zones, batching |
+| Sub-cell + offset | `11-0140-0471-00 W23 S18` | Door-level location: metres from the centroid |
 
 ### 4.5 Uniqueness
 
@@ -324,18 +326,18 @@ every ID is still unique across the whole grid:
 |---|---|
 | Row, column | its quadrant |
 | Sub-cell number (0–24) | its cell |
-| **Cell ID** | **the whole grid** (2,353,170 distinct IDs) |
-| **Sub-cell ID** | **the whole grid** (58,829,250 distinct IDs) |
+| **Cell ID** | **the whole grid** (2,498,422 distinct IDs) |
+| **Sub-cell ID** | **the whole grid** (62,460,550 distinct IDs) |
 
-For example, row 140, column 518 exists in all four quadrants, but the
+For example, row 140, column 471 exists in all four quadrants, but the
 quadrant bits make each one a different cell:
 
 | Code | Cell ID |
 |---|---|
-| `00-0140-0518` | 143,878 |
-| `01-0140-0518` | 1,192,454 |
-| `10-0140-0518` | 2,241,030 |
-| `11-0140-0518` | 3,289,606 |
+| `00-0140-0471` | 143,831 |
+| `01-0140-0471` | 1,192,407 |
+| `10-0140-0471` | 2,240,983 |
+| `11-0140-0471` | 3,289,559 |
 
 An app stores the single integer ID and never needs a separate quadrant
 column to tell cells apart.
@@ -386,8 +388,8 @@ file.
 | `meta` | 1 | grid version, datum (WGS 84), corners, midlines, target sizes, build checksum |
 | `quadrants` | 4 | code, boundaries, row count, cell count |
 | `rows` | ~3,026 | quadrant, row, south/north latitude, column count, column width (degrees) |
-| `cells` | 2,353,170 | cell ID (primary key), south, west, north, east, centroid latitude/longitude |
-| `sub_cells` | 2,353,170 | cell ID (primary key) plus one packed record for its 25 sub-cells |
+| `cells` | 2,498,422 | cell ID (primary key), south, west, north, east, centroid latitude/longitude |
+| `sub_cells` | 2,498,422 | cell ID (primary key) plus one packed record for its 25 sub-cells |
 
 **Coordinate encoding:** all coordinates are stored as integers in units of
 10⁻⁷ degree (~1.1 cm). This is smaller than decimal text, exact, and fast to
@@ -407,9 +409,9 @@ Neighbouring sub-cells share edges, so each edge line is stored only once.
 
 | Option | How sub-cells are stored | Size of sub-cells | Total with cells |
 |---|---|---|---|
-| A. One row per sub-cell | 58.8 M rows with ID, 4 boundaries, centroid | ~2.3 GB | ~2.4 GB |
-| **B. Packed per cell (chosen)** | 2.35 M packed records, as in §5.2 | **~640 MB** | **736 MB** (measured) |
-| C. Calculated from the parent | Not stored | 0 | ~93 MB |
+| A. One row per sub-cell | 62.5 M rows with ID, 4 boundaries, centroid | ~2.45 GB | ~2.55 GB |
+| **B. Packed per cell (chosen)** | 2.5 M packed records, as in §5.2 | **~680 MB** | **781 MB** (measured) |
+| C. Calculated from the parent | Not stored | 0 | ~99 MB |
 
 **Option B is chosen.** Every sub-cell's ID, boundaries and centroid are
 pre-determined and stored, so the database remains the single source of truth.
@@ -418,7 +420,7 @@ per-file limit, which option A does not.
 
 ### 5.4 Memory
 
-Only the `rows` table (~3,000 rows, < 100 KB) is held in memory. The 736 MB
+Only the `rows` table (~3,000 rows, < 100 KB) is held in memory. The 781 MB
 file stays on disk and is read on demand through SQLite and the operating
 system's file cache.
 
@@ -436,7 +438,7 @@ system's file cache.
 Once an authoritative boundary dataset is agreed:
 
 - an `in_pakistan` flag is added for every cell and sub-cell, and
-- optionally, a smaller "Pakistan only" edition of the database (~270 MB) is
+- optionally, a smaller "Pakistan only" edition of the database (~280 MB) is
   published.
 
 IDs do not change, because they come from the rectangle and not from the
@@ -506,12 +508,12 @@ level by itself.
 | 7 | `neighbours(item, level="cell")` | IDs of touching cells or sub-cells, across quadrant lines too |
 | 8 | `cells_in_area(south, west, north, east, level="cell")` | IDs of cells or sub-cells overlapping a box |
 | **Vectors and navigation** | | |
-| 9 | `offset(item, lat, lon, level="sub")` | `Offset` from a centroid to a point: east/north metres, distance, bearing, text such as `W60 S18` |
+| 9 | `offset(item, lat, lon, level="sub")` | `Offset` from a centroid to a point: east/north metres, distance, bearing, text such as `W23 S18` |
 | 10 | `from_offset(item, east_m, north_m, level="sub")` | `(lat, lon)` of a block's centroid plus an offset |
 | 11 | `direction(from_lat, from_lon, to_lat, to_lon, heading=None)` | `Direction`: metres, feet, bearing, compass name, and turn left/right |
 | **Readable codes** | | |
-| 12 | `to_text(id, level="sub")` | `105267393` → `11-0140-0518-01` |
-| 13 | `from_text(code)` | `11-0140-0518-01` → `105267393`, checked against the grid |
+| 12 | `to_text(id, level="sub")` | `105265888` → `11-0140-0471-00` |
+| 13 | `from_text(code)` | `11-0140-0471-00` → `105265888`, checked against the grid |
 | **Info** | | |
 | 14 | `info()` | Grid version, corners, counts, database coverage and checksum |
 
@@ -522,10 +524,10 @@ from pakgrid import Grid
 
 with Grid.open("pakgrid_v1.sqlite") as grid:
     loc = grid.locate(31.5204, 74.3587, accuracy_m=5)
-    loc.code               # '11-0140-0518-01'
-    loc.offset.text        # 'W60 S18'
+    loc.code               # '11-0140-0471-00'
+    loc.offset.text        # 'W23 S18'
     loc.confident          # True
-    loc.sub_cell.centroid  # (31.5205657, 74.3593368)
+    loc.sub_cell.centroid  # (31.5205657, 74.3589474)
 ```
 
 **Errors:** `OutsideGridError` (point outside the rectangle),
@@ -557,7 +559,7 @@ for checking the grid visually before it is used in an app:
 - cells from zoom 11 and sub-cells (numbered 0–24) from zoom 14
 - tap a point or use **My location** to see its codes, IDs, boundaries,
   centroids, offset and GPS confidence
-- search by code or by `lat, lon`; links such as `#11-0140-0518-01` open at
+- search by code or by `lat, lon`; links such as `#11-0140-0471-00` open at
   that block
 
 It needs no database. It recomputes the grid from `viewer/layout.js` with the
@@ -623,12 +625,12 @@ vector** gives the neighbour to step to: negative dE means west, positive dN
 means north. In testing, about 1 point in 100,000 needed one step, caused by
 rounding at an edge.
 
-**Example**, sub-cell `11-0140-0518-01` (200.0 m × 199.8 m):
+**Example**, sub-cell `11-0140-0471-00` (200.0 m × 199.8 m):
 
 | Point | Accuracy | Vector from centroid | Nearest edge | Result |
 |---|---|---|---|---|
-| 31.5204, 74.3587 | 5 m | 60.5 m W, 18.4 m S (63 m at 253°) | 39.6 m (west) | Confident |
-| 31.52058, 74.35831 | 8 m | 97.5 m W, 1.6 m N (97.5 m at 271°) | 2.5 m (west) | Not confident; candidate: block to the west |
+| 31.5204, 74.3587 | 5 m | 23.5 m W, 18.4 m S (30 m at 232°) | 76.5 m (west) | Confident |
+| 31.52058, 74.35792 | 8 m | 97.6 m W, 1.6 m N (97.6 m at 271°) | 2.4 m (west) | Not confident; candidate: `11-0140-0470-04`, across the cell's west edge |
 
 ### 8.3 Do not use "nearest centroid"
 
@@ -786,7 +788,7 @@ is most useful for the final approach (≲ 500 m), especially in lanes.
       │                        │◄────── result ────────│ 5 check, vector,       │
       │                   6 ── │ save in own DB        │   confidence           │
       │◄────── reply ──────────│                       │                        │
- 7    │ "Block 11-0140-0518-01 ✓"                      │                        │
+ 7    │ "Block 11-0140-0471-00 ✓"                      │                        │
 ```
 
 **Startup (once):** `Grid.open()` reads `meta`, checks the version and loads the
@@ -804,21 +806,21 @@ POST /addresses
   "grid_version": 1,
   "point": [31.5204, 74.3587],
   "sub_cell": {
-    "id": 105267393,
-    "code": "11-0140-0518-01",
-    "cell_id": 3289606,
-    "cell_code": "11-0140-0518",
-    "index": 1,
-    "centroid": [31.5205657, 74.3593368],
-    "bounds": { "south": 31.5196645, "west": 74.3582835,
-                "north": 31.5214668, "east": 74.3603901 }
+    "id": 105265888,
+    "code": "11-0140-0471-00",
+    "cell_id": 3289559,
+    "cell_code": "11-0140-0471",
+    "index": 0,
+    "centroid": [31.5205657, 74.3589474],
+    "bounds": { "south": 31.5196645, "west": 74.3578947,
+                "north": 31.5214668, "east": 74.36 }
   },
-  "cell": { "id": 3289606, "code": "11-0140-0518" },
-  "offset": { "east_m": -60.5, "north_m": -18.4, "distance_m": 63.2,
-              "bearing_deg": 253.1, "text": "W60 S18" },
+  "cell": { "id": 3289559, "code": "11-0140-0471" },
+  "offset": { "east_m": -23.5, "north_m": -18.4, "distance_m": 29.8,
+              "bearing_deg": 232.0, "text": "W23 S18" },
   "accuracy_m": 5.0,
   "confident": true,
-  "edge_distance_m": 39.6,
+  "edge_distance_m": 76.5,
   "candidates": []
 }
 ```
@@ -854,7 +856,7 @@ the same data centre.
 
 **Test setup:**
 
-- the full grid: 2,353,170 cells and 58,829,250 sub-cells in a 736 MB
+- the full grid: 2,498,422 cells and 62,460,550 sub-cells in a 781 MB
   SQLite file
 - 200,000 random points across the whole rectangle
 - Python 3.13 on one CPU core of a cloud machine, with no tuning
@@ -872,9 +874,9 @@ the same data centre.
 
 | | Result |
 |---|---|
-| `pakgrid build` (full grid) | 27 s, 736 MB, ~51 MB peak memory |
+| `pakgrid build` (full grid) | 26 s, 781 MB, ~51 MB peak memory |
 | `pakgrid verify --full` | 24 s; regenerates every record and compares |
-| Content SHA-256 (grid v1) | `92853bb6fb9de7fc136c7d5774fc429644b2ae96765228faad13664c94cf52ab` |
+| Content SHA-256 (grid v1) | `55ea85531dedbcaa44d9d384276e2468b16d411766d798215c0dcc5c5202e1ff` |
 | `Grid.open()` | ~9 ms |
 | Memory while serving lookups | ~4 MB above the Python interpreter |
 
@@ -926,7 +928,7 @@ the same data centre.
 
 | Test | Pass condition |
 |---|---|
-| No gaps or overlaps | Cell areas in each quadrant add up to the quadrant's ellipsoidal area; total ≈ 2,352,494 km² |
+| No gaps or overlaps | Cell areas in each quadrant add up to the quadrant's ellipsoidal area; total ≈ 2,497,710 km² |
 | Round trip | For millions of random points, the block returned by `locate()` contains the point |
 | Uniqueness | Every stored ID is distinct and decodes back to its own quadrant, row, column and sub-cell |
 | Size limits | Cell heights and widths within ±1% of target (currently 999.0–1,000.7 m) |
@@ -954,10 +956,10 @@ the same data centre.
 
 | Decision | Current proposal |
 |---|---|
-| Final outer boundaries (especially the east edge, 77.0° E) | Keep the current rectangle; must be fixed before v1, because changing it changes every ID |
+| Final outer boundaries | **Decided:** east edge moved from 77.0° E to 78.0° E so all of Baltistan (up to the Karakoram Pass, ~77.8° E) is inside; other edges confirmed. Fixed from here on, because changing them changes every ID |
 | Boundary dataset for the Pakistan border filter | To be chosen |
 | Open-source licence | MIT or Apache-2.0 |
-| Readable code format | `QQ-RRRR-CCCC-SS`, plus an optional offset `W60 S18` |
+| Readable code format | `QQ-RRRR-CCCC-SS`, plus an optional offset `W23 S18` |
 | Package and project name | `pakgrid` (working name) |
 | Accuracy threshold for accepting a pin | ~50 m |
 

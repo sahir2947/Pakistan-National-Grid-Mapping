@@ -15,8 +15,8 @@ To eliminate processing overhead and reduce database index sizes, the master bou
 📐 Global Matrix Boundaries
 
 • South-West Anchor (Tropic of Cancer): Latitude 23.436° N, Longitude 60.800° E
-• North-East Anchor (China Border): Latitude 37.080° N, Longitude 77.000° E
-• Global Midlines (The Splits): Latitude 30.258° N | Longitude 68.900° E
+• North-East Anchor (China Border): Latitude 37.080° N, Longitude 78.000° E
+• Global Midlines (The Splits): Latitude 30.258° N | Longitude 69.400° E
 
 🗂️ Quadrant Table Mapping
 
@@ -130,10 +130,10 @@ Full design documentation: [project.md](project.md).
 
 ```bash
 pip install -e .                 # from this repository
-pakgrid build                    # writes pakgrid_v1.sqlite (~736 MB, ~30 s)
+pakgrid build                    # writes pakgrid_v1.sqlite (~781 MB, ~30 s)
 pakgrid verify                   # checks the file against the grid rules and checksum
 pakgrid locate 31.5204 74.3587 --accuracy 5
-pakgrid show 11-0140-0518-01
+pakgrid show 11-0140-0471-00
 ```
 
 ```python
@@ -141,10 +141,10 @@ from pakgrid import Grid, direction
 
 with Grid.open("pakgrid_v1.sqlite") as grid:
     loc = grid.locate(31.5204, 74.3587, accuracy_m=5)
-    loc.code                         # '11-0140-0518-01'
-    loc.offset.text                  # 'W60 S18'  (metres from the block's centroid)
+    loc.code                         # '11-0140-0471-00'
+    loc.offset.text                  # 'W23 S18'  (metres from the block's centroid)
     loc.confident                    # True
-    grid.cell(loc.cell_id).centroid  # (31.5241703, 74.3614434)
+    grid.cell(loc.cell_id).centroid  # (31.5241703, 74.3631579)
     grid.neighbours(loc.cell_id)     # touching cells, across quadrant lines too
 
 direction(31.5215, 74.3570, 31.5204, 74.3587, heading=90).turn   # 'bear right'
