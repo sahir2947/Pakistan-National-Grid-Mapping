@@ -460,8 +460,17 @@ system's file cache.
 
 ### 5.5 Distribution and versioning
 
-- The database is too large for a git repository (100 MB limit), so it is
-  published on **GitHub Releases** together with its SHA-256 checksum.
+- The database is too large for a git repository (100 MB limit). Anyone can
+  build it with `pakgrid build` (about 20 s for the Pakistan edition), and
+  it can also be published on **GitHub Releases**.
+- **Official checksums.** The build is deterministic: the same rules give
+  the same content on every machine, whatever the operating system or Python
+  version (CI proves this on Linux, macOS and Windows). The official content
+  checksums of the full and Pakistan editions are in `pakgrid/checksums.py`,
+  and `pakgrid verify` requires a complete build to match them, so a database
+  built by anyone can be proved identical to the official one.
+  `pakgrid verify --expect <sha256>` checks a partial build against a recorded
+  value.
 - The database is **read-only and immutable**. Within a grid version, an ID
   always refers to the same block, boundaries and centroid.
 - Any change to the grid rules produces a **new version file**
@@ -1088,7 +1097,14 @@ the same data centre.
 | Grid catalogue (cells, sub-cells, centroids, border flags) | Grid database (`pakgrid_v1.sqlite`, or the 275 MB Pakistan edition), read-only |
 | Customer, shop and order records | **Dukandaari's own database** |
 | Personal data (names, phone numbers, CNIC) | **Dukandaari's own database only**, protected there. Never in the grid |
-| Per address | Sub-cell ID (4 bytes), exact pin, accuracy, offset, text notes |
+| Per address | Sub-cell ID (4 bytes), cell ID, grid address, exact pin, accuracy, text notes |
+
+**How it fits together.** Dukandaari's Django (DRF) backend installs `pakgrid`
+with pip, builds and verifies the Pakistan edition once (in its Docker
+image), and is the single source of truth: it locates pins and stores the
+results. The Flutter app talks only to Dukandaari's own API, and does live
+rider guidance on the phone. Step-by-step setup, with tested code:
+[docs/django.md](docs/django.md).
 
 **Uses:**
 
@@ -1103,9 +1119,10 @@ the same data centre.
   centroids.
 - **Rider navigation:** block-level guidance, then distance and direction to
   the exact pin (§10).
-- **Offline use (optional):** a Dart port of `layout`, `ids` and `navigate`
-  with the ~100 KB `rows` table lets the Flutter app work out IDs and
-  directions without internet.
+- **On the phone:** live navigation runs in Dukandaari's own Dart code,
+  following the rules in §10.6; it needs no database. Dukandaari may also
+  port `layout`, `ids` and grid addresses (with the ~100 KB rows table) to
+  work out IDs offline.
 
 ---
 
@@ -1120,7 +1137,9 @@ the same data centre.
 | Centroids | Each centroid lies inside its block and matches an independent `pyproj` calculation |
 | Edges | Points exactly on boundaries follow the edge rule (§3.6) |
 | Neighbours | Neighbour lists are symmetric (if A neighbours B, B neighbours A), including across quadrants |
-| Determinism | Two builds produce byte-identical files and the same checksum |
+| Determinism | Two builds produce byte-identical files and the same checksum; test builds match recorded checksums on Linux, macOS and Windows; no centroid latitude is near enough to a rounding tie for platform differences in `sin`/`cos` to change it |
+| Official checksums | Both complete editions, built from scratch on Linux, macOS and Windows, match `pakgrid/checksums.py` (`.github/workflows/checksums.yml`) |
+| Shared use | One `Grid` shared by many threads, and used after a fork, gives the same answers as a single thread |
 | GPS noise | Simulated noise: the true block is always the result or one of its `candidates` |
 | Border flags | Flags along the real border match an independent brute-force check (segment-box intersection plus ray casting); known places (Lahore, Skardu, Astola Island, Amritsar, the sea off Karachi) are classified correctly |
 | Pakistan edition | Same IDs and data as the full database for every stored cell; cells outside are absent; `verify --full` passes |
@@ -1128,8 +1147,8 @@ the same data centre.
 
 
 All tests run automatically on GitHub Actions (`.github/workflows/tests.yml`)
-for Python 3.10, 3.11, 3.12 and 3.13, on every push to `main` and every pull
-request. The workflow also runs `pyflakes`, and checks that the viewer's
+for Python 3.10, 3.11, 3.12 and 3.13 on Linux, and Python 3.13 on macOS and
+Windows, on every push to `main` and every pull request. The workflow also runs `pyflakes`, and checks that the viewer's
 `layout.js` and `boundary.js` match the library.
 
 ---

@@ -69,7 +69,11 @@ class _Connection:
         if self.pid == os.getpid():     # never close a connection inherited through fork
             self.db.close()
 
-    __del__ = close
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:               # e.g. at interpreter shutdown
+            pass
 
 
 class GridStore:
