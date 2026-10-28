@@ -20,6 +20,8 @@ def main(argv=None):
     p.add_argument("--quadrant", action="append", metavar="CODE",
                    help="build only this quadrant (00, 01, 10, 11); repeatable")
     p.add_argument("--rows", metavar="START:STOP", help="build only these rows of each quadrant")
+    p.add_argument("--pakistan-only", action="store_true",
+                   help="leave out cells wholly outside Pakistan (IDs are unchanged)")
     p.add_argument("--overwrite", action="store_true", help="replace an existing file")
 
     p = sub.add_parser("verify", help="check a database against the grid rules and its checksum")
@@ -39,8 +41,8 @@ def main(argv=None):
     p = sub.add_parser("info", help="print grid and database information")
     p.add_argument("--db", default=DEFAULT_DB)
 
-    p = sub.add_parser("export-layout", help="write the row/column layout for the map viewer")
-    p.add_argument("-o", "--output", default="viewer/layout.js")
+    p = sub.add_parser("export-layout", help="write the map viewer's data files (layout.js, boundary.js)")
+    p.add_argument("-o", "--output-dir", default="viewer")
 
     args = parser.parse_args(argv)
     try:
@@ -54,6 +56,7 @@ def _build(args):
     from .builder import build_database
     rows = tuple(int(x) for x in args.rows.split(":")) if args.rows else None
     report = build_database(args.output, quadrants=args.quadrant, rows=rows, overwrite=args.overwrite,
+                            pakistan_only=args.pakistan_only,
                             progress=lambda msg: print(f"building {msg}…", file=sys.stderr))
     print(f"wrote {report.path}: {report.cells:,} cells, {report.sub_cells:,} sub-cells, "
           f"{report.size_bytes / 1e6:.0f} MB in {report.seconds:.1f} s")
@@ -64,14 +67,16 @@ def _build(args):
 def _verify(args):
     from .verify import verify_database
     report = verify_database(args.db, full=args.full)
-    for name, passed, detail in report.checks:
-        print(f"{'PASS' if passed else 'FAIL'}  {name}" + (f"  ({detail})" if detail else ""))
+    for name, passed, detail, required in report.checks:
+        status = "PASS" if passed else "FAIL" if required else "NOTE"
+        print(f"{status}  {name}" + (f"  ({detail})" if detail else ""))
     return 0 if report.ok else 2
 
 
 def _export_layout(args):
-    from .export import write_layout_js
-    print(f"wrote {write_layout_js(args.output)}")
+    from .export import write_viewer_files
+    for path in write_viewer_files(args.output_dir):
+        print(f"wrote {path}")
     return 0
 
 

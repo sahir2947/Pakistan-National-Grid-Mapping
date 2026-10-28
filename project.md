@@ -116,7 +116,6 @@ v0.1 is the **grid itself**: a Python library and a static database.
 
 - website, public HTTP API, search, road routing
 - personal data of any kind (for example CNIC)
-- clipping the grid to Pakistan's exact border (planned later, §5.6)
 
 ---
 
@@ -143,7 +142,8 @@ The grid covers a latitude/longitude rectangle that contains all of Pakistan.
 **Area:** 2,497,710 km² on the WGS 84 ellipsoid. Pakistan, including
 Gilgit-Baltistan and AJK, is about 882,000 km², or **~35%** of the rectangle.
 The rest covers parts of Iran, Afghanistan, China, India and the Arabian Sea.
-Cells outside Pakistan will be flagged later (§5.6); their IDs stay valid.
+Every cell and sub-cell is flagged as inside Pakistan, on its border, or outside
+(§5.6); IDs are the same either way.
 
 ### 3.2 Quadrants
 
@@ -385,11 +385,12 @@ file.
 
 | Table | Rows | Contents |
 |---|---|---|
-| `meta` | 1 | grid version, datum (WGS 84), corners, midlines, target sizes, build checksum |
+| `meta` | ~30 | grid version, datum (WGS 84), corners, midlines, target sizes, edition, border source and licence, flag counts, checksums |
 | `quadrants` | 4 | code, boundaries, row count, cell count |
 | `rows` | ~3,026 | quadrant, row, south/north latitude, column count, column width (degrees) |
-| `cells` | 2,498,422 | cell ID (primary key), south, west, north, east, centroid latitude/longitude |
-| `sub_cells` | 2,498,422 | cell ID (primary key) plus one packed record for its 25 sub-cells |
+| `cells` | 2,498,422 | cell ID (primary key), south, west, north, east, centroid latitude/longitude, border flag |
+| `sub_cells` | 2,498,422 | cell ID (primary key), one packed record for its 25 sub-cells, and two 25-bit border masks |
+| `boundary` | 48 | Pakistan's border: one packed ring of (lon, lat) integers per row (86,591 vertices, ~0.7 MB) |
 
 **Coordinate encoding:** all coordinates are stored as integers in units of
 10⁻⁷ degree (~1.1 cm). This is smaller than decimal text, exact, and fast to
@@ -410,17 +411,18 @@ Neighbouring sub-cells share edges, so each edge line is stored only once.
 | Option | How sub-cells are stored | Size of sub-cells | Total with cells |
 |---|---|---|---|
 | A. One row per sub-cell | 62.5 M rows with ID, 4 boundaries, centroid | ~2.45 GB | ~2.55 GB |
-| **B. Packed per cell (chosen)** | 2.5 M packed records, as in §5.2 | **~680 MB** | **781 MB** (measured) |
+| **B. Packed per cell (chosen)** | 2.5 M packed records, as in §5.2 | **~680 MB** | **785 MB** (measured, with border flags) |
 | C. Calculated from the parent | Not stored | 0 | ~99 MB |
 
 **Option B is chosen.** Every sub-cell's ID, boundaries and centroid are
 pre-determined and stored, so the database remains the single source of truth.
 It is ~3.5× smaller than option A, and it fits within GitHub Releases' 2 GB
-per-file limit, which option A does not.
+per-file limit, which option A does not. The Pakistan edition (§5.6) of the
+same database is 275 MB.
 
 ### 5.4 Memory
 
-Only the `rows` table (~3,000 rows, < 100 KB) is held in memory. The 781 MB
+Only the `rows` table (~3,000 rows, < 100 KB) is held in memory. The 785 MB
 file stays on disk and is read on demand through SQLite and the operating
 system's file cache.
 
@@ -433,16 +435,62 @@ system's file cache.
 - Any change to the grid rules produces a **new version file**
   (`pakgrid_v2.sqlite`). Existing IDs are never redefined.
 
-### 5.6 Pakistan border filter (later)
+### 5.6 Pakistan border flags
 
-Once an authoritative boundary dataset is agreed:
+Every cell and sub-cell carries a flag saying where it lies relative to
+Pakistan's border. The flags never change IDs: cells outside Pakistan keep
+their codes, and the quadrant, cell and sub-cell structure is untouched.
 
-- an `in_pakistan` flag is added for every cell and sub-cell, and
-- optionally, a smaller "Pakistan only" edition of the database (~280 MB) is
-  published.
+| Flag | Meaning |
+|---|---|
+| `inside` | The block lies wholly inside Pakistan |
+| `border` | The border line passes through or touches the block |
+| `outside` | The block lies wholly outside Pakistan (other countries or the sea) |
 
-IDs do not change, because they come from the rectangle and not from the
-border.
+**Border used:** geoBoundaries gbOpen `PAK-ADM0`, built from OpenStreetMap.
+It covers the territory Pakistan administers, including Azad Jammu & Kashmir
+and Gilgit-Baltistan, and follows the coastline (the sea counts as outside).
+It has 86,591 vertices, accurate to tens of metres, and fits inside the grid
+rectangle. The file is packaged at `pakgrid/data/`; see
+[`BOUNDARY_SOURCE.md`](pakgrid/data/BOUNDARY_SOURCE.md) for its source and checksum.
+
+**Licence:** the border is ODbL data. A grid database containing the flags
+must credit "© OpenStreetMap contributors, via geoBoundaries", and a modified
+copy of such a database that is shared publicly must also be under the ODbL.
+The `pakgrid` code itself is not affected. The attribution is stored in each
+database's `meta` table and shown by `pakgrid info` and the map viewer.
+
+**Result for grid v1:**
+
+| | Cells |
+|---|---|
+| Inside | 860,775 |
+| Border | 11,371 |
+| Outside | 1,626,276 |
+
+Cells inside, plus about half the border cells, come to ~866,500 km². That
+matches the border's own area (867,196 km²) to within 0.1%.
+
+**How the flags are computed:** for each row of sub-cells, the builder finds
+where the border line runs within that row (those sub-cells are `border`), and
+where it crosses the row's middle latitude. Between pairs of crossings the row
+is inside Pakistan, so the remaining sub-cells are `inside` or `outside`. A
+cell is `inside` or `outside` only if all 25 of its sub-cells are; otherwise
+it is `border`. Border vertices are rounded to 10⁻⁷ degree, like everything
+else in the grid, so the flags are reproducible.
+
+**Exact answers for points:** for a point in a `border` sub-cell, `locate()`
+tests it against the border line itself (stored in the database), so
+`Location.in_pakistan` is exact to the border data.
+
+**Pakistan edition:** `pakgrid build --pakistan-only` leaves out the cells
+that are wholly outside Pakistan, which gives 872,146 cells in 275 MB instead
+of 785 MB. IDs are unchanged; asking for a missing outside cell gives a clear
+`NotInDatabaseError`.
+
+**Updating the border:** replacing the boundary file and rebuilding changes
+only the flags, never the IDs. Each database records the border's checksum,
+and `pakgrid verify` checks it.
 
 ---
 
@@ -488,7 +536,7 @@ tests/            Gap/overlap, round-trip, uniqueness, determinism and accuracy 
 
 ## 7. Public interface
 
-### 7.1 Python library: 14 functions
+### 7.1 Python library: 16 functions
 
 Integer cell IDs and sub-cell IDs can look alike, so functions that accept
 either take a `level` argument (`"cell"` or `"sub"`). A readable code sets the
@@ -497,25 +545,28 @@ level by itself.
 | # | Function | Returns |
 |---|---|---|
 | **Finding a location** | | |
-| 1 | `locate(lat, lon, accuracy_m=None)` | `Location`: sub-cell, offset from its centroid, edge distance, confidence and candidates |
+| 1 | `locate(lat, lon, accuracy_m=None)` | `Location`: sub-cell, offset from its centroid, edge distance, confidence, candidates, and `in_pakistan` |
 | 2 | `locate_many(points)` | A list of `Location`; each point is `(lat, lon)` or `(lat, lon, accuracy_m)` |
 | **Lookup by ID** | | |
-| 3 | `cell(id_or_code)` | `Cell`: ID, code, quadrant, row, column, bounds, centroid |
-| 4 | `sub_cell(id_or_code)` | `SubCell`: ID, code, parent cell, index 0–24, bounds, centroid |
+| 3 | `cell(id_or_code)` | `Cell`: ID, code, quadrant, row, column, bounds, centroid, border flag |
+| 4 | `sub_cell(id_or_code)` | `SubCell`: ID, code, parent cell, index 0–24, bounds, centroid, border flag |
 | **Hierarchy and area** | | |
 | 5 | `parent(sub_id)` | The parent cell ID (bit shift; no database access) |
 | 6 | `children(cell)` | The 25 `SubCell`s of a cell, in order 0–24 |
 | 7 | `neighbours(item, level="cell")` | IDs of touching cells or sub-cells, across quadrant lines too |
-| 8 | `cells_in_area(south, west, north, east, level="cell")` | IDs of cells or sub-cells overlapping a box |
+| 8 | `cells_in_area(south, west, north, east, level="cell", pakistan_only=False)` | IDs of cells or sub-cells overlapping a box; optionally only those in Pakistan |
+| **Pakistan border** | | |
+| 9 | `in_pakistan(lat, lon)` | `True` if the point is inside Pakistan's border |
+| 10 | `pakistan_flags(items, level="cell")` | `{id: "inside" \| "border" \| "outside"}` for many cells or sub-cells at once |
 | **Vectors and navigation** | | |
-| 9 | `offset(item, lat, lon, level="sub")` | `Offset` from a centroid to a point: east/north metres, distance, bearing, text such as `W23 S18` |
-| 10 | `from_offset(item, east_m, north_m, level="sub")` | `(lat, lon)` of a block's centroid plus an offset |
-| 11 | `direction(from_lat, from_lon, to_lat, to_lon, heading=None)` | `Direction`: metres, feet, bearing, compass name, and turn left/right |
+| 11 | `offset(item, lat, lon, level="sub")` | `Offset` from a centroid to a point: east/north metres, distance, bearing, text such as `W23 S18` |
+| 12 | `from_offset(item, east_m, north_m, level="sub")` | `(lat, lon)` of a block's centroid plus an offset |
+| 13 | `direction(from_lat, from_lon, to_lat, to_lon, heading=None)` | `Direction`: metres, feet, bearing, compass name, and turn left/right |
 | **Readable codes** | | |
-| 12 | `to_text(id, level="sub")` | `105265888` → `11-0140-0471-00` |
-| 13 | `from_text(code)` | `11-0140-0471-00` → `105265888`, checked against the grid |
+| 14 | `to_text(id, level="sub")` | `105265888` → `11-0140-0471-00` |
+| 15 | `from_text(code)` | `11-0140-0471-00` → `105265888`, checked against the grid |
 | **Info** | | |
-| 14 | `info()` | Grid version, corners, counts, database coverage and checksum |
+| 16 | `info()` | Grid version, corners, counts, database coverage and edition, border flag counts, attribution, checksums |
 
 Every result object has a `to_dict()` method that returns JSON-ready data.
 
@@ -528,11 +579,15 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
     loc.offset.text        # 'W23 S18'
     loc.confident          # True
     loc.sub_cell.centroid  # (31.5205657, 74.3589474)
+    loc.in_pakistan        # True
+    grid.cell(loc.cell_id).pakistan   # 'inside'
 ```
+
+`grid.boundary` gives the stored border itself (`contains(lat, lon)`).
 
 **Errors:** `OutsideGridError` (point outside the rectangle),
 `InvalidIdError` (an ID or code that is not in the grid),
-`NotInDatabaseError` (a valid cell missing from a partial build),
+`NotInDatabaseError` (a valid cell missing from a partial build or the Pakistan edition),
 `GridMismatchError` (database built with different grid rules) and
 `IntegrityError` (database contents do not match the layout).
 
@@ -540,12 +595,12 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 
 | Command | Purpose |
 |---|---|
-| `pakgrid build [-o FILE] [--quadrant CODE] [--rows START:STOP]` | Generate the database; the options build a partial database for tests or pilots |
-| `pakgrid verify [--db FILE] [--full]` | Check a database against the rules and its checksum; `--full` regenerates every record |
+| `pakgrid build [-o FILE] [--quadrant CODE] [--rows START:STOP] [--pakistan-only]` | Generate the database; `--quadrant` and `--rows` build part of it for tests or pilots, `--pakistan-only` builds the Pakistan edition |
+| `pakgrid verify [--db FILE] [--full]` | Check a database against the rules, its border and its checksum; `--full` regenerates every record and flag |
 | `pakgrid locate LAT LON [--accuracy M]` | Look up a point; prints JSON |
 | `pakgrid show CODE` | Print a cell's or sub-cell's details as JSON |
 | `pakgrid info` | Print grid and database information |
-| `pakgrid export-layout` | Write `viewer/layout.js`, the row and column counts used by the map viewer |
+| `pakgrid export-layout` | Write the map viewer's data: `viewer/layout.js` (row and column counts) and `viewer/boundary.js` (the border) |
 
 The database path defaults to `pakgrid_v1.sqlite`, or the `PAKGRID_DB`
 environment variable.
@@ -561,10 +616,12 @@ for checking the grid visually before it is used in an app:
   centroids, offset and GPS confidence
 - search by code or by `lat, lon`; links such as `#11-0140-0471-00` open at
   that block
+- Pakistan's border, with cells coloured inside (blue), border (purple) or
+  outside (grey, dashed); **Pakistan only** hides everything outside
 
-It needs no database. It recomputes the grid from `viewer/layout.js` with the
-same formulas as the library, and `tests/test_viewer_js.py` checks that the
-two agree. See [viewer/README.md](viewer/README.md).
+It needs no database. It recomputes the grid and the border flags from
+`viewer/layout.js` and `viewer/boundary.js` with the same formulas as the
+library, and `tests/test_viewer_js.py` checks that the two agree. See [viewer/README.md](viewer/README.md).
 
 ### 7.4 HTTP API (v0.2): 10 endpoints
 
@@ -856,7 +913,7 @@ the same data centre.
 
 **Test setup:**
 
-- the full grid: 2,498,422 cells and 62,460,550 sub-cells in a 781 MB
+- the full grid: 2,498,422 cells and 62,460,550 sub-cells in a 785 MB
   SQLite file
 - 200,000 random points across the whole rectangle
 - Python 3.13 on one CPU core of a cloud machine, with no tuning
@@ -868,15 +925,19 @@ the same data centre.
 | `sub_cell(id)` | 15 µs | ~68,000 |
 | `neighbours(cell id)` | 18 µs | ~56,000 |
 | `locate(lat, lon)` | 22 µs | ~46,000 |
-| `locate(lat, lon, accuracy_m=8)`, including candidates | 30 µs | ~33,000 |
+| `locate(lat, lon, accuracy_m=8)`, including candidates | 25–30 µs | ~33,000–40,000 |
+| `locate()` in a border sub-cell (point tested against the border line) | ~26 µs | ~39,000 |
+| `cells_in_area(...)` 1° × 1°, `pakistan_only=True` (10,879 cells) | 17 ms | — |
 
 **Build and verify:**
 
 | | Result |
 |---|---|
-| `pakgrid build` (full grid) | 26 s, 781 MB, ~51 MB peak memory |
-| `pakgrid verify --full` | 24 s; regenerates every record and compares |
-| Content SHA-256 (grid v1) | `55ea85531dedbcaa44d9d384276e2468b16d411766d798215c0dcc5c5202e1ff` |
+| `pakgrid build` (full grid, with border flags) | 36 s, 785 MB, ~51 MB peak memory |
+| `pakgrid build --pakistan-only` | 19 s, 275 MB, 872,146 cells |
+| `pakgrid verify --full` | about as long as a build; regenerates every record and flag and compares |
+| Content SHA-256, full database (grid v1) | `f8da541f3865862a18ac25dded339c2a84eeea4b5ff26e59d27676a4309e0109` |
+| Content SHA-256, Pakistan edition | `6c5c2ec492a38f93020b593c554e9d437b39d859948a2cc82e94e6605c30cb01` |
 | `Grid.open()` | ~9 ms |
 | Memory while serving lookups | ~4 MB above the Python interpreter |
 
@@ -902,7 +963,7 @@ the same data centre.
 
 | What | Where it lives |
 |---|---|
-| Grid catalogue (cells, sub-cells, centroids) | Grid database (`pakgrid_v1.sqlite`), read-only |
+| Grid catalogue (cells, sub-cells, centroids, border flags) | Grid database (`pakgrid_v1.sqlite`, or the 275 MB Pakistan edition), read-only |
 | Customer, shop and order records | **Dukandaari's own database** |
 | Personal data (names, phone numbers, CNIC) | **Dukandaari's own database only**, protected there. Never in the grid |
 | Per address | Sub-cell ID (4 bytes), exact pin, accuracy, offset, text notes |
@@ -911,6 +972,8 @@ the same data centre.
 
 - **Addresses:** the customer drops and confirms a pin; `locate()` gives the
   sub-cell ID. Shops are registered the same way.
+- **Service area:** reject or flag addresses where `in_pakistan` is `False`,
+  and use the Pakistan edition so the server only stores cells it can deliver to.
 - **Order batching:** group orders by cell ID (`sub_id >> 5`).
 - **Rider zones and shop delivery areas:** sets of cell IDs (`cells_in_area`,
   `neighbours`).
@@ -937,12 +1000,15 @@ the same data centre.
 | Neighbours | Neighbour lists are symmetric (if A neighbours B, B neighbours A), including across quadrants |
 | Determinism | Two builds produce byte-identical files and the same checksum |
 | GPS noise | Simulated noise: the true block is always the result or one of its `candidates` |
+| Border flags | Flags along the real border match an independent brute-force check (segment-box intersection plus ray casting); known places (Lahore, Skardu, Astola Island, Amritsar, the sea off Karachi) are classified correctly |
+| Pakistan edition | Same IDs and data as the full database for every stored cell; cells outside are absent; `verify --full` passes |
+| Viewer | The map viewer's JavaScript gives the same cells, centroids and border flags as the library |
 
 
 All tests run automatically on GitHub Actions (`.github/workflows/tests.yml`)
 for Python 3.10, 3.11, 3.12 and 3.13, on every push to `main` and every pull
 request. The workflow also runs `pyflakes`, and checks that the viewer's
-`layout.js` matches the library.
+`layout.js` and `boundary.js` match the library.
 
 ---
 
@@ -950,10 +1016,10 @@ request. The workflow also runs `pyflakes`, and checks that the viewer's
 
 | Version | Deliverable |
 |---|---|
-| **v0.1 — Grid core** ✅ | Python library, full database (option B), CLI, tests, documentation (implemented) |
+| **v0.1 — Grid core** ✅ | Python library, full database (option B), CLI, tests, documentation, map viewer, Pakistan border flags (implemented) |
 | **v0.2 — Grid API** | HTTP service with the 10 endpoints in §7.4 |
 | **v0.3 — Dukandaari pilot** | One city (Lahore or Karachi): addresses, batching, rider navigation |
-| **v1.0 — Public release** | Frozen grid v1, Pakistan border flag, published database, documentation |
+| **v1.0 — Public release** | Frozen grid v1, published database (full and Pakistan editions), documentation |
 | **Later** | Map website with grid overlay (MapLibre + OpenStreetMap), search, road routing, Flutter and JavaScript SDKs |
 
 ---
@@ -963,7 +1029,7 @@ request. The workflow also runs `pyflakes`, and checks that the viewer's
 | Decision | Current proposal |
 |---|---|
 | Final outer boundaries | **Decided:** east edge moved from 77.0° E to 78.0° E so all of Baltistan (up to the Karakoram Pass, ~77.8° E) is inside; other edges confirmed. Fixed from here on, because changing them changes every ID |
-| Boundary dataset for the Pakistan border filter | To be chosen |
+| Boundary dataset for the border flags | **Decided:** geoBoundaries `PAK-ADM0` (OpenStreetMap, ODbL): administered territory including AJK and Gilgit-Baltistan, coastline as the edge (§5.6) |
 | Open-source licence | MIT or Apache-2.0 |
 | Readable code format | `QQ-RRRR-CCCC-SS`, plus an optional offset `W23 S18` |
 | Package and project name | `pakgrid` (working name) |
