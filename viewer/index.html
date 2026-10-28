@@ -20,7 +20,7 @@
   #map { position: absolute; inset: 0; }
   .bar { position: absolute; z-index: 1000; top: 10px; left: 56px; right: 10px; display: flex; gap: 6px;
          flex-wrap: wrap; max-width: 640px; }
-  .bar input { flex: 1 1 220px; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
+  .bar input[type=search] { flex: 1 1 220px; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
                background: var(--bg); color: var(--fg); font-size: 14px; box-shadow: var(--panel-shadow); }
   .bar button, .panel button { padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
                background: var(--bg); color: var(--fg); font-size: 14px; box-shadow: var(--panel-shadow); }
@@ -46,6 +46,10 @@
   .sub-label { font: 600 11px/1 ui-monospace, Menlo, monospace; color: #9a3412; text-shadow: 0 0 3px #fff; text-align: center; }
   .leaflet-tooltip.corner { font-size: 12px; }
   .hide { display: none; }
+  .bar label.toggle { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--line);
+                      border-radius: 8px; background: var(--bg); box-shadow: var(--panel-shadow); cursor: pointer; }
+  .legend span { display: inline-block; width: 14px; height: 10px; margin-right: 6px; vertical-align: middle;
+                 border: 2px solid; }
   @media (max-width: 640px) {
     .bar { left: 52px; }
     .panel { left: 10px; right: 10px; top: auto; bottom: 10px; width: auto; max-height: 45%; }
@@ -60,6 +64,7 @@
          placeholder="Code (11-0140-0471-00) or lat, lon (31.5204, 74.3587)" aria-label="Search">
   <button class="primary" type="submit">Go</button>
   <button type="button" id="me" title="Find my grid block">My location</button>
+  <label class="toggle"><input type="checkbox" id="pkonly"> Pakistan only</label>
 </form>
 <div class="panel" id="panel"></div>
 <div class="status" id="status"></div>
@@ -67,12 +72,22 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script src="layout.js"></script>
+<script src="boundary.js"></script>
 <script src="pakgrid.js"></script>
 <script>
 (function () {
   "use strict";
   var grid = new PakGrid.Grid(PAKGRID_LAYOUT);
+  var border = new PakGrid.Boundary(PAKGRID_BOUNDARY);
   var B = grid.bounds, M = grid.mid;
+  var FLAG = PakGrid.FLAG_NAMES;
+  // cell and sub-cell line styles by border flag: outside, border, inside
+  var CELL_STYLE = [{ color: "#9ca3af", weight: 1, opacity: 0.6, dashArray: "3 3" },
+                    { color: "#7c3aed", weight: 1.5, opacity: 0.9 },
+                    { color: "#1d4ed8", weight: 1, opacity: 0.8 }];
+  var SUB_STYLE = [{ color: "#9ca3af", weight: 0.5, opacity: 0.5 },
+                   { color: "#a855f7", weight: 0.8, opacity: 0.8 },
+                   { color: "#ea580c", weight: 0.7, opacity: 0.7 }];
   var CELL_ZOOM = 11, SUB_ZOOM = 14, CELL_LABEL_ZOOM = 13, SUB_LABEL_ZOOM = 16, LIMIT = 6000;
   var QUAD_COLOURS = ["#3b82f6", "#16a34a", "#f59e0b", "#e11d48"];  // 00 01 10 11
 
@@ -86,7 +101,8 @@
     .fitBounds([[B.south, B.west], [B.north, B.east]], viewPadding());
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' +
+      ' · Border: <a href="https://www.geoboundaries.org">geoBoundaries</a> (ODbL)'
   }).addTo(map);
   var canvas = L.canvas({ padding: 0.3 });
 
@@ -120,16 +136,39 @@
       .addTo(frame);
   });
 
+  // -- Pakistan's border ------------------------------------------------------
+  var borderLayer = L.layerGroup().addTo(map);
+  border.rings.forEach(function (ring) {
+    L.polyline(ring.map(function (v) { return [v[1] / 1e7, v[0] / 1e7]; }),
+               { color: "#047857", weight: 2.5, opacity: 0.9, interactive: false }).addTo(borderLayer);
+  });
+
+  // Border flag of a box returned by grid.itemsInBox: [s, w, n, e, quadrant, row, column].
+  function boxFlag(b, level) {
+    if (level === "cell") return grid.flag(border, b[4], b[5], b[6], null);
+    return grid.flag(border, b[4], Math.floor(b[5] / 5), Math.floor(b[6] / 5), (b[5] % 5) * 5 + (b[6] % 5));
+  }
+
   // -- Cell and sub-cell lines, drawn only for the visible area -----------
   var gridLayer = L.layerGroup().addTo(map);
   var labelLayer = L.layerGroup().addTo(map);
   var statusEl = document.getElementById("status");
 
-  function drawBoxes(boxes, style) {
+  function drawBoxes(boxes, level, styles) {
     boxes.forEach(function (b) {
+      var style = styles[b.flag];
+      if (level === "cell" && b.flag !== 0 && boxes.withSubs) style = L.extend({}, style, { weight: 2 });
       L.rectangle([[b[0], b[1]], [b[2], b[3]]], L.extend({ renderer: canvas, fill: false, interactive: false }, style))
         .addTo(gridLayer);
     });
+  }
+
+  // Attach border flags, and drop the boxes outside Pakistan when "Pakistan only" is on.
+  function withFlags(boxes, level) {
+    if (!boxes) return boxes;
+    var pkOnly = document.getElementById("pkonly").checked;
+    boxes.forEach(function (b) { b.flag = boxFlag(b, level); });
+    return pkOnly ? boxes.filter(function (b) { return b.flag !== 0; }) : boxes;
   }
 
   function drawLabels(boxes, atTop, className, size, text) {
@@ -149,18 +188,21 @@
     var cells = null, subs = null, msg;
     if (z >= CELL_ZOOM) cells = grid.itemsInBox(v.getSouth(), v.getWest(), v.getNorth(), v.getEast(), "cell", LIMIT);
     if (cells && z >= SUB_ZOOM) subs = grid.itemsInBox(v.getSouth(), v.getWest(), v.getNorth(), v.getEast(), "sub", LIMIT);
+    cells = withFlags(cells, "cell");
+    subs = withFlags(subs, "sub");
 
     if (z < CELL_ZOOM) msg = "Zoom in to see the ~1 km cells";
     else if (!cells) msg = "Zoom in a little more to draw the cells";
     else {
-      msg = cells.length.toLocaleString() + " cells in view";
+      var inPk = cells.filter(function (b) { return b.flag !== 0; }).length;
+      msg = cells.length.toLocaleString() + " cells in view (" + inPk.toLocaleString() + " in Pakistan)";
       if (subs) msg += " · " + subs.length.toLocaleString() + " sub-cells";
       else msg += z >= SUB_ZOOM ? " · zoom in to see sub-cells" : " · zoom in to see ~200 m sub-cells";
     }
 
     // sub-cells first, so the cell lines stay on top
-    if (subs) drawBoxes(subs, { color: "#ea580c", weight: 0.7, opacity: 0.7 });
-    if (cells) drawBoxes(cells, { color: "#1d4ed8", weight: subs ? 2 : 1, opacity: 0.8 });
+    if (subs) drawBoxes(subs, "sub", SUB_STYLE);
+    if (cells) { cells.withSubs = !!subs; drawBoxes(cells, "cell", CELL_STYLE); }
     if (cells && z >= CELL_LABEL_ZOOM && cells.length <= 400) {
       drawLabels(cells, true, "cell-label", [96, 12], function (r) { return PakGrid.cellCode(r.q, r.row, r.col); });
     }
@@ -171,6 +213,7 @@
     statusEl.classList.remove("hide");
   }
   map.on("moveend", drawGrid);
+  document.getElementById("pkonly").addEventListener("change", drawGrid);
 
   // -- Selection -----------------------------------------------------------
   var selLayer = L.layerGroup().addTo(map);
@@ -205,7 +248,13 @@
         ["Cells", d.total_cells.toLocaleString()], ["Sub-cells", d.total_sub_cells.toLocaleString()]
       ]) + "<h3>Quadrants</h3>" + rowsHtml(grid.quadrants.map(function (q) {
         return [q.code + " " + q.name, q.areaKm2.toLocaleString() + " km² · " + q.ncells.toLocaleString() + " cells"];
-      })) + "<p class='sub'>Tap the map to see the cell and sub-cell at that point. " +
+      })) + "<h3>Pakistan border</h3><div class='legend sub'>" +
+      "<div><span style='border-color:#047857'></span>Border line</div>" +
+      "<div><span style='border-color:#1d4ed8'></span>Cell inside Pakistan</div>" +
+      "<div><span style='border-color:#7c3aed'></span>Cell on the border</div>" +
+      "<div><span style='border-color:#9ca3af;border-style:dashed'></span>Cell outside Pakistan</div>" +
+      "<div style='margin-top:4px'>" + border.attribution + "</div></div>" +
+      "<p class='sub'>Tap the map to see the cell and sub-cell at that point. " +
       "Cells appear from zoom " + CELL_ZOOM + ", sub-cells from zoom " + SUB_ZOOM + ".</p>";
   }
 
@@ -247,6 +296,9 @@
       var pointRows = [["Point", fmt(p[0]) + ", " + fmt(p[1])],
                        ["From centroid", off.text + " (" + off.distance.toFixed(1) + " m at " + Math.round(off.bearing) + "°)"],
                        ["Nearest edge", edge.toFixed(1) + " m"]];
+      var subFlag = grid.flag(border, r.q, r.row, r.col, sub.sub);
+      var pointIn = subFlag === 2 || (subFlag === 1 && border.contains(p[0], p[1]));
+      pointRows.push(["In Pakistan", pointIn ? "yes" : "no"]);
       if (opts.accuracy) {
         pointRows.push(["GPS accuracy", Math.round(opts.accuracy) + " m"]);
         pointRows.push(["Confident", edge >= opts.accuracy ? "yes" : "no: could be a neighbouring block"]);
@@ -256,7 +308,9 @@
     html += "<h3>Location in the grid</h3>" + rowsHtml([
       ["Quadrant", grid.quadrants[r.q].code + " " + grid.quadrants[r.q].name],
       ["Row / column", r.row + " / " + r.col]].concat(sub ? [["Sub-cell", sub.sub + " (row " +
-        Math.floor(sub.sub / 5) + ", column " + (sub.sub % 5) + ")"]] : []));
+        Math.floor(sub.sub / 5) + ", column " + (sub.sub % 5) + ")"]] : []).concat(
+      [["Cell in Pakistan", FLAG[grid.flag(border, r.q, r.row, r.col, null)]]]).concat(
+      sub ? [["Sub-cell in Pakistan", FLAG[grid.flag(border, r.q, r.row, r.col, sub.sub)]]] : []));
     if (sub) {
       html += "<h3>Sub-cell · " + sizeText(sub.bounds) + "</h3>" +
               rowsHtml([["Centroid", fmt(sub.centroid[0]) + ", " + fmt(sub.centroid[1])]].concat(boundsRows(sub.bounds)));

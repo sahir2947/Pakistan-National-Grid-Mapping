@@ -5,9 +5,10 @@ from bisect import bisect_right
 from dataclasses import dataclass
 
 from . import geodesy, ids, navigate, spec
-from .errors import GridMismatchError, IntegrityError, InvalidIdError
+from .boundary import FLAG_NAMES, OUTSIDE, Boundary, sub_flag
+from .errors import GridMismatchError, IntegrityError, InvalidIdError, NotInDatabaseError, OutsideGridError
 from .layout import SCALE, SUB, GridLayout, QuadrantLayout, to_e7
-from .store import GridStore
+from .store import SCHEMA_VERSION, GridStore
 
 MAX_CANDIDATE_RADIUS_M = 5000.0
 
@@ -39,10 +40,12 @@ class Cell:
     column: int
     bounds: Bounds
     centroid: tuple
+    pakistan: str        # "inside", "border" or "outside"
 
     def to_dict(self):
         return {"id": self.id, "code": self.code, "quadrant": self.quadrant, "row": self.row,
-                "column": self.column, "centroid": list(self.centroid), "bounds": self.bounds.to_dict()}
+                "column": self.column, "centroid": list(self.centroid), "bounds": self.bounds.to_dict(),
+                "pakistan": self.pakistan}
 
 
 @dataclass(frozen=True)
@@ -54,10 +57,12 @@ class SubCell:
     index: int
     bounds: Bounds
     centroid: tuple
+    pakistan: str        # "inside", "border" or "outside"
 
     def to_dict(self):
         return {"id": self.id, "code": self.code, "cell_id": self.cell_id, "cell_code": self.cell_code,
-                "index": self.index, "centroid": list(self.centroid), "bounds": self.bounds.to_dict()}
+                "index": self.index, "centroid": list(self.centroid), "bounds": self.bounds.to_dict(),
+                "pakistan": self.pakistan}
 
 
 @dataclass(frozen=True)
@@ -98,6 +103,7 @@ class Location:
     accuracy_m: float | None
     confident: bool | None   # None when no accuracy was given
     candidates: tuple        # other sub-cell IDs within the accuracy radius, nearest first
+    in_pakistan: bool        # the point itself, checked against the border line in border blocks
 
     @property
     def id(self):
@@ -126,6 +132,7 @@ class Location:
             "confident": self.confident,
             "edge_distance_m": round(self.edge_distance_m, 1),
             "candidates": [ids.sub_cell_code(c) for c in self.candidates],
+            "in_pakistan": self.in_pakistan,
         }
 
 
@@ -143,6 +150,11 @@ class Grid:
         if version != spec.GRID_VERSION:
             raise GridMismatchError(
                 f"database is grid version {version}; this library implements version {spec.GRID_VERSION}")
+        if int(self.meta.get("schema_version", 0)) != SCHEMA_VERSION:
+            raise GridMismatchError(
+                f"database schema version {self.meta.get('schema_version')} is not {SCHEMA_VERSION}; "
+                "rebuild it with `pakgrid build`")
+        self._boundary = None
         self.layout = _layout_from_store(store)
         if not self.layout.same_shape(GridLayout.from_spec()):
             raise GridMismatchError("database rows and columns do not match the grid rules of this library")
@@ -178,8 +190,28 @@ class Grid:
         """`locate` for many points; each point is (lat, lon) or (lat, lon, accuracy_m)."""
         return [self.locate(*p) for p in points]
 
+    def in_pakistan(self, lat, lon):
+        """True if the point is inside Pakistan's border; False outside it or outside the grid."""
+        try:
+            return self.locate(lat, lon).in_pakistan
+        except OutsideGridError:
+            return False
+        except NotInDatabaseError:
+            if self.store.pakistan_edition:
+                return False   # cells wholly outside Pakistan are left out of this edition
+            raise
+
+    @property
+    def boundary(self):
+        """Pakistan's border, as stored in this database (loaded on first use)."""
+        if self._boundary is None:
+            self._boundary = Boundary.from_packed(
+                self.store.boundary_rings(), self.meta.get("boundary_name", ""),
+                self.meta.get("boundary_license", ""), self.meta.get("boundary_attribution", ""))
+        return self._boundary
+
     def _locate_in(self, cid, record, lat, lon, lat_e7, lon_e7, accuracy_m):
-        lat_lines, lon_lines, centroids = record
+        lat_lines, lon_lines = record[0], record[1]
         # The stored boundaries have the final say.
         if not (lat_lines[0] <= lat_e7 <= lat_lines[SUB] and lon_lines[0] <= lon_e7 <= lon_lines[SUB]):
             raise IntegrityError(f"cell {ids.cell_code(cid)} in the database does not contain "
@@ -202,7 +234,9 @@ class Grid:
             confident = edge >= accuracy_m
             if not confident:
                 candidates = self._candidates(lat, lon, min(accuracy_m, MAX_CANDIDATE_RADIUS_M), sub.id)
-        return Location(lat, lon, sub, offset, edge, accuracy_m, confident, candidates)
+
+        in_pk = sub.pakistan == "inside" or (sub.pakistan == "border" and self.boundary.contains(lat, lon))
+        return Location(lat, lon, sub, offset, edge, accuracy_m, confident, candidates, in_pk)
 
     def _candidates(self, lat, lon, radius_m, own_id):
         m_lat, m_lon = geodesy.metres_per_degree(lat)
@@ -227,9 +261,9 @@ class Grid:
         """A cell's boundaries and centroid, by ID or code such as '11-0140-0471'."""
         cid = self._resolve(cell, "cell")
         q, row, col = ids.split_cell_id(cid)
-        s, w, n, e, clat, clon = self.store.cell(cid)
+        s, w, n, e, clat, clon, flag = self.store.cell(cid)
         return Cell(cid, ids.cell_code(cid), spec.QUADRANTS[q][0], row, col,
-                    Bounds.from_e7(s, w, n, e), (clat / SCALE, clon / SCALE))
+                    Bounds.from_e7(s, w, n, e), (clat / SCALE, clon / SCALE), FLAG_NAMES[flag])
 
     def sub_cell(self, sub_cell):
         """A sub-cell's boundaries and centroid, by ID or code such as '11-0140-0471-00'."""
@@ -259,10 +293,41 @@ class Grid:
         q, i, j = self.layout.item_from_id(item_id, level)
         return sorted(GridLayout.item_id(*n, level) for n in self.layout.neighbours(q, i, j, level))
 
-    def cells_in_area(self, south, west, north, east, level="cell"):
-        """IDs of all cells (or sub-cells) overlapping a latitude/longitude box, in ID order."""
+    def cells_in_area(self, south, west, north, east, level="cell", pakistan_only=False):
+        """IDs of all cells (or sub-cells) overlapping a latitude/longitude box, in ID order.
+
+        With pakistan_only, only those inside Pakistan or on its border are returned.
+        """
         items = self.layout.items_in_area(to_e7(south), to_e7(west), to_e7(north), to_e7(east), level)
-        return sorted(GridLayout.item_id(q, i, j, level) for q, i, j in items)
+        found = sorted(GridLayout.item_id(q, i, j, level) for q, i, j in items)
+        if not pakistan_only:
+            return found
+        flags = self._flags(found, level)
+        return [i for i in found if flags.get(i, OUTSIDE) != OUTSIDE]
+
+    def pakistan_flags(self, items, level="cell"):
+        """{ID: "inside" | "border" | "outside"} for many cells (or sub-cells) at once."""
+        items = [self._resolve(i, level) for i in items]
+        flags = self._flags(items, level)
+        return {i: FLAG_NAMES[flags.get(i, OUTSIDE)] for i in items}
+
+    def _flags(self, item_ids, level):
+        """{ID: flag} read from the database in bulk; cells missing from it are left out
+        (they are wholly outside in the Pakistan edition, otherwise an error)."""
+        item_ids = list(item_ids)
+        cids = item_ids if level == "cell" else sorted({ids.parent(s) for s in item_ids})
+        if level == "cell":
+            stored = self.store.cell_flags(cids)
+        else:
+            masks = self.store.sub_masks(cids)
+            stored = {s: sub_flag(s & ids.SUB_MASK, *masks[ids.parent(s)])
+                      for s in item_ids if ids.parent(s) in masks}
+            cids = [c for c in cids if c not in masks]
+        missing = [c for c in cids if c not in stored]
+        if missing and not self.store.pakistan_edition:
+            raise NotInDatabaseError(f"{len(missing)} cells in that area are not in this database "
+                                     f"({self.store.path.name}), e.g. {ids.cell_code(missing[0])}")
+        return stored
 
     # -- Vectors ---------------------------------------------------------
 
@@ -306,9 +371,19 @@ class Grid:
             "database": {
                 "path": str(self.store.path),
                 "coverage": self.meta.get("coverage"),
+                "edition": self.meta.get("edition"),
                 "cells": int(self.meta.get("cells", 0)),
                 "content_sha256": self.meta.get("content_sha256"),
                 "library_version": self.meta.get("library_version"),
+            },
+            "pakistan": {
+                "cells_inside": int(self.meta.get("cells_inside", 0)),
+                "cells_border": int(self.meta.get("cells_border", 0)),
+                "cells_outside": int(self.meta.get("cells_outside", 0)),
+                "boundary": self.meta.get("boundary_name"),
+                "boundary_license": self.meta.get("boundary_license"),
+                "attribution": self.meta.get("boundary_attribution"),
+                "boundary_sha256": self.meta.get("boundary_sha256"),
             },
         }
 
@@ -342,13 +417,13 @@ def _point_e7(lat, lon):
 
 
 def _sub_cell_from_record(cid, sub, record):
-    lat_lines, lon_lines, centroids = record
+    lat_lines, lon_lines, centroids, inside_mask, border_mask = record
     sr, sc = ids.split_sub_index(sub)
     sid = ids.sub_cell_id(cid, sub)
     clat, clon = centroids[sub]
     return SubCell(sid, ids.sub_cell_code(sid), cid, ids.cell_code(cid), sub,
                    Bounds.from_e7(lat_lines[sr], lon_lines[sc], lat_lines[sr + 1], lon_lines[sc + 1]),
-                   (clat / SCALE, clon / SCALE))
+                   (clat / SCALE, clon / SCALE), FLAG_NAMES[sub_flag(sub, inside_mask, border_mask)])
 
 
 def _layout_from_store(store):

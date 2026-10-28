@@ -6,6 +6,11 @@ are packed into one record of 62 int32 values (248 bytes):
     6 latitude lines (south edge .. north edge)
     6 longitude lines (west edge .. east edge)
     25 centroids as (lat, lon), in sub-cell order 0-24
+
+Border flags: `cells.pakistan` is 0 (outside), 1 (border) or 2 (inside).
+For sub-cells, bit k of `inside_mask` / `border_mask` is set when sub-cell k
+is inside / on the border; neither bit means outside. The `boundary` table
+holds the border itself as packed int32 (lon, lat) rings.
 """
 
 import sqlite3
@@ -14,7 +19,7 @@ from pathlib import Path
 
 from .errors import NotInDatabaseError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SUB_RECORD = struct.Struct("<62i")
 
 SCHEMA = """
@@ -30,15 +35,18 @@ CREATE TABLE rows (
 CREATE TABLE cells (
     id INTEGER PRIMARY KEY,
     south INTEGER NOT NULL, west INTEGER NOT NULL, north INTEGER NOT NULL, east INTEGER NOT NULL,
-    centroid_lat INTEGER NOT NULL, centroid_lon INTEGER NOT NULL);
-CREATE TABLE sub_cells (id INTEGER PRIMARY KEY, record BLOB NOT NULL);
+    centroid_lat INTEGER NOT NULL, centroid_lon INTEGER NOT NULL, pakistan INTEGER NOT NULL);
+CREATE TABLE sub_cells (
+    id INTEGER PRIMARY KEY, record BLOB NOT NULL,
+    inside_mask INTEGER NOT NULL, border_mask INTEGER NOT NULL);
+CREATE TABLE boundary (ring INTEGER PRIMARY KEY, coords BLOB NOT NULL);
 """
 
 
-def unpack_sub_record(blob):
-    """(lat_lines, lon_lines, centroids) from a packed sub-cell record."""
+def unpack_sub_record(blob, inside_mask=0, border_mask=0):
+    """(lat_lines, lon_lines, centroids, inside_mask, border_mask) from a sub-cell row."""
     v = SUB_RECORD.unpack(blob)
-    return v[0:6], v[6:12], tuple(zip(v[12::2], v[13::2]))
+    return v[0:6], v[6:12], tuple(zip(v[12::2], v[13::2])), inside_mask, border_mask
 
 
 class GridStore:
@@ -51,6 +59,7 @@ class GridStore:
         self.path = path
         uri = f"{path.resolve().as_uri()}?mode=ro&immutable=1"
         self._db = sqlite3.connect(uri, uri=True, check_same_thread=False)
+        self.pakistan_edition = self.meta().get("edition") == "pakistan"
 
     def close(self):
         self._db.close()
@@ -65,25 +74,55 @@ class GridStore:
     def rows(self):
         return self._db.execute("SELECT q, row, south, north, ncols FROM rows ORDER BY q, row").fetchall()
 
+    def boundary_rings(self):
+        return [blob for (blob,) in self._db.execute("SELECT coords FROM boundary ORDER BY ring")]
+
+    def _missing(self, cid):
+        why = ("it lies wholly outside Pakistan and this is the Pakistan edition"
+               if self.pakistan_edition else "it was not included in this build")
+        return NotInDatabaseError(f"cell {cid} is not in this database ({self.path.name}): {why}")
+
     def cell(self, cid):
+        """(south, west, north, east, centroid_lat, centroid_lon, pakistan flag)."""
         row = self._db.execute(
-            "SELECT south, west, north, east, centroid_lat, centroid_lon FROM cells WHERE id = ?",
+            "SELECT south, west, north, east, centroid_lat, centroid_lon, pakistan FROM cells WHERE id = ?",
             (cid,)).fetchone()
         if row is None:
-            raise NotInDatabaseError(f"cell {cid} is not in this database ({self.path.name})")
+            raise self._missing(cid)
         return row
 
     def sub_record(self, cid):
-        row = self._db.execute("SELECT record FROM sub_cells WHERE id = ?", (cid,)).fetchone()
+        row = self._db.execute(
+            "SELECT record, inside_mask, border_mask FROM sub_cells WHERE id = ?", (cid,)).fetchone()
         if row is None:
-            raise NotInDatabaseError(f"cell {cid} is not in this database ({self.path.name})")
-        return unpack_sub_record(row[0])
+            raise self._missing(cid)
+        return unpack_sub_record(*row)
+
+    def cell_flags(self, cids):
+        """{cell ID: pakistan flag} for the given cells that are stored."""
+        out, cids = {}, list(cids)
+        for k in range(0, len(cids), 900):
+            chunk = cids[k:k + 900]
+            out.update(self._db.execute(
+                f"SELECT id, pakistan FROM cells WHERE id IN ({','.join('?' * len(chunk))})", chunk))
+        return out
+
+    def sub_masks(self, cids):
+        """{cell ID: (inside_mask, border_mask)} for the given cells that are stored."""
+        out, cids = {}, list(cids)
+        for k in range(0, len(cids), 900):
+            chunk = cids[k:k + 900]
+            for cid, inside, border in self._db.execute(
+                    f"SELECT id, inside_mask, border_mask FROM sub_cells WHERE id IN "
+                    f"({','.join('?' * len(chunk))})", chunk):
+                out[cid] = (inside, border)
+        return out
 
     def iter_cells(self):
-        """All (id, south, west, north, east, centroid_lat, centroid_lon) in ID order."""
+        """All (id, south, west, north, east, centroid_lat, centroid_lon, pakistan) in ID order."""
         return self._db.execute(
-            "SELECT id, south, west, north, east, centroid_lat, centroid_lon FROM cells ORDER BY id")
+            "SELECT id, south, west, north, east, centroid_lat, centroid_lon, pakistan FROM cells ORDER BY id")
 
     def iter_sub_blobs(self):
-        """All (cell ID, packed record) in ID order."""
-        return self._db.execute("SELECT id, record FROM sub_cells ORDER BY id")
+        """All (cell ID, packed record, inside_mask, border_mask) in ID order."""
+        return self._db.execute("SELECT id, record, inside_mask, border_mask FROM sub_cells ORDER BY id")

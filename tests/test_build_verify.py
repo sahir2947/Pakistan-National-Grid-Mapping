@@ -45,8 +45,8 @@ def test_verify_detects_a_changed_centroid(tmp_path, lahore_db):
     bad = tmp_path / "bad.sqlite"
     _tamper(lahore_db, bad, "UPDATE cells SET centroid_lat = centroid_lat + 1 WHERE id = 3289606")
     report = verify_database(bad, full=True)
-    failed = {name for name, passed, _ in report.checks if not passed}
-    assert failed == {"content checksum", "every record regenerated from the rules"}
+    failed = {name for name, passed, *_ in report.checks if not passed}
+    assert failed == {"content checksum", "every record and flag regenerated from the rules"}
 
 
 def test_verify_detects_a_changed_layout(tmp_path, lahore_db):

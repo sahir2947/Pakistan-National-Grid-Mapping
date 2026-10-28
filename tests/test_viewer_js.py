@@ -9,16 +9,19 @@ from pathlib import Path
 import pytest
 
 from pakgrid import geodesy, ids
-from pakgrid.export import layout_js
+from pakgrid.boundary import Boundary, cell_flags, row_flags
+from pakgrid.export import boundary_js, layout_js
 from pakgrid.layout import (EAST_E7, MID_LAT_E7, MID_LON_E7, NORTH_E7, SCALE, SOUTH_E7, WEST_E7, to_e7)
 
 VIEWER = Path(__file__).resolve().parent.parent / "viewer"
 NODE = shutil.which("node")
 
 
-def test_committed_layout_is_up_to_date():
+def test_committed_viewer_data_is_up_to_date():
     assert (VIEWER / "layout.js").read_text() == layout_js(), \
         "viewer/layout.js is stale: run `pakgrid export-layout`"
+    assert (VIEWER / "boundary.js").read_text(encoding="utf-8") == boundary_js(), \
+        "viewer/boundary.js is stale: run `pakgrid export-layout`"
 
 
 def _python_answer(layout, lat_e7, lon_e7):
@@ -87,3 +90,39 @@ def test_javascript_rejects_points_outside():
     """
     out = json.loads(subprocess.run([NODE, "-e", js], capture_output=True, text=True, check=True).stdout)
     assert out == [None, None, None, {"q": 3, "row": 140, "col": 518, "sub": 1}]
+
+
+_JS_FLAGS = """
+const P = require(process.argv[1] + '/pakgrid.js');
+const g = new P.Grid(require(process.argv[1] + '/layout.js'));
+const B = new P.Boundary(require(process.argv[1] + '/boundary.js'));
+const req = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const rows = req.rows.map(([q, row]) => {
+  const f = g.rowFlags(B, q, row);
+  return { subs: f.subs.map((a) => Array.from(a)), cells: Array.from(f.cells) };
+});
+const points = req.points.map(([lat, lon]) => B.contains(lat, lon));
+process.stdout.write(JSON.stringify({ rows, points }));
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_border_flags_match_python(layout):
+    boundary = Boundary.default()
+    rng = random.Random(12)
+    vertices = [v for r in boundary.rings for v in r]
+    rows = sorted({layout.locate_e7(y, x)[:2] for x, y in rng.sample(vertices, 30)})
+    points = [(rng.uniform(23.8, 37.1), rng.uniform(60.8, 77.2)) for _ in range(2000)]
+    points += [(y / SCALE + 1e-6, x / SCALE) for x, y in rng.sample(vertices, 500)]
+    got = json.loads(subprocess.run([NODE, "-e", _JS_FLAGS, str(VIEWER)],
+                                    input=json.dumps({"rows": rows, "points": points}),
+                                    capture_output=True, text=True, check=True).stdout)
+    for (q, row), js in zip(rows, got["rows"]):
+        ql = layout.quadrants[q]
+        lons = [ql.fine_lon(row, j) for j in range(5 * ql.ncols[row] + 1)]
+        centres = [(lons[j] + lons[j + 1]) / 2 for j in range(len(lons) - 1)]
+        subs = [row_flags(*boundary.band(ql.fine_lat(row * 5 + k), ql.fine_lat(row * 5 + k + 1)), lons, centres)
+                for k in range(5)]
+        assert js["subs"] == [list(a) for a in subs], (q, row)
+        assert js["cells"] == [cell_flags(subs, c)[0] for c in range(ql.ncols[row])], (q, row)
+    assert got["points"] == [boundary.contains(lat, lon) for lat, lon in points]

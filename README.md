@@ -132,7 +132,8 @@ Full design documentation: [project.md](project.md).
 
 ```bash
 pip install -e .                 # from this repository
-pakgrid build                    # writes pakgrid_v1.sqlite (~781 MB, ~30 s)
+pakgrid build                    # writes pakgrid_v1.sqlite (~785 MB, ~35 s)
+pakgrid build -o pk.sqlite --pakistan-only   # only cells touching Pakistan (~275 MB), same IDs
 pakgrid verify                   # checks the file against the grid rules and checksum
 pakgrid locate 31.5204 74.3587 --accuracy 5
 pakgrid show 11-0140-0471-00
@@ -148,6 +149,8 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
     loc.confident                    # True
     grid.cell(loc.cell_id).centroid  # (31.5241703, 74.3631579)
     grid.neighbours(loc.cell_id)     # touching cells, across quadrant lines too
+    loc.in_pakistan                  # True (exact, using Pakistan's border line)
+    grid.cell(loc.cell_id).pakistan  # 'inside' ('border' or 'outside' elsewhere)
 
 direction(31.5215, 74.3570, 31.5204, 74.3587, heading=90).turn   # 'bear right'
 ```
@@ -156,6 +159,11 @@ direction(31.5215, 74.3570, 31.5204, 74.3587, heading=90).turn   # 'bear right'
 sub-cells on OpenStreetMap; tap anywhere to see its grid code. Run
 `python3 -m http.server -d viewer 8000` and open http://localhost:8000, or
 publish the repository with GitHub Pages. See [viewer/README.md](viewer/README.md).
+
+**Border flags:** every cell and sub-cell is flagged `inside`, `border` or
+`outside` Pakistan, using the geoBoundaries / OpenStreetMap border (including
+AJK and Gilgit-Baltistan). Border data © OpenStreetMap contributors, ODbL, via
+geoBoundaries; see [pakgrid/data/BOUNDARY_SOURCE.md](pakgrid/data/BOUNDARY_SOURCE.md).
 
 For tests or a pilot, build part of the grid, for example
 `pakgrid build -o lahore.sqlite --quadrant 11 --rows 135:146`.
