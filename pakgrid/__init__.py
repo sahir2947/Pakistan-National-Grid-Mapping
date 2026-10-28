@@ -11,15 +11,17 @@
 __version__ = "0.1.0"
 
 from . import ids  # noqa: E402
+from .address import GridAddress, address_from_point, parse_address, resolve_address  # noqa: E402
 from .errors import (  # noqa: E402
     GridMismatchError, IntegrityError, InvalidIdError, NotInDatabaseError,
     OutsideGridError, PakgridError)
 from .grid import Bounds, Cell, Grid, Location, Offset, SubCell  # noqa: E402
-from .navigate import Direction, direction  # noqa: E402
+from .navigate import Direction, NavigationSession, NavState, direction, format_distance  # noqa: E402
 from .spec import GRID_VERSION  # noqa: E402
 
 __all__ = [
-    "Grid", "Location", "Cell", "SubCell", "Bounds", "Offset", "Direction", "direction", "ids",
+    "Grid", "Location", "GridAddress", "address_from_point", "parse_address", "resolve_address", "Cell", "SubCell", "Bounds", "Offset", "Direction", "direction",
+    "NavigationSession", "NavState", "format_distance", "ids",
     "GRID_VERSION", "PakgridError", "OutsideGridError", "InvalidIdError", "NotInDatabaseError",
     "GridMismatchError", "IntegrityError",
 ]

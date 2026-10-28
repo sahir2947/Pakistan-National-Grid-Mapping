@@ -316,6 +316,38 @@ sub      = sub_id & 0x1F
 | Cell | `11-0140-0471` | Zones, batching |
 | Sub-cell + offset | `11-0140-0471-00 W23 S18` | Door-level location: metres from the centroid |
 
+**Grid address.** The last form is the *grid address*: a sub-cell code plus a
+whole-metre offset from that sub-cell's centroid, east/west then north/south.
+`11-0140-0471-00 W23 S18` means "23 m west and 18 m south of the centre of
+sub-cell `11-0140-0471-00`". The code alone means the centre itself. Any app can
+store, print, send or read out this text, and turn it back into a GPS point.
+
+- **No database needed.** The centroid comes straight from the grid rules, so
+  converting a point to an address and back runs anywhere, including on a phone
+  with no download. The values match the database exactly.
+- **Precision.** Offsets are whole metres, so a round trip moves a point by
+  about 0.7 m at most. Within a metre of a sub-cell edge, rounding is nudged
+  towards the centre so the address always stays in its own sub-cell; there the
+  shift can reach ~1.4 m.
+- **Canonical text:** upper case, single spaces, E/W part first
+  (`11-0140-0471-00 W23 S18`). Reading also accepts lower case, extra spaces
+  and the parts in either order (`11-0140-0471-00 s18 w23`). An address is
+  rejected if the code is not in the grid, if it lacks one E/W and one N/S part,
+  or if an offset is over 150 m (it could not belong to that ~200 m sub-cell).
+
+```python
+from pakgrid import address_from_point, parse_address, resolve_address
+
+a = address_from_point(31.5204, 74.3587)
+a.text                        # '11-0140-0471-00 W23 S18'
+a.sub_cell_id, a.east_m, a.north_m    # (105265888, -23, -18)
+resolve_address("11-0140-0471-00 W23 S18")   # ≈ (31.5204034, 74.3587052)
+parse_address("11-0140-0471-00").centroid()  # the sub-cell's centre
+```
+
+The map viewer has the same functions in JavaScript (`grid.addressFromPoint`,
+`grid.parseAddress`, `grid.resolveAddress`), tested against these.
+
 ### 4.5 Uniqueness
 
 Row and column numbers start from 0 in every quadrant, and sub-cell numbers
@@ -570,6 +602,20 @@ level by itself.
 
 Every result object has a `to_dict()` method that returns JSON-ready data.
 
+These functions need no database, so they also work in an app that never
+downloads it:
+
+| Function | Returns |
+|---|---|
+| `address_from_point(lat, lon)` | `GridAddress` of a point (§4.4); `.text` is e.g. `11-0140-0471-00 W23 S18` |
+| `parse_address(text)` | `GridAddress` from text, checked against the grid; `.point()` and `.centroid()` give coordinates |
+| `resolve_address(text)` | `(lat, lon)` of an address |
+| `direction(from_lat, from_lon, to_lat, to_lon, heading=None)` | `Direction` (also function 13 above) |
+| `NavigationSession(target_lat, target_lon)` | The navigation engine (§10.6): feed it GPS and compass readings, read back a `NavState` |
+| `format_distance(metres, units="m")` | Steady distance text: `430 m`, `1.2 km`, `330 ft`, `3.1 mi` |
+
+`Location.address` gives the grid address of a located point.
+
 ```python
 from pakgrid import Grid
 
@@ -626,7 +672,11 @@ It needs no database. It recomputes the grid and the border flags from
 `viewer/layout.js` and `viewer/boundary.js` with the same formulas as the
 library, and `tests/test_viewer_js.py` checks that the two agree. See [viewer/README.md](viewer/README.md).
 
-### 7.4 HTTP API (v0.2): 10 endpoints
+### 7.4 HTTP API (on hold): 10 endpoints
+
+> **On hold.** For now there are no servers: the code stays on GitHub, and
+> each app downloads `pakgrid` as a library and uses it directly (§15). This
+> design is kept for if a hosted API is wanted later.
 
 | Method | Endpoint | Library function |
 |---|---|---|
@@ -832,20 +882,74 @@ route longer. For long distances, the app hands off to road routing: a Google
 Maps link now, the platform's own OpenStreetMap-based routing later. The arrow
 is most useful for the final approach (≲ 500 m), especially in lanes.
 
-### 10.6 Working reference: Navigate mode in the map viewer
+### 10.6 The navigation engine
 
-`viewer/navigation.js` implements this section in the browser, as the
-reference for the Flutter rider app:
+All of this section is implemented once, as an engine with no screen:
+`pakgrid.NavigationSession` in Python and `PakGrid.NavigationSession` in
+JavaScript (`viewer/pakgrid.js`). The two are line-for-line copies, and a test
+plays the same 40 scripted rides (GPS readings, compass readings, manual
+positions, target changes) through both and requires identical results at every
+step. The Dart package will carry a third copy under the same test. Each app
+draws its own screen on top: the engine decides *what* to show, the app decides
+*how*.
 
-| Behaviour | How the viewer does it |
+```python
+from pakgrid import NavigationSession, format_distance
+
+nav = NavigationSession(31.5204, 74.3587)        # the customer's pin
+s = nav.add_fix(31.5180, 74.3560, accuracy=8, speed=6.1, heading=40)   # each GPS reading
+s = nav.add_compass(37)                          # each compass reading (used when slow)
+s.status            # 'navigating' | 'almost' | 'arrived' ('waiting' before any position)
+format_distance(s.distance_m)   # '370 m'
+s.compass_short, s.compass      # 'NE', 'North-East'
+s.turn                          # 'ahead', 'bear left', … (None while the heading is unknown)
+s.arrow_deg, s.arrow_mode       # rotate the arrow: 'relative' (0 = ahead) or 'north-up'
+```
+
+```javascript
+const nav = new PakGrid.NavigationSession(31.5204, 74.3587);
+let s = nav.addFix(lat, lon, { accuracy, speed, heading });   // same state keys as Python
+s = nav.addCompass(deg);
+PakGrid.formatDistance(s.distance_m, "ft");
+```
+
+| Engine method | Use |
 |---|---|
-| Distance, bearing, compass word, turn | `PakGrid.direction()`, a JavaScript copy of `pakgrid.navigate.direction()`; a test checks the two agree on hundreds of cases |
-| Rider position | `navigator.geolocation.watchPosition` (high accuracy, ~1 s); or a draggable marker in **Simulate** |
-| Steadying | Accuracy-weighted average of the last 3 readings, reset whenever a reading lies further from the estimate than its own accuracy (real movement), so the position never lags behind the rider |
-| Heading | GPS course while moving (≥ 2 m/s); otherwise the phone compass (`deviceorientation`; iPhones ask permission on **Live GPS**); otherwise none, and the arrow is north-up |
-| Arrow | Points at the pin; relative to the heading when known (up = straight ahead) |
-| Distances | 5 m steps under 100 m, 10 m steps under 1 km, then km (or feet / miles) |
-| Arrival | "Almost there" under 50 m; "You've arrived" under 15 m |
+| `add_fix(lat, lon, accuracy, speed, heading, time)` | A GPS reading. Smoothed (below); heading taken from it when moving |
+| `add_compass(heading, time)` | A compass reading, degrees from north, corrected for screen rotation |
+| `set_position(lat, lon, heading=None)` | Place the rider directly (manual pick, simulation, replay); no smoothing. Without a heading, the direction of movement (≥ 2 m) is used |
+| `set_target(lat, lon)` | Change the pin, keeping the rider |
+| `reset()` | Forget the rider's position and history |
+| `state` (JS: `state()`) | The current `NavState` |
+
+| `NavState` field | Meaning |
+|---|---|
+| `status` | `waiting`, `navigating`, `almost` (< 50 m), `arrived` (< 15 m) |
+| `lat`, `lon`, `accuracy_m` | The rider's steadied position and the last reading's accuracy |
+| `heading_deg`, `heading_source` | Heading in use and where it came from: `gps`, `compass`, `manual`, `movement`, or none |
+| `distance_m`, `distance_ft`, `bearing_deg`, `compass`, `compass_short` | As `direction()` |
+| `turn_deg`, `turn` | How far to turn and the words for it (only with a heading) |
+| `arrow_deg`, `arrow_mode` | Arrow rotation; `relative` (0 = straight ahead) with a heading, else `north-up` (0 = north) |
+
+| Behaviour | Rule (all thresholds are constructor options) |
+|---|---|
+| Steadying | Accuracy-weighted average (1/accuracy²) of the last 3 readings within 10 s, reset whenever a reading lies further from the estimate than its own accuracy (at least 5 m), so the position never lags behind the rider |
+| Heading | GPS course while moving (≥ 2 m/s); otherwise the phone compass if read in the last 3 s; otherwise none, and the arrow is north-up |
+| Distances | `format_distance`: 5 m steps under 100 m, 10 m steps under 1 km, then km to one decimal (or 5 ft / 10 ft / miles) |
+| Arrival | `almost` under 50 m; `arrived` under 15 m |
+
+Times are in seconds; by default the current time, but an app can pass its own
+(for example the GPS reading's timestamp, or a replay's).
+
+### 10.7 Working reference: Navigate mode in the map viewer
+
+`viewer/navigation.js` is a screen built on the JavaScript engine, as a
+reference for app developers. It feeds the engine from
+`navigator.geolocation.watchPosition` (high accuracy, ~1 s) and
+`deviceorientation` (iPhones ask permission on **Live GPS**), or from a
+draggable marker in **Simulate**, and draws the state: the big arrow, distance,
+compass word, turn, "Almost there" / "You've arrived", and the rider's own grid
+address.
 
 ---
 
@@ -917,7 +1021,7 @@ POST /addresses
 | Accuracy worse than ~50 m | Result returned; the app asks the customer to adjust the pin |
 | Close to an edge | `confident: false` with `candidates` |
 
-### 11.4 v0.2: through the HTTP API
+### 11.4 Later: through a hosted HTTP API (on hold)
 
 The backend calls `GET /locate?lat=…&lon=…&accuracy=…` on the grid service
 instead of the local library. The JSON is the same. This adds ~1–5 ms within
@@ -1034,11 +1138,18 @@ request. The workflow also runs `pyflakes`, and checks that the viewer's
 
 | Version | Deliverable |
 |---|---|
-| **v0.1 — Grid core** ✅ | Python library, full database (option B), CLI, tests, documentation, map viewer, Pakistan border flags (implemented) |
-| **v0.2 — Grid API** | HTTP service with the 10 endpoints in §7.4 |
-| **v0.3 — Dukandaari pilot** | One city (Lahore or Karachi): addresses, batching, rider navigation |
+| **v0.1 — Grid core** ✅ | Python library, full database (option B), CLI, tests, documentation, map viewer, Pakistan border flags, grid addresses (§4.4), navigation engine in Python and JavaScript (§10.6) |
+| **Next — Dart/Flutter package** | The database-free parts (layout, locate, grid addresses, direction, navigation engine) in Dart, tested against Python |
+| **Next — Documentation site** | A guide for every feature, for app developers |
+| **v0.1.0 release** | First tagged GitHub release, with the databases attached |
+| **Pilot** | Dukandaari in one city (Lahore or Karachi): addresses, batching, rider navigation |
 | **v1.0 — Public release** | Frozen grid v1, published database (full and Pakistan editions), documentation |
-| **Later** | Map website with grid overlay (MapLibre + OpenStreetMap), search, road routing, Flutter and JavaScript SDKs |
+| **Later** | Hosted HTTP API (§7.4) if wanted, map website, road routing |
+
+**Distribution.** No servers for now. The code stays on GitHub; an app that
+wants the grid downloads `pakgrid` as a library (Python, JavaScript, and later
+Dart) and uses it directly. The documentation has a guide for every feature,
+and each app owner decides how to use them in their application.
 
 ---
 
@@ -1049,7 +1160,7 @@ request. The workflow also runs `pyflakes`, and checks that the viewer's
 | Final outer boundaries | **Decided:** east edge moved from 77.0° E to 78.0° E so all of Baltistan (up to the Karakoram Pass, ~77.8° E) is inside; other edges confirmed. Fixed from here on, because changing them changes every ID |
 | Boundary dataset for the border flags | **Decided:** geoBoundaries `PAK-ADM0` (OpenStreetMap, ODbL): administered territory including AJK and Gilgit-Baltistan, coastline as the edge (§5.6) |
 | Open-source licence | MIT or Apache-2.0 |
-| Readable code format | `QQ-RRRR-CCCC-SS`, plus an optional offset `W23 S18` |
+| Readable code format | **Implemented:** `QQ-RRRR-CCCC-SS`, plus an optional offset `W23 S18` (the grid address, §4.4) |
 | Package and project name | `pakgrid` (working name) |
 | Accuracy threshold for accepting a pin | ~50 m |
 

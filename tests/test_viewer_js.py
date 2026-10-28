@@ -167,3 +167,113 @@ def test_javascript_direction_matches_python():
             assert j["turn_deg"] is None and j["turn"] is None
         else:
             assert j["turn_deg"] == pytest.approx(d.turn_deg, abs=1e-9) and j["turn"] == d.turn
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_addresses_match_python(layout):
+    from pakgrid import address_from_point, parse_address
+    from pakgrid.errors import InvalidIdError
+    rng = random.Random(33)
+    points = [(rng.uniform(23.5, 37.0), rng.uniform(60.9, 77.9)) for _ in range(2000)]
+    for _ in range(300):   # just inside sub-cell edges, where rounding is nudged towards the centre
+        lat, lon = rng.uniform(24, 37), rng.uniform(61, 77)
+        q, row, col, sr, sc = layout.locate_e7(round(lat * 1e7), round(lon * 1e7))
+        s, w, n, e = layout.quadrants[q].item_bounds_e7(row * 5 + sr, col * 5 + sc, "sub")
+        points += [(s / 1e7 + 3e-7, rng.uniform(w, e) / 1e7), (rng.uniform(s, n) / 1e7, e / 1e7 - 3e-7)]
+    texts = ["11-0140-0471-00 W23 S18", " 11-0140-0471-00  s18 w23 ", "11-0140-0471-00", "11-0140-0471-00 W23 E5",
+             "11-0140-0471-00 E5 N151", "11-0140-0471-25 E1 N1", "11-0800-0000-00", "nonsense"]
+    js = f"""
+    const P = require('{VIEWER}/pakgrid.js');
+    const g = new P.Grid(require('{VIEWER}/layout.js'));
+    const pts = {json.dumps(points)}, texts = {json.dumps(texts)};
+    console.log(JSON.stringify({{
+      made: pts.map(([a, b]) => g.addressFromPoint(a, b).text),
+      parsed: texts.map((t) => {{ const a = g.parseAddress(t); return a && a.text; }}),
+      resolved: texts.map((t) => g.resolveAddress(t)),
+    }}));
+    """
+    got = json.loads(subprocess.run([NODE, "-e", js], capture_output=True, text=True, check=True).stdout)
+    assert got["made"] == [address_from_point(lat, lon).text for lat, lon in points]
+    for text, js_text, js_point in zip(texts, got["parsed"], got["resolved"]):
+        try:
+            a = parse_address(text)
+        except InvalidIdError:
+            assert js_text is None and js_point is None, text
+            continue
+        assert js_text == a.text
+        assert js_point == pytest.approx(list(a.point()), abs=1e-12)
+
+
+def _nav_script(seed):
+    """A random ride: GPS fixes, compass readings, manual positions, target changes and resets."""
+    rng = random.Random(seed)
+    lat, lon, t = rng.uniform(24, 36), rng.uniform(62, 76), 0.0
+    events = [("target", lat + rng.uniform(-0.01, 0.01), lon + rng.uniform(-0.01, 0.01))]
+    for _ in range(150):
+        t += rng.choice([0.2, 1, 1, 1, 2.5, 4, 12])
+        kind = rng.choices(["fix", "compass", "position", "target", "reset"], [60, 20, 15, 3, 2])[0]
+        lat += rng.uniform(-3e-4, 3e-4)
+        lon += rng.uniform(-3e-4, 3e-4)
+        if kind == "fix":
+            events.append(("fix", lat, lon, rng.choice([None, 0, 3, 8, 25, 60]), rng.choice([None, 0.5, 2, 7]),
+                           rng.choice([None, rng.uniform(-30, 400)]), t))
+        elif kind == "compass":
+            events.append(("compass", rng.choice([rng.uniform(0, 360), 360, -15]), t))
+        elif kind == "position":
+            events.append(("position", lat, lon, rng.choice([None, None, rng.uniform(0, 360)])))
+        elif kind == "target":
+            events.append(("target", lat + rng.uniform(-0.002, 0.002), lon + rng.uniform(-0.002, 0.002)))
+        else:
+            events.append(("reset",))
+    return events
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_navigation_engine_matches_python():
+    from pakgrid import NavigationSession, format_distance
+    scripts = [_nav_script(seed) for seed in range(40)]
+    dists = [0, 2.5, 7.5, 97.5, 99.99, 100, 102.5, 995, 999.9, 1000, 1050, 1250, 12345.6, 91.44, 1609.344, 160934.4]
+    js = f"""
+    const P = require('{VIEWER}/pakgrid.js');
+    const {{ scripts, dists }} = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+    const states = scripts.map((ev) => {{
+      let nav = null;
+      return ev.map((e) => {{
+        switch (e[0]) {{
+          case 'target': return nav ? nav.setTarget(e[1], e[2]) : (nav = new P.NavigationSession(e[1], e[2])).state();
+          case 'fix': return nav.addFix(e[1], e[2], {{ accuracy: e[3], speed: e[4], heading: e[5], time: e[6] }});
+          case 'compass': return nav.addCompass(e[1], e[2]);
+          case 'position': return nav.setPosition(e[1], e[2], e[3]);
+          default: return nav.reset();
+        }}
+      }});
+    }});
+    const text = dists.map((d) => [P.formatDistance(d, 'm'), P.formatDistance(d, 'ft')]);
+    console.log(JSON.stringify({{ states, text }}));
+    """
+    got = json.loads(subprocess.run([NODE, "-e", js], input=json.dumps({"scripts": scripts, "dists": dists}),
+                                    capture_output=True, text=True, check=True).stdout)
+    assert got["text"] == [[format_distance(d, "m"), format_distance(d, "ft")] for d in dists]
+    sources = set()
+    for events, js_states in zip(scripts, got["states"]):
+        nav = None
+        for e, j in zip(events, js_states):
+            if e[0] == "target":
+                s = nav.set_target(*e[1:]) if nav else (nav := NavigationSession(*e[1:])).state
+            elif e[0] == "fix":
+                s = nav.add_fix(e[1], e[2], accuracy=e[3], speed=e[4], heading=e[5], time=e[6])
+            elif e[0] == "compass":
+                s = nav.add_compass(*e[1:])
+            elif e[0] == "position":
+                s = nav.set_position(*e[1:])
+            else:
+                s = nav.reset()
+            py = s.to_dict()
+            sources.add(py["heading_source"])
+            assert j.keys() == py.keys()
+            for k, v in py.items():
+                if isinstance(v, float):
+                    assert j[k] == pytest.approx(v, rel=1e-12, abs=1e-9), (e, k)
+                else:
+                    assert j[k] == v, (e, k)
+    assert sources == {None, "gps", "compass", "manual", "movement"}
