@@ -571,7 +571,9 @@ tests/            Gap/overlap, round-trip, uniqueness, determinism and accuracy 
   and compared with the stored integer boundaries, so every point falls in
   exactly one block.
 - **Portable core.** `layout`, `ids` and `navigate` together need only the
-  ~100 KB `rows` table. They can be ported to Dart for offline use in Flutter.
+  ~100 KB `rows` table. An app can port them to its own language (e.g. Dart
+  for offline use in Flutter); the navigation part comes with exact rules and
+  a conformance test file (`conformance/`).
 
 ---
 
@@ -651,11 +653,12 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 | Command | Purpose |
 |---|---|
 | `pakgrid build [-o FILE] [--quadrant CODE] [--rows START:STOP] [--pakistan-only]` | Generate the database; `--quadrant` and `--rows` build part of it for tests or pilots, `--pakistan-only` builds the Pakistan edition |
-| `pakgrid verify [--db FILE] [--full]` | Check a database against the rules, its border and its checksum; `--full` regenerates every record and flag |
+| `pakgrid verify [--db FILE] [--full] [--expect SHA256]` | Check a database against the rules, its border, its checksum and (for a complete build) the official checksum; `--full` regenerates every record and flag; `--expect` also requires a given checksum |
 | `pakgrid locate LAT LON [--accuracy M]` | Look up a point; prints JSON |
 | `pakgrid show CODE` | Print a cell's or sub-cell's details as JSON |
 | `pakgrid info` | Print grid and database information |
 | `pakgrid export-layout` | Write the map viewer's data: `viewer/layout.js` (row and column counts) and `viewer/boundary.js` (the border) |
+| `pakgrid export-conformance [-o DIR]` | Write the conformance test file for ports, `conformance/navigation.json` |
 
 The database path defaults to `pakgrid_v1.sqlite`, or the `PAKGRID_DB`
 environment variable.
@@ -898,9 +901,18 @@ All of this section is implemented once, as an engine with no screen:
 JavaScript (`viewer/pakgrid.js`). The two are line-for-line copies, and a test
 plays the same 40 scripted rides (GPS readings, compass readings, manual
 positions, target changes) through both and requires identical results at every
-step. The Dart package will carry a third copy under the same test. Each app
-draws its own screen on top: the engine decides *what* to show, the app decides
-*how*.
+step. Each app draws its own screen on top: the engine decides *what* to
+show, the app decides *how*.
+
+**Porting it.** An app can re-implement the engine in its own language, e.g.
+Dart inside a Flutter app. [conformance/NAVIGATION.md](conformance/NAVIGATION.md)
+gives the exact rules (formulas, rounding, every step of the engine), and
+[conformance/navigation.json](conformance/navigation.json) holds about 2,000
+cases with expected results: distances, directions, compass names, turn words,
+distance text and 38 scripted rides. A port that passes them all matches
+pakgrid. The repository's tests check that the file is up to date and that the
+JavaScript copy passes it, and a Go port written only from the rules document
+was used to check that the rules are complete.
 
 ```python
 from pakgrid import NavigationSession, format_distance
@@ -1120,7 +1132,8 @@ rider guidance on the phone. Step-by-step setup, with tested code:
 - **Rider navigation:** block-level guidance, then distance and direction to
   the exact pin (§10).
 - **On the phone:** live navigation runs in Dukandaari's own Dart code,
-  following the rules in §10.6; it needs no database. Dukandaari may also
+  following the rules in `conformance/NAVIGATION.md` and passing
+  `conformance/navigation.json`; it needs no database. Dukandaari may also
   port `layout`, `ids` and grid addresses (with the ~100 KB rows table) to
   work out IDs offline.
 
@@ -1140,6 +1153,7 @@ rider guidance on the phone. Step-by-step setup, with tested code:
 | Determinism | Two builds produce byte-identical files and the same checksum; test builds match recorded checksums on Linux, macOS and Windows; no centroid latitude is near enough to a rounding tie for platform differences in `sin`/`cos` to change it |
 | Official checksums | Both complete editions, built from scratch on Linux, macOS and Windows, match `pakgrid/checksums.py` (`.github/workflows/checksums.yml`) |
 | Shared use | One `Grid` shared by many threads, and used after a fork, gives the same answers as a single thread |
+| Conformance file | `conformance/navigation.json` is up to date; the Python library and the JavaScript copy (through `conformance/runners/javascript.js`) pass all ~2,000 cases; it covers every heading source, status and call |
 | GPS noise | Simulated noise: the true block is always the result or one of its `candidates` |
 | Border flags | Flags along the real border match an independent brute-force check (segment-box intersection plus ray casting); known places (Lahore, Skardu, Astola Island, Amritsar, the sea off Karachi) are classified correctly |
 | Pakistan edition | Same IDs and data as the full database for every stored cell; cells outside are absent; `verify --full` passes |
@@ -1158,17 +1172,20 @@ Windows, on every push to `main` and every pull request. The workflow also runs 
 | Version | Deliverable |
 |---|---|
 | **v0.1 — Grid core** ✅ | Python library, full database (option B), CLI, tests, documentation, map viewer, Pakistan border flags, grid addresses (§4.4), navigation engine in Python and JavaScript (§10.6) |
-| **Next — Dart/Flutter package** | The database-free parts (layout, locate, grid addresses, direction, navigation engine) in Dart, tested against Python |
-| **Next — Documentation site** | A guide for every feature, for app developers |
+| **Backend integration** ✅ | Django REST Framework guide (`docs/django.md`), thread- and fork-safe `Grid`, official checksums checked by `pakgrid verify` |
+| **Ports** ✅ | Navigation rules and conformance test file for apps that port navigation to their own language (`conformance/`) |
+| **Next — Documentation guides** | A guide for every feature, for app developers |
 | **v0.1.0 release** | First tagged GitHub release, with the databases attached |
 | **Pilot** | Dukandaari in one city (Lahore or Karachi): addresses, batching, rider navigation |
 | **v1.0 — Public release** | Frozen grid v1, published database (full and Pakistan editions), documentation |
 | **Later** | Hosted HTTP API (§7.4) if wanted, map website, road routing |
 
 **Distribution.** No servers for now. The code stays on GitHub; an app that
-wants the grid downloads `pakgrid` as a library (Python, JavaScript, and later
-Dart) and uses it directly. The documentation has a guide for every feature,
-and each app owner decides how to use them in their application.
+wants the grid downloads `pakgrid` as a library (Python, or the JavaScript
+copy) and uses it directly; an app that needs part of it in another language
+(e.g. Dart) ports it and checks the port against the conformance files. The
+documentation has a guide for every feature, and each app owner decides how
+to use them in their application.
 
 ---
 
