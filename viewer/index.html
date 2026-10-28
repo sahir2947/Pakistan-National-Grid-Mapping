@@ -29,7 +29,7 @@
            overflow: auto; background: var(--bg); border-radius: 10px; box-shadow: var(--panel-shadow); padding: 12px 14px; }
   .panel h2 { margin: 0 0 2px; font-size: 16px; }
   .panel h3 { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
-  .code { font: 700 20px/1.2 ui-monospace, Menlo, Consolas, monospace; color: var(--accent); word-break: break-all; }
+  .code { font: 700 20px/1.2 ui-monospace, Menlo, Consolas, monospace; color: var(--accent); overflow-wrap: anywhere; }
   .sub { color: var(--muted); font-size: 12px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   td { padding: 3px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -77,7 +77,7 @@
 <div id="map"></div>
 <form class="bar" id="search">
   <input id="q" type="search" autocomplete="off" spellcheck="false"
-         placeholder="Code (11-0140-0471-00) or lat, lon (31.5204, 74.3587)" aria-label="Search">
+         placeholder="Address (11-0140-0471-00 W23 S18), code, or lat, lon (31.5204, 74.3587)" aria-label="Search">
   <button class="primary" type="submit">Go</button>
   <button type="button" id="me" title="Find my grid block">My location</button>
   <label class="toggle"><input type="checkbox" id="pkonly"> Pakistan only</label>
@@ -333,7 +333,8 @@
       var sb2 = sub.bounds, m = PakGrid.metresPerDegree(sub.centroid[0]);
       var edge = Math.max(0, Math.min((p[0] - sb2.south) * m.lat, (sb2.north - p[0]) * m.lat,
                                       (p[1] - sb2.west) * m.lon, (sb2.east - p[1]) * m.lon));
-      var pointRows = [["Point", fmt(p[0]) + ", " + fmt(p[1])],
+      var addr = grid.addressFromPoint(p[0], p[1]);
+      var pointRows = [["Point", fmt(p[0]) + ", " + fmt(p[1])], ["Grid address", addr ? addr.text : "–"],
                        ["Centroid → point", off.text + " · " + off.distance.toFixed(1) + " m"],
                        ["Direction", Math.round(off.bearing) + "° " + dir.short + " (" + dir.name + ")"],
                        ["Nearest edge", edge.toFixed(1) + " m"]];
@@ -364,7 +365,7 @@
             "<button type='button' id='clear'>Clear</button></p>";
     panel.innerHTML = html;
     // The pin to navigate to: the exact point if one was chosen, else the block's centre.
-    var navTarget = opts.point ? { lat: opts.point[0], lon: opts.point[1], label: (sub || cell).code + " (pin)" }
+    var navTarget = opts.point ? { lat: opts.point[0], lon: opts.point[1], label: addr ? addr.text : (sub || cell).code + " (pin)" }
                                : { lat: (sub || cell).centroid[0], lon: (sub || cell).centroid[1], label: (sub || cell).code };
     document.getElementById("navigate").onclick = function () { startNavigation(navTarget); };
     document.getElementById("clear").onclick = function () {
@@ -416,20 +417,26 @@
 
   function runQuery(text, instant) {
     text = text.trim();
-    var navm = /^nav=\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/.exec(text);
+    var navm = /^nav=(.*)$/.exec(text);
     if (navm) {
-      var r = grid.locate(+navm[1], +navm[2]);
-      if (!r) { flash("That point is outside the grid rectangle"); return; }
-      startNavigation({ lat: +navm[1], lon: +navm[2],
-                        label: PakGrid.subCellCode(r.q, r.row, r.col, r.subRow * 5 + r.subCol) + " (pin)" });
+      var to = pointFromText(navm[1]);
+      var a = to && grid.addressFromPoint(to[0], to[1]);
+      if (!a) { flash("That point is outside the grid rectangle"); return; }
+      startNavigation({ lat: to[0], lon: to[1], label: a.text });
       return;
     }
     if (nav.target) nav.close(true);
     var parsed = grid.parseCode(text);
     if (parsed) { select({ loc: parsed, fly: true, instant: instant }); return; }
+    var pt = pointFromText(text);
+    if (pt) { selectPoint(pt[0], pt[1], true, undefined, instant); return; }
+    flash("Enter a grid address such as 11-0140-0471-00 W23 S18, a code, or lat, lon");
+  }
+
+  // [lat, lon] from 'lat, lon' or a grid address ('11-0140-0471-00 W23 S18'); null otherwise.
+  function pointFromText(text) {
     var m = /^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/.exec(text);
-    if (m) { selectPoint(+m[1], +m[2], true, undefined, instant); return; }
-    flash("Enter a grid code such as 11-0140-0471-00, or lat, lon");
+    return m ? [+m[1], +m[2]] : grid.resolveAddress(text);
   }
 
   document.getElementById("search").addEventListener("submit", function (e) {

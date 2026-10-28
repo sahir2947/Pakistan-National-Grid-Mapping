@@ -5,6 +5,7 @@ from bisect import bisect_right
 from dataclasses import dataclass
 
 from . import geodesy, ids, navigate, spec
+from .address import address_from_point
 from .boundary import FLAG_NAMES, OUTSIDE, Boundary, sub_flag
 from .errors import GridMismatchError, IntegrityError, InvalidIdError, NotInDatabaseError, OutsideGridError
 from .layout import SCALE, SUB, GridLayout, QuadrantLayout, to_e7
@@ -121,9 +122,15 @@ class Location:
     def cell_code(self):
         return self.sub_cell.cell_code
 
+    @property
+    def address(self):
+        """The point as a grid address, e.g. '11-0140-0471-00 W23 S18' (see pakgrid.address)."""
+        return address_from_point(self.lat, self.lon)
+
     def to_dict(self):
         return {
             "grid_version": spec.GRID_VERSION,
+            "address": self.address.text,
             "point": [self.lat, self.lon],
             "sub_cell": self.sub_cell.to_dict(),
             "cell": {"id": self.cell_id, "code": self.cell_code},

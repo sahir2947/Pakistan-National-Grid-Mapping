@@ -332,10 +332,88 @@
     var east = (lon - refLon) * m.lon, north = (lat - refLat) * m.lat;
     return {
       east: east, north: north, distance: Math.hypot(east, north), bearing: bearing(east, north),
-      text: (east >= 0 ? "E" : "W") + Math.round(Math.abs(east)) + " " +
-            (north >= 0 ? "N" : "S") + Math.round(Math.abs(north))
+      text: (east >= 0 ? "E" : "W") + roundHalfEven(Math.abs(east)) + " " +
+            (north >= 0 ? "N" : "S") + roundHalfEven(Math.abs(north))
     };
   }
+
+  // The point east_m east and north_m north of a reference point (same as pakgrid.geodesy.apply_offset).
+  function applyOffset(refLat, refLon, eastM, northM) {
+    var m = metresPerDegree(refLat);
+    return [refLat + northM / m.lat, refLon + eastM / m.lon];
+  }
+
+  // -- Grid addresses (same as pakgrid.address) -------------------------------
+  // "11-0140-0471-00 W23 S18": a sub-cell code plus an offset in whole metres from its centre.
+
+  var MAX_OFFSET_M = 150;
+  var ADDRESS_RE = /^\s*([01]{2}-\d{4}-\d{4}-\d{2})(?:\s+([EWNS])\s*(\d{1,4})\s+([EWNS])\s*(\d{1,4}))?\s*$/i;
+
+  function addressText(code, east, north) {
+    return code + " " + (east >= 0 ? "E" : "W") + Math.abs(east) + " " + (north >= 0 ? "N" : "S") + Math.abs(north);
+  }
+
+  function towardZero(v) { return v > 0 ? v - 1 : v < 0 ? v + 1 : v; }
+
+  Grid.prototype._subAt = function (lat, lon) {
+    var r = this.locate(lat, lon);
+    return r && { q: r.q, row: r.row, col: r.col, sub: r.subRow * SUB + r.subCol };
+  };
+
+  function sameSub(a, b) { return a && b && a.q === b.q && a.row === b.row && a.col === b.col && a.sub === b.sub; }
+
+  // Address of a GPS point, or null outside the grid. Offsets are rounded to whole metres,
+  // towards the centre if needed, so the address always stays inside its own sub-cell.
+  Grid.prototype.addressFromPoint = function (lat, lon) {
+    var s = this._subAt(lat, lon);
+    if (!s) return null;
+    var c = this.describe(s.q, s.row, s.col, s.sub).centroid;
+    var off = localOffset(c[0], c[1], lat, lon);
+    var e = roundHalfEven(off.east), n = roundHalfEven(off.north);
+    var tries = [[e, n], [towardZero(e), n], [e, towardZero(n)], [towardZero(e), towardZero(n)]];
+    for (var i = 0; i < tries.length; i++) {
+      var p = applyOffset(c[0], c[1], tries[i][0], tries[i][1]);
+      if (sameSub(this._subAt(p[0], p[1]), s)) { e = tries[i][0]; n = tries[i][1]; break; }
+      if (i === tries.length - 1) { e = towardZero(e); n = towardZero(n); }
+    }
+    return this._address(s, e, n);
+  };
+
+  Grid.prototype._address = function (s, east, north) {
+    var code = subCellCode(s.q, s.row, s.col, s.sub);
+    return { code: code, sub_cell_id: subCellId(cellId(s.q, s.row, s.col), s.sub), east_m: east, north_m: north,
+             text: addressText(code, east, north) };
+  };
+
+  // Parse "11-0140-0471-00 W23 S18" (or just the code); null if it is not a valid address.
+  Grid.prototype.parseAddress = function (text) {
+    var m = ADDRESS_RE.exec(String(text));
+    if (!m) return null;
+    var p = this.parseCode(m[1]);
+    if (!p || p.sub == null) return null;
+    var east = 0, north = 0;
+    if (m[2] != null) {
+      var parts = {};
+      parts[m[2].toUpperCase()] = +m[3];
+      parts[m[4].toUpperCase()] = +m[5];
+      var keys = Object.keys(parts);
+      var hasEW = "E" in parts || "W" in parts, hasNS = "N" in parts || "S" in parts;
+      if (keys.length !== 2 || !hasEW || !hasNS) return null;
+      east = (parts.E || 0) - (parts.W || 0);
+      north = (parts.N || 0) - (parts.S || 0);
+      if (Math.max(Math.abs(east), Math.abs(north)) > MAX_OFFSET_M) return null;
+    }
+    return this._address({ q: p.q, row: p.row, col: p.col, sub: p.sub }, east, north);
+  };
+
+  // [lat, lon] an address refers to, or null if it is not a valid address.
+  Grid.prototype.resolveAddress = function (text) {
+    var a = this.parseAddress(text);
+    if (!a) return null;
+    var p = this.parseCode(a.code);
+    var c = this.describe(p.q, p.row, p.col, p.sub).centroid;
+    return applyOffset(c[0], c[1], a.east_m, a.north_m);
+  };
 
   // -- Navigation (same as pakgrid.navigate) --------------------------------
 
@@ -367,6 +445,131 @@
     return out;
   }
 
+  // Distance as short text that doesn't flicker (same as pakgrid.navigate.format_distance).
+  function formatDistance(m, units) {
+    if (units === "ft") {
+      var ft = m * FEET_PER_METRE;
+      if (ft < 300) return roundHalfEven(ft / 5) * 5 + " ft";
+      if (ft < 5280) return roundHalfEven(ft / 10) * 10 + " ft";
+      return (roundHalfEven(ft / 528) / 10).toFixed(1) + " mi";
+    }
+    if (m < 100) return roundHalfEven(m / 5) * 5 + " m";
+    if (m < 1000) return roundHalfEven(m / 10) * 10 + " m";
+    return (roundHalfEven(m / 100) / 10).toFixed(1) + " km";
+  }
+
+  function validHeading(h) { return h != null && isFinite(h); }
+  function mod360(h) { return ((h % 360) + 360) % 360; }
+  function nowSeconds(t) { return t == null ? Date.now() / 1000 : +t; }
+
+  // Navigation engine (same as pakgrid.navigate.NavigationSession; see its docstring). Feed it
+  // GPS fixes and compass readings; every method returns the new state, with the same keys as
+  // Python's NavState.to_dict(). Options use the Python names: arrived_m, almost_m, moving_mps,
+  // compass_fresh_s, smoothing_window_s, smoothing_count. Times are in seconds.
+  function NavigationSession(targetLat, targetLon, opts) {
+    opts = opts || {};
+    function opt(k, d) { return opts[k] == null ? d : opts[k]; }
+    this.arrived_m = opt("arrived_m", 15);
+    this.almost_m = opt("almost_m", 50);
+    this.moving_mps = opt("moving_mps", 2);
+    this.compass_fresh_s = opt("compass_fresh_s", 3);
+    this.smoothing_window_s = opt("smoothing_window_s", 10);
+    this.smoothing_count = opt("smoothing_count", 3);
+    this._compass = null;
+    this.target = [+targetLat, +targetLon];
+    this.reset();
+  }
+
+  NavigationSession.prototype.setTarget = function (lat, lon) {
+    this.target = [+lat, +lon];
+    return this.state();
+  };
+
+  NavigationSession.prototype.reset = function () {
+    this.position = null;
+    this.accuracy_m = null;
+    this.heading = null;           // [degrees, source]
+    this._fixes = [];
+    this._anchor = null;
+    this._live = false;
+    return this.state();
+  };
+
+  // A GPS reading. o: {accuracy (m), speed (m/s), heading (degrees), time (s)}, all optional.
+  NavigationSession.prototype.addFix = function (lat, lon, o) {
+    o = o || {};
+    var now = nowSeconds(o.time), acc = Math.max(o.accuracy || 20, 1), self = this;
+    if (!this._live || direction(this.position[0], this.position[1], lat, lon, null).distance_m > Math.max(acc, 5)) {
+      this._fixes = [];
+    }
+    this._fixes.push([lat, lon, acc, now]);
+    this._fixes = this._fixes.filter(function (f) { return now - f[3] < self.smoothing_window_s; })
+      .slice(-this.smoothing_count);
+    var sw = 0, slat = 0, slon = 0;
+    this._fixes.forEach(function (f) { var w = 1 / (f[2] * f[2]); sw += w; slat += f[0] * w; slon += f[1] * w; });
+    this.position = [slat / sw, slon / sw];
+    this.accuracy_m = o.accuracy == null ? null : o.accuracy;
+    this._live = true;
+    this._anchor = null;
+    if (o.speed != null && o.speed >= this.moving_mps && validHeading(o.heading)) {
+      this.heading = [mod360(o.heading), "gps"];
+    } else if (this._compass && now - this._compass[1] < this.compass_fresh_s) {
+      this.heading = [this._compass[0], "compass"];
+    } else {
+      this.heading = null;
+    }
+    return this.state();
+  };
+
+  // A compass reading in degrees from north (already corrected for screen rotation).
+  NavigationSession.prototype.addCompass = function (heading, time) {
+    if (!validHeading(heading)) return this.state();
+    this._compass = [mod360(heading), nowSeconds(time)];
+    if (this._live && !(this.heading && this.heading[1] === "gps")) this.heading = [this._compass[0], "compass"];
+    return this.state();
+  };
+
+  // Place the rider directly (a manual pick or a simulation); no smoothing.
+  NavigationSession.prototype.setPosition = function (lat, lon, heading) {
+    var moved = null;
+    if (this._anchor) {
+      moved = direction(this._anchor[0], this._anchor[1], lat, lon, null);
+    } else {
+      this.heading = null;
+      this._anchor = [lat, lon];
+    }
+    if (validHeading(heading)) {
+      this.heading = [mod360(heading), "manual"];
+      this._anchor = [lat, lon];
+    } else if (moved && moved.distance_m >= 2) {
+      this.heading = [moved.bearing_deg, "movement"];
+      this._anchor = [lat, lon];
+    }
+    this.position = [lat, lon];
+    this.accuracy_m = null;
+    this._fixes = [];
+    this._live = false;
+    return this.state();
+  };
+
+  NavigationSession.prototype.state = function () {
+    var s = { status: "waiting", target_lat: this.target[0], target_lon: this.target[1], lat: null, lon: null,
+              accuracy_m: null, heading_deg: null, heading_source: null, distance_m: null, distance_ft: null,
+              bearing_deg: null, compass: null, compass_short: null, turn_deg: null, turn: null,
+              arrow_deg: null, arrow_mode: null };
+    if (!this.position) return s;
+    var hdg = this.heading ? this.heading[0] : null;
+    var d = direction(this.position[0], this.position[1], this.target[0], this.target[1], hdg);
+    s.status = d.distance_m < this.arrived_m ? "arrived" : d.distance_m < this.almost_m ? "almost" : "navigating";
+    s.lat = this.position[0]; s.lon = this.position[1]; s.accuracy_m = this.accuracy_m;
+    s.heading_deg = hdg; s.heading_source = this.heading ? this.heading[1] : null;
+    ["distance_m", "distance_ft", "bearing_deg", "compass", "compass_short", "turn_deg", "turn"]
+      .forEach(function (k) { s[k] = d[k]; });
+    s.arrow_deg = hdg != null ? d.turn_deg : d.bearing_deg;
+    s.arrow_mode = hdg != null ? "relative" : "north-up";
+    return s;
+  };
+
   // -- IDs ------------------------------------------------------------------
 
   function cellId(q, row, col) { return q * 1048576 + row * 1024 + col; }
@@ -389,7 +592,8 @@
   var api = {
     Grid: Grid, Boundary: Boundary, FLAG_NAMES: FLAG_NAMES, OUTSIDE: OUTSIDE, BORDER: BORDER, INSIDE: INSIDE,
     toE7: toE7, bandCentroidLat: bandCentroidLat, metresPerDegree: metresPerDegree,
-    localOffset: localOffset, bearing: bearing, compass: compass, direction: direction, turnWords: turnWords, cellId: cellId, subCellId: subCellId,
+    localOffset: localOffset, applyOffset: applyOffset, addressText: addressText, bearing: bearing, compass: compass, direction: direction, turnWords: turnWords,
+    formatDistance: formatDistance, NavigationSession: NavigationSession, cellId: cellId, subCellId: subCellId,
     cellCode: cellCode, subCellCode: subCellCode
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

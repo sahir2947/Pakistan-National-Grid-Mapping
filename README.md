@@ -155,6 +155,22 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 direction(31.5215, 74.3570, 31.5204, 74.3587, heading=90).turn   # 'bear right'
 ```
 
+Grid addresses and navigation need no database, so they work in any app:
+
+```python
+from pakgrid import NavigationSession, address_from_point, format_distance, resolve_address
+
+address_from_point(31.5204, 74.3587).text        # '11-0140-0471-00 W23 S18'
+resolve_address("11-0140-0471-00 W23 S18")       # ≈ (31.5204034, 74.3587052)
+
+nav = NavigationSession(31.5204, 74.3587)        # guide a rider to this pin
+s = nav.add_fix(31.5180, 74.3560, accuracy=8, speed=6.1, heading=40)   # each GPS reading
+format_distance(s.distance_m), s.compass_short, s.turn, s.status       # ('370 m', 'NE', 'ahead', 'navigating')
+```
+
+The same functions exist in JavaScript in `viewer/pakgrid.js`
+(`grid.addressFromPoint`, `PakGrid.NavigationSession`, …), tested against Python.
+
 **Map viewer:** `viewer/index.html` shows the rectangle, quadrants, cells and
 sub-cells on OpenStreetMap; tap anywhere to see its grid code. Run
 `python3 -m http.server -d viewer 8000` and open http://localhost:8000, or

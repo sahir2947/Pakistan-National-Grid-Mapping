@@ -104,6 +104,16 @@ class QuadrantLayout:
         return (self.lat_e7[i * u], self.fine_lon_e7(row, j * u),
                 self.lat_e7[(i + 1) * u], self.fine_lon_e7(row, (j + 1) * u))
 
+    def item_centroid_e7(self, i, j, level):
+        """(lat, lon) of item (i, j)'s area-weighted centroid, in 1e-7 degree.
+
+        The same formulas the builder stores, so no database is needed to get them.
+        """
+        u = _unit(level)
+        row = i * u // SUB
+        lat = geodesy.band_centroid_lat(self.fine_lat(i * u), self.fine_lat((i + 1) * u))
+        return to_e7(lat), to_e7((self.fine_lon(row, j * u) + self.fine_lon(row, (j + 1) * u)) / 2)
+
 
 class GridLayout:
     """Row and column structure of all four quadrants."""
