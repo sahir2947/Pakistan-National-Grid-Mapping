@@ -155,10 +155,11 @@ def test_javascript_direction_matches_python():
               (31.5, 74.3, 31.5, 74.3, 45), (31.5, 74.3, 31.6, 74.3001, 350)]
     js = f"""
     const P = require('{VIEWER_JS}/pakgrid.js');
-    const cases = {json.dumps(cases)};
+    const cases = JSON.parse(require('fs').readFileSync(0, 'utf8'));
     console.log(JSON.stringify(cases.map((c) => P.direction(c[0], c[1], c[2], c[3], c[4]))));
     """
-    got = json.loads(subprocess.run([NODE, "-e", js], capture_output=True, text=True, check=True).stdout)
+    got = json.loads(subprocess.run([NODE, "-e", js], input=json.dumps(cases),
+                                    capture_output=True, text=True, check=True).stdout)
     for case, j in zip(cases, got):
         d = direction(*case)
         assert j["distance_m"] == pytest.approx(d.distance_m, rel=1e-12, abs=1e-9)
@@ -186,14 +187,15 @@ def test_javascript_addresses_match_python(layout):
     js = f"""
     const P = require('{VIEWER_JS}/pakgrid.js');
     const g = new P.Grid(require('{VIEWER_JS}/layout.js'));
-    const pts = {json.dumps(points)}, texts = {json.dumps(texts)};
+    const {{ pts, texts }} = JSON.parse(require('fs').readFileSync(0, 'utf8'));
     console.log(JSON.stringify({{
       made: pts.map(([a, b]) => g.addressFromPoint(a, b).text),
       parsed: texts.map((t) => {{ const a = g.parseAddress(t); return a && a.text; }}),
       resolved: texts.map((t) => g.resolveAddress(t)),
     }}));
     """
-    got = json.loads(subprocess.run([NODE, "-e", js], capture_output=True, text=True, check=True).stdout)
+    got = json.loads(subprocess.run([NODE, "-e", js], input=json.dumps({"pts": points, "texts": texts}),
+                                    capture_output=True, text=True, check=True).stdout)
     assert got["made"] == [address_from_point(lat, lon).text for lat, lon in points]
     for text, js_text, js_point in zip(texts, got["parsed"], got["resolved"]):
         try:
