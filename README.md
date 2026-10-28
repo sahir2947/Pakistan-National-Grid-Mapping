@@ -134,7 +134,7 @@ Full design documentation: [project.md](project.md).
 pip install -e .                 # from this repository
 pakgrid build                    # writes pakgrid_v1.sqlite (~785 MB, ~35 s)
 pakgrid build -o pk.sqlite --pakistan-only   # only cells touching Pakistan (~275 MB), same IDs
-pakgrid verify                   # checks the file against the grid rules and checksum
+pakgrid verify                   # checks the file against the grid rules and the official checksum
 pakgrid locate 31.5204 74.3587 --accuracy 5
 pakgrid show 11-0140-0471-00
 ```
@@ -170,6 +170,11 @@ format_distance(s.distance_m), s.compass_short, s.turn, s.status       # ('370 m
 
 The same functions exist in JavaScript in `viewer/pakgrid.js`
 (`grid.addressFromPoint`, `PakGrid.NavigationSession`, …), tested against Python.
+
+**Using it in a backend:** [docs/django.md](docs/django.md) sets up `pakgrid`
+in a Django REST Framework backend step by step: install, build and verify the
+database (against the official checksums), Docker, thread-safe sharing,
+models, endpoints and errors.
 
 **Map viewer:** `viewer/index.html` shows the rectangle, quadrants, cells and
 sub-cells on OpenStreetMap; tap anywhere to see its grid code. Run
