@@ -171,6 +171,11 @@ format_distance(s.distance_m), s.compass_short, s.turn, s.status       # ('370 m
 The same functions exist in JavaScript in `viewer/pakgrid.js`
 (`grid.addressFromPoint`, `PakGrid.NavigationSession`, …), tested against Python.
 
+**Porting navigation to your app's language:** [conformance/](conformance/)
+has the exact navigation rules and a test file of about 2,000 cases with
+expected results, so a port (for example in Dart for a Flutter app) can prove
+it matches pakgrid.
+
 **Using it in a backend:** [docs/django.md](docs/django.md) sets up `pakgrid`
 in a Django REST Framework backend step by step: install, build and verify the
 database (against the official checksums), Docker, thread-safe sharing,

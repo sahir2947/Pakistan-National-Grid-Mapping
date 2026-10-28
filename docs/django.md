@@ -387,9 +387,13 @@ formulas:
   updated every second from the phone's GPS. Do this on the phone: a request
   per rider per second is needless load, and guidance must keep working when
   the signal drops. The rules are in [project.md §10.6](../project.md#106-the-navigation-engine);
-  the JavaScript copy in `viewer/pakgrid.js` (`NavigationSession`) is a
-  complete reference to port from, and a conformance test file is planned so
-  a port can prove it matches.
+  the exact rules for a port are in
+  [conformance/NAVIGATION.md](../conformance/NAVIGATION.md), and your port
+  proves it matches by passing
+  [conformance/navigation.json](../conformance/navigation.json) (about 2,000
+  cases; see [conformance/README.md](../conformance/README.md)). The
+  JavaScript copy in `viewer/pakgrid.js` (`NavigationSession`) is a complete
+  example port.
 - **Showing a grid address as a point**, e.g. a rider opening
   `11-0140-0471-00 W23 S18`. Or ask your API (`/api/resolve` above).
 

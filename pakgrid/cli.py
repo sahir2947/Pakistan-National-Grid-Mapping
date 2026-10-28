@@ -1,4 +1,4 @@
-"""Command-line tools: pakgrid build | verify | locate | show | info | export-layout."""
+"""Command-line tools: pakgrid build | verify | locate | show | info | export-layout | export-conformance."""
 
 import argparse
 import json
@@ -47,6 +47,10 @@ def main(argv=None):
     p = sub.add_parser("export-layout", help="write the map viewer's data files (layout.js, boundary.js)")
     p.add_argument("-o", "--output-dir", default="viewer")
 
+    p = sub.add_parser("export-conformance",
+                       help="write the conformance test files for ports to other languages (navigation.json)")
+    p.add_argument("-o", "--output-dir", default="conformance")
+
     args = parser.parse_args(argv)
     try:
         return _COMMANDS[args.command](args)
@@ -86,6 +90,13 @@ def _export_layout(args):
     return 0
 
 
+def _export_conformance(args):
+    from .conformance import write_conformance_files
+    for path in write_conformance_files(args.output_dir):
+        print(f"wrote {path}")
+    return 0
+
+
 def _with_grid(fn):
     def run(args):
         from .grid import Grid
@@ -109,6 +120,7 @@ _COMMANDS = {
     "show": _with_grid(_show),
     "info": _with_grid(lambda grid, a: grid.info()),
     "export-layout": _export_layout,
+    "export-conformance": _export_conformance,
 }
 
 if __name__ == "__main__":
