@@ -619,6 +619,8 @@ for checking the grid visually before it is used in an app:
   that block
 - Pakistan's border, with cells coloured inside (blue), border (purple) or
   outside (grey, dashed); **Pakistan only** hides everything outside
+- **Navigate here:** rider guidance to a pinned point (§10), with live GPS or
+  a draggable simulated rider; links such as `#nav=31.5204,74.3587` open it
 
 It needs no database. It recomputes the grid and the border flags from
 `viewer/layout.js` and `viewer/boundary.js` with the same formulas as the
@@ -829,6 +831,21 @@ This is **straight-line** distance and direction. Roads may make the actual
 route longer. For long distances, the app hands off to road routing: a Google
 Maps link now, the platform's own OpenStreetMap-based routing later. The arrow
 is most useful for the final approach (≲ 500 m), especially in lanes.
+
+### 10.6 Working reference: Navigate mode in the map viewer
+
+`viewer/navigation.js` implements this section in the browser, as the
+reference for the Flutter rider app:
+
+| Behaviour | How the viewer does it |
+|---|---|
+| Distance, bearing, compass word, turn | `PakGrid.direction()`, a JavaScript copy of `pakgrid.navigate.direction()`; a test checks the two agree on hundreds of cases |
+| Rider position | `navigator.geolocation.watchPosition` (high accuracy, ~1 s); or a draggable marker in **Simulate** |
+| Steadying | Accuracy-weighted average of the last 3 readings, reset whenever a reading lies further from the estimate than its own accuracy (real movement), so the position never lags behind the rider |
+| Heading | GPS course while moving (≥ 2 m/s); otherwise the phone compass (`deviceorientation`; iPhones ask permission on **Live GPS**); otherwise none, and the arrow is north-up |
+| Arrow | Points at the pin; relative to the heading when known (up = straight ahead) |
+| Distances | 5 m steps under 100 m, 10 m steps under 1 km, then km (or feet / miles) |
+| Arrival | "Almost there" under 50 m; "You've arrived" under 15 m |
 
 ---
 

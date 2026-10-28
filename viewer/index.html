@@ -48,6 +48,20 @@
   .hide { display: none; }
   .bar label.toggle { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--line);
                       border-radius: 8px; background: var(--bg); box-shadow: var(--panel-shadow); cursor: pointer; }
+  .nav-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .nav-main { display: flex; align-items: center; gap: 14px; margin: 12px 0 6px; }
+  .nav-big { width: 84px; height: 84px; flex: none; display: flex; align-items: center; justify-content: center;
+             border-radius: 50%; background: rgba(220, 38, 38, .08); font-size: 44px; color: #16a34a; }
+  .nav-big svg { width: 64px; height: 64px; }
+  .nav-dist { font: 700 30px/1.1 system-ui, sans-serif; }
+  .nav-dir { font-size: 16px; font-weight: 600; margin-top: 2px; }
+  .nav-turn { font-size: 15px; color: var(--accent); font-weight: 600; text-transform: capitalize; }
+  .nav-hint { color: var(--muted); }
+  .nav-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .panel button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .panel button.go { background: #dc2626; border-color: #dc2626; color: #fff; }
+  .nav-target, .nav-rider { pointer-events: none; }
+  .nav-rider { pointer-events: auto; cursor: grab; }
   .arrow-head { pointer-events: none; }
   .arrow-head svg { display: block; width: 100%; height: 100%; filter: drop-shadow(0 0 2px #fff); }
   .legend span { display: inline-block; width: 14px; height: 10px; margin-right: 6px; vertical-align: middle;
@@ -76,6 +90,7 @@
 <script src="layout.js"></script>
 <script src="boundary.js"></script>
 <script src="pakgrid.js"></script>
+<script src="navigation.js"></script>
 <script>
 (function () {
   "use strict";
@@ -345,8 +360,13 @@
     }
     html += "<h3>Cell · " + sizeText(cb) + "</h3>" +
             rowsHtml([["Centroid", fmt(cell.centroid[0]) + ", " + fmt(cell.centroid[1])]].concat(boundsRows(cb)));
-    html += "<p><button type='button' id='clear'>Clear</button></p>";
+    html += "<p><button type='button' class='go' id='navigate'>Navigate here</button> " +
+            "<button type='button' id='clear'>Clear</button></p>";
     panel.innerHTML = html;
+    // The pin to navigate to: the exact point if one was chosen, else the block's centre.
+    var navTarget = opts.point ? { lat: opts.point[0], lon: opts.point[1], label: (sub || cell).code + " (pin)" }
+                               : { lat: (sub || cell).centroid[0], lon: (sub || cell).centroid[1], label: (sub || cell).code };
+    document.getElementById("navigate").onclick = function () { startNavigation(navTarget); };
     document.getElementById("clear").onclick = function () {
       selLayer.clearLayers(); arrow = arrowMarker = null; showSummary(); history.replaceState(null, "", location.pathname);
     };
@@ -374,10 +394,37 @@
     setTimeout(drawGrid, 2500);
   }
 
-  map.on("click", function (e) { selectPoint(e.latlng.lat, e.latlng.lng, false); });
+  map.on("click", function (e) {
+    if (nav.target) return;   // while navigating, taps don't change the selection
+    selectPoint(e.latlng.lat, e.latlng.lng, false);
+  });
+
+  // -- Navigate mode (viewer/navigation.js) ------------------------------------
+  var nav = new PakNav.Navigator({
+    map: map, grid: grid, panel: panel, flash: flash,
+    onExit: function () { showSummary(); history.replaceState(null, "", location.pathname); }
+  });
+  nav.padding = viewPadding;
+
+  function startNavigation(target) {
+    selLayer.clearLayers();
+    arrow = arrowMarker = null;
+    nav.open(target);
+    nav.recenter();
+    history.replaceState(null, "", "#nav=" + target.lat.toFixed(7) + "," + target.lon.toFixed(7));
+  }
 
   function runQuery(text, instant) {
     text = text.trim();
+    var navm = /^nav=\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/.exec(text);
+    if (navm) {
+      var r = grid.locate(+navm[1], +navm[2]);
+      if (!r) { flash("That point is outside the grid rectangle"); return; }
+      startNavigation({ lat: +navm[1], lon: +navm[2],
+                        label: PakGrid.subCellCode(r.q, r.row, r.col, r.subRow * 5 + r.subCol) + " (pin)" });
+      return;
+    }
+    if (nav.target) nav.close(true);
     var parsed = grid.parseCode(text);
     if (parsed) { select({ loc: parsed, fly: true, instant: instant }); return; }
     var m = /^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/.exec(text);
