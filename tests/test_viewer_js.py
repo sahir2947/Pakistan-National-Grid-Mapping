@@ -139,3 +139,31 @@ def test_javascript_compass_matches_python():
     got = json.loads(subprocess.run([NODE, "-e", js], capture_output=True, text=True, check=True).stdout)
     for b, c in zip(bearings, got):
         assert (c["name"], c["short"]) == (_COMPASS_8[round(b / 45) % 8], _COMPASS_16[round(b / 22.5) % 16]), b
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_direction_matches_python():
+    from pakgrid import direction
+    rng = random.Random(21)
+    cases = []
+    for _ in range(400):
+        lat, lon = rng.uniform(24, 37), rng.uniform(61, 77)
+        cases.append((lat, lon, lat + rng.uniform(-0.05, 0.05), lon + rng.uniform(-0.05, 0.05),
+                      rng.choice([None, rng.uniform(0, 360)])))
+    cases += [(31.5215, 74.3570, 31.5204, 74.3587, 90), (31.52085, 74.35855, 31.5204, 74.3587, 180),
+              (31.5, 74.3, 31.5, 74.3, 45), (31.5, 74.3, 31.6, 74.3001, 350)]
+    js = f"""
+    const P = require('{VIEWER}/pakgrid.js');
+    const cases = {json.dumps(cases)};
+    console.log(JSON.stringify(cases.map((c) => P.direction(c[0], c[1], c[2], c[3], c[4]))));
+    """
+    got = json.loads(subprocess.run([NODE, "-e", js], capture_output=True, text=True, check=True).stdout)
+    for case, j in zip(cases, got):
+        d = direction(*case)
+        assert j["distance_m"] == pytest.approx(d.distance_m, rel=1e-12, abs=1e-9)
+        assert j["bearing_deg"] == pytest.approx(d.bearing_deg, abs=1e-9)
+        assert (j["compass"], j["compass_short"]) == (d.compass, d.compass_short)
+        if d.turn_deg is None:
+            assert j["turn_deg"] is None and j["turn"] is None
+        else:
+            assert j["turn_deg"] == pytest.approx(d.turn_deg, abs=1e-9) and j["turn"] == d.turn

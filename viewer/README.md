@@ -17,6 +17,22 @@ bearing, clockwise from north (0° N, 90° E, 180° S, 270° W), for example
 **My location** does the same for your phone's GPS position and shows whether
 the reading is accurate enough to be sure of the block.
 
+**Navigate here** (in the details panel) guides you from your position to that
+point, the way a rider would be guided to a customer's pin:
+
+- **Live GPS** follows your phone's position; **Simulate** lets you drag a
+  rider marker around the map to test without moving.
+- The panel shows the straight-line distance (metres or feet), the compass
+  direction (for example `NE · 44° (North-East)`), and, once your heading is
+  known, which way to turn (`bear left`, `slightly right`, …). Under 15 m it
+  says **You've arrived**.
+- The big arrow points at the pin. When your heading is known it turns with
+  you (up = the way you're heading); otherwise it is drawn north-up.
+- Heading comes from the GPS direction of travel while moving, else the
+  phone's compass (iPhones ask permission once), else it is unknown.
+- Links such as `index.html#nav=31.5204,74.3587` open straight into
+  navigation to that pin.
+
 Search accepts a code (`11-0140-0471-00` or `11-0140-0471`) or `lat, lon`.
 The address bar updates as you select, so a link such as
 `index.html#11-0140-0471-00` opens straight at that block.

@@ -337,6 +337,36 @@
     };
   }
 
+  // -- Navigation (same as pakgrid.navigate) --------------------------------
+
+  var FEET_PER_METRE = 1 / 0.3048;
+
+  // Plain-language turn for a relative angle in degrees (negative = left).
+  function turnWords(turnDeg) {
+    var size = Math.abs(turnDeg);
+    if (size < 10) return "ahead";
+    if (size >= 135) return "turn around";
+    var side = turnDeg > 0 ? "right" : "left";
+    if (size < 30) return "slightly " + side;
+    if (size < 60) return "bear " + side;
+    return "turn " + side;
+  }
+
+  // Straight-line distance and direction from one point to another. With a heading (the direction
+  // the rider faces or moves, degrees from north) it also says how far to turn.
+  function direction(fromLat, fromLon, toLat, toLon, heading) {
+    var m = metresPerDegree((fromLat + toLat) / 2);
+    var east = (toLon - fromLon) * m.lon, north = (toLat - fromLat) * m.lat;
+    var dist = Math.hypot(east, north), brg = bearing(east, north), c = compass(brg);
+    var out = { distance_m: dist, distance_ft: dist * FEET_PER_METRE, bearing_deg: brg,
+                compass: c.name, compass_short: c.short, turn_deg: null, turn: null };
+    if (heading != null && isFinite(heading)) {
+      out.turn_deg = (((brg - heading + 180) % 360) + 360) % 360 - 180;
+      out.turn = turnWords(out.turn_deg);
+    }
+    return out;
+  }
+
   // -- IDs ------------------------------------------------------------------
 
   function cellId(q, row, col) { return q * 1048576 + row * 1024 + col; }
@@ -359,7 +389,7 @@
   var api = {
     Grid: Grid, Boundary: Boundary, FLAG_NAMES: FLAG_NAMES, OUTSIDE: OUTSIDE, BORDER: BORDER, INSIDE: INSIDE,
     toE7: toE7, bandCentroidLat: bandCentroidLat, metresPerDegree: metresPerDegree,
-    localOffset: localOffset, bearing: bearing, compass: compass, cellId: cellId, subCellId: subCellId,
+    localOffset: localOffset, bearing: bearing, compass: compass, direction: direction, turnWords: turnWords, cellId: cellId, subCellId: subCellId,
     cellCode: cellCode, subCellCode: subCellCode
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
