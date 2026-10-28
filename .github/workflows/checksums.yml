@@ -3,6 +3,10 @@ name: Official checksums
 # Builds both complete databases from scratch on Linux, macOS and Windows and
 # checks each against the official checksum in pakgrid/checksums.py. This is
 # the proof that anyone, on any machine, builds exactly the official grid.
+#
+# After a merge to main (push), only Linux and Windows run: the same code has
+# already passed on all three systems in its pull request, and macOS runners
+# are sometimes unavailable for long enough that GitHub cancels the job.
 
 on:
   push:
@@ -26,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ github.event_name == 'push' && fromJSON('["ubuntu-latest", "windows-latest"]') || fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') }}
     steps:
       - uses: actions/checkout@v4
 
