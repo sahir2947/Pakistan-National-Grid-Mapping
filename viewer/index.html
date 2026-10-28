@@ -48,6 +48,8 @@
   .hide { display: none; }
   .bar label.toggle { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--line);
                       border-radius: 8px; background: var(--bg); box-shadow: var(--panel-shadow); cursor: pointer; }
+  .arrow-head { pointer-events: none; }
+  .arrow-head svg { display: block; width: 100%; height: 100%; filter: drop-shadow(0 0 2px #fff); }
   .legend span { display: inline-block; width: 14px; height: 10px; margin-right: 6px; vertical-align: middle;
                  border: 2px solid; }
   @media (max-width: 640px) {
@@ -258,9 +260,29 @@
       "Cells appear from zoom " + CELL_ZOOM + ", sub-cells from zoom " + SUB_ZOOM + ".</p>";
   }
 
+  // Arrowhead halfway along the centroid → point line, pointing at the point. Its size follows the
+  // line's length on screen, so it never hides the two ends; it is redrawn after each zoom.
+  // The map keeps angles true (Web Mercator), so rotating by the compass bearing points the right way.
+  var arrow = null, arrowMarker = null;
+  function drawArrow() {
+    if (arrowMarker) { selLayer.removeLayer(arrowMarker); arrowMarker = null; }
+    if (!arrow) return;
+    var a = map.latLngToContainerPoint(arrow.from), b = map.latLngToContainerPoint(arrow.to);
+    var size = Math.min(22, Math.round(a.distanceTo(b) * 0.45));
+    if (size < 8) return;
+    arrowMarker = L.marker([(arrow.from[0] + arrow.to[0]) / 2, (arrow.from[1] + arrow.to[1]) / 2], {
+      interactive: false,
+      icon: L.divIcon({ className: "arrow-head", iconSize: [size, size], iconAnchor: [size / 2, size / 2],
+        html: "<svg viewBox='0 0 22 22' style='transform:rotate(" + arrow.bearing.toFixed(1) + "deg)'>" +
+              "<path d='M11 2 L19 19 L11 14 L3 19 Z' fill='#2563eb' stroke='#fff' stroke-width='1.5'/></svg>" })
+    }).addTo(selLayer);
+  }
+  map.on("zoomend", drawArrow);
+
   // Select the block at a point (from a tap, a search or GPS), or a block by code.
   function select(opts) {
     selLayer.clearLayers();
+    arrow = arrowMarker = null;
     var r = opts.loc;
     var cell = grid.describe(r.q, r.row, r.col, null);
     var sub = r.sub == null ? null : grid.describe(r.q, r.row, r.col, r.sub);
@@ -289,12 +311,16 @@
           .addTo(selLayer);
       }
       var off = PakGrid.localOffset(sub.centroid[0], sub.centroid[1], p[0], p[1]);
-      L.polyline([sub.centroid, p], { color: "#2563eb", weight: 2, dashArray: "4 4" }).addTo(selLayer);
+      var dir = PakGrid.compass(off.bearing);
+      L.polyline([sub.centroid, p], { color: "#2563eb", weight: 3, interactive: false }).addTo(selLayer);
+      arrow = { from: sub.centroid, to: p, bearing: off.bearing };
+      drawArrow();
       var sb2 = sub.bounds, m = PakGrid.metresPerDegree(sub.centroid[0]);
       var edge = Math.max(0, Math.min((p[0] - sb2.south) * m.lat, (sb2.north - p[0]) * m.lat,
                                       (p[1] - sb2.west) * m.lon, (sb2.east - p[1]) * m.lon));
       var pointRows = [["Point", fmt(p[0]) + ", " + fmt(p[1])],
-                       ["From centroid", off.text + " (" + off.distance.toFixed(1) + " m at " + Math.round(off.bearing) + "°)"],
+                       ["Centroid → point", off.text + " · " + off.distance.toFixed(1) + " m"],
+                       ["Direction", Math.round(off.bearing) + "° " + dir.short + " (" + dir.name + ")"],
                        ["Nearest edge", edge.toFixed(1) + " m"]];
       var subFlag = grid.flag(border, r.q, r.row, r.col, sub.sub);
       var pointIn = subFlag === 2 || (subFlag === 1 && border.contains(p[0], p[1]));
@@ -303,7 +329,9 @@
         pointRows.push(["GPS accuracy", Math.round(opts.accuracy) + " m"]);
         pointRows.push(["Confident", edge >= opts.accuracy ? "yes" : "no: could be a neighbouring block"]);
       }
-      html += "<h3>Point</h3>" + rowsHtml(pointRows);
+      html += "<h3>Point</h3>" + rowsHtml(pointRows) +
+              "<div class='sub'>The arrow runs from the sub-cell's centre (orange ring) to the point (blue dot). " +
+              "Directions are compass bearings, clockwise from north: 0° N, 90° E, 180° S, 270° W.</div>";
     }
     html += "<h3>Location in the grid</h3>" + rowsHtml([
       ["Quadrant", grid.quadrants[r.q].code + " " + grid.quadrants[r.q].name],
@@ -320,11 +348,11 @@
     html += "<p><button type='button' id='clear'>Clear</button></p>";
     panel.innerHTML = html;
     document.getElementById("clear").onclick = function () {
-      selLayer.clearLayers(); showSummary(); history.replaceState(null, "", location.pathname);
+      selLayer.clearLayers(); arrow = arrowMarker = null; showSummary(); history.replaceState(null, "", location.pathname);
     };
     if (opts.fly) {
       var target = sub ? sub.bounds : cb, view = viewPadding();
-      view.maxZoom = sub ? 16 : 14;
+      view.maxZoom = opts.point ? 17 : sub ? 16 : 14;   // closer for points, so the arrow shows
       view.animate = !opts.instant;
       map.fitBounds([[target.south, target.west], [target.north, target.east]], view);
     }

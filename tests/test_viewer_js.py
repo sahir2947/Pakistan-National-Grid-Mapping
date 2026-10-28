@@ -11,6 +11,7 @@ import pytest
 from pakgrid import geodesy, ids
 from pakgrid.boundary import Boundary, cell_flags, row_flags
 from pakgrid.export import boundary_js, layout_js
+from pakgrid.navigate import _COMPASS_8, _COMPASS_16
 from pakgrid.layout import (EAST_E7, MID_LAT_E7, MID_LON_E7, NORTH_E7, SCALE, SOUTH_E7, WEST_E7, to_e7)
 
 VIEWER = Path(__file__).resolve().parent.parent / "viewer"
@@ -126,3 +127,15 @@ def test_javascript_border_flags_match_python(layout):
         assert js["subs"] == [list(a) for a in subs], (q, row)
         assert js["cells"] == [cell_flags(subs, c)[0] for c in range(ql.ncols[row])], (q, row)
     assert got["points"] == [boundary.contains(lat, lon) for lat, lon in points]
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_compass_matches_python():
+    bearings = [i * 7.3 % 360 for i in range(200)] + [k * 11.25 for k in range(32)] + [359.9]
+    js = f"""
+    const P = require('{VIEWER}/pakgrid.js');
+    console.log(JSON.stringify({json.dumps(bearings)}.map((b) => P.compass(b))));
+    """
+    got = json.loads(subprocess.run([NODE, "-e", js], capture_output=True, text=True, check=True).stdout)
+    for b, c in zip(bearings, got):
+        assert (c["name"], c["short"]) == (_COMPASS_8[round(b / 45) % 8], _COMPASS_16[round(b / 22.5) % 16]), b
