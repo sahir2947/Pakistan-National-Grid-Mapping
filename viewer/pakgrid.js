@@ -17,9 +17,7 @@
   // Degrees -> integer units of 1e-7 degree, rounding halves to even like
   // Python's round(). Some edges fall exactly on a half (e.g. 754432812.5).
   function toE7(deg) {
-    var x = deg * SCALE, r = Math.round(x);
-    if (r - x === 0.5 && r % 2 !== 0) r -= 1;
-    return r;
+    return roundHalfEven(deg * SCALE);
   }
 
   // -- Geodesy ------------------------------------------------------------
@@ -72,6 +70,23 @@
     return { lat: m * DEG, lon: n * Math.cos(phi) * DEG };
   }
 
+  // Compass names, as in pakgrid.navigate: 8-point name and 16-point abbreviation.
+  var COMPASS_8 = ["North", "North-East", "East", "South-East", "South", "South-West", "West", "North-West"];
+  var COMPASS_16 = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                    "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+
+  // Round to the nearest integer, halves to even, like Python's round().
+  function roundHalfEven(x) {
+    var r = Math.round(x);
+    return (r - x === 0.5 && r % 2 !== 0) ? r - 1 : r;
+  }
+
+  function compass(bearingDeg) {
+    return { name: COMPASS_8[roundHalfEven(bearingDeg / 45) % 8],
+             short: COMPASS_16[roundHalfEven(bearingDeg / 22.5) % 16] };
+  }
+
+  // Compass bearing in degrees, clockwise from north (0 = N, 90 = E, 180 = S, 270 = W).
   function bearing(east, north) {
     var b = Math.atan2(east, north) / DEG;
     return ((b % 360) + 360) % 360;
@@ -344,7 +359,7 @@
   var api = {
     Grid: Grid, Boundary: Boundary, FLAG_NAMES: FLAG_NAMES, OUTSIDE: OUTSIDE, BORDER: BORDER, INSIDE: INSIDE,
     toE7: toE7, bandCentroidLat: bandCentroidLat, metresPerDegree: metresPerDegree,
-    localOffset: localOffset, bearing: bearing, cellId: cellId, subCellId: subCellId,
+    localOffset: localOffset, bearing: bearing, compass: compass, cellId: cellId, subCellId: subCellId,
     cellCode: cellCode, subCellCode: subCellCode
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

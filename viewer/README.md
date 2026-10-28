@@ -10,7 +10,10 @@ A map page that shows the Pakistan National Grid on OpenStreetMap:
 
 Tap anywhere to see that point's cell and sub-cell: codes, IDs, boundaries,
 centroids, the offset from the sub-cell's centroid (for example `W23 S18`), and
-whether the point, its cell and its sub-cell are in Pakistan.
+whether the point, its cell and its sub-cell are in Pakistan. A blue arrow runs
+from the sub-cell's centre to the point, and its direction is given as a compass
+bearing, clockwise from north (0° N, 90° E, 180° S, 270° W), for example
+`232° SW (South-West)`.
 **My location** does the same for your phone's GPS position and shows whether
 the reading is accurate enough to be sure of the block.
 

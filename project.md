@@ -613,7 +613,8 @@ for checking the grid visually before it is used in an app:
 - the rectangle, with its four corner coordinates, plus the quadrants and midlines
 - cells from zoom 11 and sub-cells (numbered 0–24) from zoom 14
 - tap a point or use **My location** to see its codes, IDs, boundaries,
-  centroids, offset and GPS confidence
+  centroids, offset and GPS confidence; an arrow shows the offset from the
+  sub-cell's centre to the point, with its compass bearing (clockwise from north)
 - search by code or by `lat, lon`; links such as `#11-0140-0471-00` open at
   that block
 - Pakistan's border, with cells coloured inside (blue), border (purple) or
