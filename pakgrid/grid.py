@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from . import geodesy, ids, navigate, spec
 from .address import address_from_point
 from .boundary import FLAG_NAMES, OUTSIDE, Boundary, sub_flag
+from .checksums import official_checksum
 from .errors import GridMismatchError, IntegrityError, InvalidIdError, NotInDatabaseError, OutsideGridError
 from .layout import SCALE, SUB, GridLayout, QuadrantLayout, to_e7
 from .store import SCHEMA_VERSION, GridStore
@@ -381,6 +382,7 @@ class Grid:
                 "edition": self.meta.get("edition"),
                 "cells": int(self.meta.get("cells", 0)),
                 "content_sha256": self.meta.get("content_sha256"),
+                "official_sha256": official_checksum(self.meta),
                 "library_version": self.meta.get("library_version"),
             },
             "pakistan": {

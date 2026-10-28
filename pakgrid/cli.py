@@ -27,6 +27,9 @@ def main(argv=None):
     p = sub.add_parser("verify", help="check a database against the grid rules and its checksum")
     p.add_argument("--db", default=DEFAULT_DB)
     p.add_argument("--full", action="store_true", help="also regenerate and compare every record")
+    p.add_argument("--expect", metavar="SHA256",
+                   help="also require this content checksum (complete builds are always compared "
+                        "with the official checksum)")
 
     p = sub.add_parser("locate", help="find the sub-cell containing a GPS point")
     p.add_argument("lat", type=float)
@@ -66,10 +69,13 @@ def _build(args):
 
 def _verify(args):
     from .verify import verify_database
-    report = verify_database(args.db, full=args.full)
+    report = verify_database(args.db, full=args.full, expected_sha256=args.expect)
     for name, passed, detail, required in report.checks:
         status = "PASS" if passed else "FAIL" if required else "NOTE"
         print(f"{status}  {name}" + (f"  ({detail})" if detail else ""))
+    if report.content_sha256:
+        print(f"content sha256: {report.content_sha256}")
+    print("OK" if report.ok else "FAILED")
     return 0 if report.ok else 2
 
 

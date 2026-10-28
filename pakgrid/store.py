@@ -11,10 +11,19 @@ Border flags: `cells.pakistan` is 0 (outside), 1 (border) or 2 (inside).
 For sub-cells, bit k of `inside_mask` / `border_mask` is set when sub-cell k
 is inside / on the border; neither bit means outside. The `boundary` table
 holds the border itself as packed int32 (lon, lat) rings.
+
+Thread and process safety: one GridStore can be shared by every thread of a
+web server. Each thread gets its own read-only SQLite connection, opened on
+first use, and a process created by fork (e.g. a gunicorn worker started
+after the app was loaded) opens fresh connections rather than reusing the
+parent's, as SQLite requires.
 """
 
+import os
 import sqlite3
 import struct
+import threading
+import weakref
 from pathlib import Path
 
 from .errors import NotInDatabaseError
@@ -49,20 +58,53 @@ def unpack_sub_record(blob, inside_mask=0, border_mask=0):
     return v[0:6], v[6:12], tuple(zip(v[12::2], v[13::2])), inside_mask, border_mask
 
 
+class _Connection:
+    """One thread's connection; closed when its thread ends (and the holder is collected)."""
+
+    def __init__(self, uri):
+        self.pid = os.getpid()
+        self.db = sqlite3.connect(uri, uri=True, check_same_thread=False)
+
+    def close(self):
+        if self.pid == os.getpid():     # never close a connection inherited through fork
+            self.db.close()
+
+    __del__ = close
+
+
 class GridStore:
-    """A read-only connection to a grid database file."""
+    """Read-only access to a grid database file, safe to share between threads and forked processes."""
 
     def __init__(self, path):
         path = Path(path)
         if not path.is_file():
             raise FileNotFoundError(f"grid database not found: {path}")
         self.path = path
-        uri = f"{path.resolve().as_uri()}?mode=ro&immutable=1"
-        self._db = sqlite3.connect(uri, uri=True, check_same_thread=False)
+        self._uri = f"{path.resolve().as_uri()}?mode=ro&immutable=1"
+        self._local = threading.local()
+        self._open = weakref.WeakSet()
+        self._lock = threading.Lock()
+        self._closed = False
         self.pakistan_edition = self.meta().get("edition") == "pakistan"
 
+    @property
+    def _db(self):
+        conn = getattr(self._local, "conn", None)
+        if conn is None or conn.pid != os.getpid():
+            if self._closed:
+                raise sqlite3.ProgrammingError("Cannot operate on a closed grid database.")
+            conn = self._local.conn = _Connection(self._uri)
+            with self._lock:
+                self._open.add(conn)
+        return conn.db
+
     def close(self):
-        self._db.close()
+        """Close every thread's connection; the store cannot be used afterwards."""
+        self._closed = True
+        with self._lock:
+            conns = list(self._open)
+        for conn in conns:
+            conn.close()
 
     def meta(self):
         return dict(self._db.execute("SELECT key, value FROM meta"))

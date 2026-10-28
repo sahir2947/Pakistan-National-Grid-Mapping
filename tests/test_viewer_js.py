@@ -15,6 +15,7 @@ from pakgrid.navigate import _COMPASS_8, _COMPASS_16
 from pakgrid.layout import (EAST_E7, MID_LAT_E7, MID_LON_E7, NORTH_E7, SCALE, SOUTH_E7, WEST_E7, to_e7)
 
 VIEWER = Path(__file__).resolve().parent.parent / "viewer"
+VIEWER_JS = VIEWER.as_posix()   # for paths written into JavaScript source (no Windows backslashes)
 NODE = shutil.which("node")
 
 
@@ -84,8 +85,8 @@ def test_javascript_matches_python(layout):
 @pytest.mark.skipif(NODE is None, reason="node is not installed")
 def test_javascript_rejects_points_outside():
     js = f"""
-    const P = require('{VIEWER}/pakgrid.js');
-    const g = new P.Grid(require('{VIEWER}/layout.js'));
+    const P = require('{VIEWER_JS}/pakgrid.js');
+    const g = new P.Grid(require('{VIEWER_JS}/layout.js'));
     console.log(JSON.stringify([g.locate(23.0, 70), g.locate(30, 79), g.parseCode('11-0800-0000'),
                                 g.parseCode('11-0140-0518-01')]));
     """
@@ -133,7 +134,7 @@ def test_javascript_border_flags_match_python(layout):
 def test_javascript_compass_matches_python():
     bearings = [i * 7.3 % 360 for i in range(200)] + [k * 11.25 for k in range(32)] + [359.9]
     js = f"""
-    const P = require('{VIEWER}/pakgrid.js');
+    const P = require('{VIEWER_JS}/pakgrid.js');
     console.log(JSON.stringify({json.dumps(bearings)}.map((b) => P.compass(b))));
     """
     got = json.loads(subprocess.run([NODE, "-e", js], capture_output=True, text=True, check=True).stdout)
@@ -153,7 +154,7 @@ def test_javascript_direction_matches_python():
     cases += [(31.5215, 74.3570, 31.5204, 74.3587, 90), (31.52085, 74.35855, 31.5204, 74.3587, 180),
               (31.5, 74.3, 31.5, 74.3, 45), (31.5, 74.3, 31.6, 74.3001, 350)]
     js = f"""
-    const P = require('{VIEWER}/pakgrid.js');
+    const P = require('{VIEWER_JS}/pakgrid.js');
     const cases = {json.dumps(cases)};
     console.log(JSON.stringify(cases.map((c) => P.direction(c[0], c[1], c[2], c[3], c[4]))));
     """
@@ -183,8 +184,8 @@ def test_javascript_addresses_match_python(layout):
     texts = ["11-0140-0471-00 W23 S18", " 11-0140-0471-00  s18 w23 ", "11-0140-0471-00", "11-0140-0471-00 W23 E5",
              "11-0140-0471-00 E5 N151", "11-0140-0471-25 E1 N1", "11-0800-0000-00", "nonsense"]
     js = f"""
-    const P = require('{VIEWER}/pakgrid.js');
-    const g = new P.Grid(require('{VIEWER}/layout.js'));
+    const P = require('{VIEWER_JS}/pakgrid.js');
+    const g = new P.Grid(require('{VIEWER_JS}/layout.js'));
     const pts = {json.dumps(points)}, texts = {json.dumps(texts)};
     console.log(JSON.stringify({{
       made: pts.map(([a, b]) => g.addressFromPoint(a, b).text),
@@ -234,7 +235,7 @@ def test_javascript_navigation_engine_matches_python():
     scripts = [_nav_script(seed) for seed in range(40)]
     dists = [0, 2.5, 7.5, 97.5, 99.99, 100, 102.5, 995, 999.9, 1000, 1050, 1250, 12345.6, 91.44, 1609.344, 160934.4]
     js = f"""
-    const P = require('{VIEWER}/pakgrid.js');
+    const P = require('{VIEWER_JS}/pakgrid.js');
     const {{ scripts, dists }} = JSON.parse(require('fs').readFileSync(0, 'utf8'));
     const states = scripts.map((ev) => {{
       let nav = null;

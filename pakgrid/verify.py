@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from . import spec
 from .boundary import FLAG_NAMES, Boundary
 from .builder import content_hash, hash_cell, hash_layout, iter_cell_records
+from .checksums import official_checksum
 from .grid import _layout_from_store
 from .layout import GridLayout
 from .store import SCHEMA_VERSION, SUB_RECORD, GridStore
@@ -14,6 +15,8 @@ from .store import SCHEMA_VERSION, SUB_RECORD, GridStore
 class VerifyReport:
     ok: bool = True
     checks: list = field(default_factory=list)
+    content_sha256: str | None = None   # recomputed from the stored records
+    official_sha256: str | None = None  # the official value for this edition, if it is a complete build
 
     def add(self, name, passed, detail="", required=True):
         """Record a check; one with required=False is information and cannot fail the report."""
@@ -21,14 +24,17 @@ class VerifyReport:
         self.ok = self.ok and (passed or not required)
 
 
-def verify_database(path, full=False):
+def verify_database(path, full=False, expected_sha256=None):
     """Verify a database file.
 
     Always: grid version, layout against the grid rules, the stored border
     against its checksum, and the content checksum over every stored record
-    (including border flags). With full=True, also regenerates every record
-    and flag from the rules and the stored border, and compares (takes about
-    as long as a build).
+    (including border flags). A complete build (full or Pakistan edition) must
+    also match the official checksum in pakgrid.checksums, which proves it is
+    identical to the official database. With expected_sha256, the content must
+    match that value too (useful for a partial build you recorded earlier).
+    With full=True, also regenerates every record and flag from the rules and
+    the stored border, and compares (takes about as long as a build).
     """
     report = VerifyReport()
     store = GridStore(path)
@@ -72,7 +78,19 @@ def verify_database(path, full=False):
         report.add("record count", n == int(meta.get("cells", -1)), f"{n:,} cells")
         report.add("border flag counts", counts == [int(meta.get(f"cells_{k}", -1)) for k in FLAG_NAMES],
                    f"{counts[2]:,} inside, {counts[1]:,} border, {counts[0]:,} outside")
-        report.add("content checksum", h.hexdigest() == meta.get("content_sha256"), h.hexdigest()[:16] + "…")
+        digest = report.content_sha256 = h.hexdigest()
+        report.add("content checksum", digest == meta.get("content_sha256"), digest[:16] + "…")
+        official = report.official_sha256 = official_checksum(meta)
+        if official is not None:
+            report.add(f"matches the official {meta.get('edition')} edition (grid v{spec.GRID_VERSION})",
+                       digest == official, "" if digest == official else
+                       f"official {official[:16]}…: this database differs from the official one")
+        else:
+            report.add("official checksum", False, "partial build: there is no official checksum to compare",
+                       required=False)
+        if expected_sha256 is not None:
+            want = expected_sha256.strip().lower()
+            report.add("matches the expected checksum", digest == want, f"expected {want[:16]}…")
 
         if full:
             qs = [int(x, 2) for x in meta["quadrants_built"].split(",")]

@@ -136,6 +136,7 @@ def build_database(path, quadrants=None, rows=None, progress=None, overwrite=Fal
     qs, row_sel = _parse_selection(quadrants, rows)
     partial = qs != [0, 1, 2, 3] or row_sel is not None
 
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".partial")
     if tmp.exists():
         tmp.unlink()
