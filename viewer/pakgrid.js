@@ -658,6 +658,103 @@
     return this.list.filter(function (p) { return p.name.toLowerCase().indexOf(t) >= 0 || p.key === t; });
   };
 
+  // The exact shape of a place: the sub-cells tagged with it (or with any of its tehsils).
+  // Returns {rings, rects, edges, subCells}: `rings` are closed [lat, lon] outlines that, filled
+  // with the even-odd rule, cover exactly those sub-cells (holes included); `rects` the same area as
+  // [s, w, n, e] rectangles (rows with identical spans merged); `edges` the outline as segments.
+  Places.prototype.shape = function (grid, place) {
+    var self = this, want = {};
+    this.list.forEach(function (t) {
+      if (t.level === "tehsil" && self.path(t).some(function (a) { return a.id === place.id; })) want[t.id] = true;
+    });
+    var rows = {}, count = 0, q, key, k;
+    for (q = 0; q < 4; q++) {
+      var ql = grid.quadrants[q], qrows = this._rows[q];
+      for (key in qrows) {
+        var i = +key, runs = qrows[key], row = Math.floor(i / SUB), at = 0, line = null;
+        for (k = 0; k < runs.length; k += 2) {
+          var n = runs[k + 1];
+          if (want[runs[k]]) {
+            if (!line) {
+              var sE7 = toE7(fineLat(ql, i)), nE7 = toE7(fineLat(ql, i + 1)), rk = sE7 + ":" + nE7;
+              line = rows[rk] || (rows[rk] = { s: sE7, n: nE7, spans: [] });
+            }
+            line.spans.push([toE7(fineLon(ql, row, at)), toE7(fineLon(ql, row, at + n))]);
+            count += n;
+          }
+          at += n;
+        }
+      }
+    }
+    // rows south to north, each with its spans sorted and joined (quadrants meet at the midlines)
+    var list = Object.keys(rows).map(function (rk) { return rows[rk]; }).sort(function (a, b) { return a.s - b.s; });
+    list.forEach(function (r) {
+      r.spans.sort(function (a, b) { return a[0] - b[0]; });
+      var joined = [];
+      r.spans.forEach(function (sp) {
+        var last = joined[joined.length - 1];
+        if (last && sp[0] <= last[1]) last[1] = Math.max(last[1], sp[1]); else joined.push([sp[0], sp[1]]);
+      });
+      r.spans = joined;
+      r.sig = JSON.stringify(joined);
+    });
+    // stack rows with identical spans into blocks
+    var blocks = [];
+    list.forEach(function (r) {
+      var b = blocks[blocks.length - 1];
+      if (b && b.n === r.s && b.sig === r.sig) b.n = r.n; else blocks.push({ s: r.s, n: r.n, spans: r.spans, sig: r.sig });
+    });
+    var D = 1e7, rects = [], edges = [], lines = {};
+    blocks.forEach(function (b) {
+      b.spans.forEach(function (sp) {
+        rects.push([b.s / D, sp[0] / D, b.n / D, sp[1] / D]);
+        edges.push([[b.s / D, sp[0] / D], [b.n / D, sp[0] / D]], [[b.s / D, sp[1] / D], [b.n / D, sp[1] / D]]);
+      });
+      (lines[b.s] || (lines[b.s] = { y: b.s, below: [], above: [] })).above = b.spans;
+      (lines[b.n] || (lines[b.n] = { y: b.n, below: [], above: [] })).below = b.spans;
+    });
+    // east-west edges: where the place is on one side of a row line but not the other
+    Object.keys(lines).forEach(function (y) {
+      var L2 = lines[y], cuts = [];
+      L2.below.concat(L2.above).forEach(function (sp) { cuts.push(sp[0], sp[1]); });
+      cuts = cuts.sort(function (a, b) { return a - b; }).filter(function (x, idx, arr) { return !idx || x !== arr[idx - 1]; });
+      var covers = function (spans, x) { return spans.some(function (sp) { return sp[0] <= x && x < sp[1]; }); };
+      var start = null;
+      for (var c = 0; c < cuts.length; c++) {
+        var x = cuts[c], open = c + 1 < cuts.length && covers(L2.below, x) !== covers(L2.above, x);
+        if (open && start === null) start = x;
+        if (!open && start !== null) { edges.push([[L2.y / D, start / D], [L2.y / D, x / D]]); start = null; }
+      }
+    });
+    return { rings: chainRings(edges), rects: rects, edges: edges, subCells: count };
+  };
+
+  // Join outline segments into closed rings. Every corner of the outline has an even number of
+  // segments, so walking unused segments from corner to corner always returns to the start.
+  function chainRings(edges) {
+    var at = {}, used = new Array(edges.length), rings = [];
+    function key(p) { return p[0] + "," + p[1]; }
+    edges.forEach(function (e, k) {
+      (at[key(e[0])] || (at[key(e[0])] = [])).push(k);
+      (at[key(e[1])] || (at[key(e[1])] = [])).push(k);
+    });
+    for (var k = 0; k < edges.length; k++) {
+      if (used[k]) continue;
+      used[k] = true;
+      var ring = [edges[k][0]], here = edges[k][1], start = key(edges[k][0]);
+      while (key(here) !== start) {
+        ring.push(here);
+        var next = null, list = at[key(here)];
+        for (var m = 0; m < list.length; m++) if (!used[list[m]]) { next = list[m]; break; }
+        if (next === null) break;                 // cannot happen for a closed outline
+        used[next] = true;
+        here = key(edges[next][0]) === key(here) ? edges[next][1] : edges[next][0];
+      }
+      rings.push(ring);
+    }
+    return rings;
+  }
+
   Places.prototype.path = function (place) {
     var out = [];
     for (var p = place; p; p = this.byId[p.parentId]) out.push(p);

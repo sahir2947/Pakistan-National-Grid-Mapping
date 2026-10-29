@@ -331,3 +331,53 @@ def test_javascript_places_match_python(db, request):
     got = json.loads(subprocess.run([NODE, "-e", _JS_PLACES, str(VIEWER)], input=json.dumps(items),
                                     capture_output=True, text=True, check=True).stdout)
     assert len(got) == len(expected) and got == expected
+
+
+_JS_SHAPES = """
+const P = require(process.argv[1] + '/pakgrid.js');
+const grid = new P.Grid(require(process.argv[1] + '/layout.js'));
+const places = new P.Places(require(process.argv[1] + '/places.js'));
+const req = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+function inside(rings, lat, lon) {              // even-odd rule, as the viewer fills them
+  let odd = false;
+  for (const ring of rings) {
+    for (let a = 0, b = ring.length - 1; a < ring.length; b = a++) {
+      const [ya, xa] = ring[a], [yb, xb] = ring[b];
+      if ((ya > lat) !== (yb > lat) && lon < xa + (lat - ya) * (xb - xa) / (yb - ya)) odd = !odd;
+    }
+  }
+  return odd;
+}
+const out = {};
+for (const key of req.keys) {
+  const place = places.list.find((p) => p.key === key), shape = places.shape(grid, place);
+  out[key] = { subCells: shape.subCells, hits: req.points.map(([lat, lon]) => inside(shape.rings, lat, lon)),
+               rectHits: req.points.map(([lat, lon]) => shape.rects.some((r) => r[0] <= lat && lat < r[2] && r[1] <= lon && lon < r[3])) };
+}
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_place_shapes_are_exact(lahore_db):
+    """The drawn shape of a place covers exactly the sub-cells tagged with it."""
+    from pakgrid import Grid
+    keys = ["punjab/lahore", "punjab/lahore/lahore-cantt", "punjab/lahore/lahore-city", "punjab/sheikhpura",
+            "balochistan/zhob", "punjab"]
+    rng = random.Random(51)
+    with Grid.open(lahore_db) as grid:
+        tagged = [cid for cid, _, _ in grid.store.iter_cell_places()]
+        split = [cid for cid, _, _ in grid.store.split_cells()]
+        sids = [ids.sub_cell_id(c, k) for c in rng.sample(tagged, 400) + split[:80] for k in range(25)]
+        points = [grid.sub_cell(s).centroid for s in sids]
+        expected = {}
+        for key in keys:
+            p = grid.get_place(key)
+            expected[key] = [bool((t := grid.place(s)) and grid._within(t.tehsil, p)) for s in sids]
+    got = json.loads(subprocess.run([NODE, "-e", _JS_SHAPES, str(VIEWER)], input=json.dumps({"keys": keys, "points": points}),
+                                    capture_output=True, text=True, check=True).stdout)
+    for key in keys:
+        assert any(expected[key]) and not all(expected[key]), key       # the sample has points in and out
+        assert got[key]["hits"] == expected[key], key                    # the drawn rings
+        assert got[key]["rectHits"] == expected[key], key                # the rectangles
+    assert got["punjab"]["subCells"] == 5_138_873                        # as Grid.cells_in_place counts

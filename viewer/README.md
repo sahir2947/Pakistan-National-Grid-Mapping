@@ -12,8 +12,10 @@ A map page that shows the Pakistan National Grid on OpenStreetMap:
 province (the places layer, project.md §5.7). The details panel shows them,
 and **Places** colours each block by its tehsil (cells from zoom 11, sub-cells
 from zoom 14, where tehsil lines can be seen stepping through cells). Search
-accepts a place name (`Taxila`, `Sahiwal`) or key (`punjab/lahore`) and zooms to
-it; links such as `index.html#place=punjab/lahore` open straight at a place.
+accepts a place name (`Taxila`, `Sahiwal`) or key (`punjab/lahore`), zooms to
+it and outlines its exact area: every sub-cell tagged with it (so the outline
+steps in ~200 m sub-cells), never just the box around it. Links such as
+`index.html#place=punjab/lahore` open straight at a place.
 Districts marked *uncertain* come from coarse source outlines and may be
 wrong (see `pakgrid/data/PLACES_SOURCE.md`).
 
