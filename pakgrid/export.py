@@ -1,8 +1,9 @@
-"""Exports the grid layout and Pakistan's border for the map viewer.
+"""Exports the grid layout, Pakistan's border and the places layer for the map viewer.
 
 viewer/layout.js holds the row and column counts; viewer/boundary.js holds the
 border. The viewer recomputes every edge and border flag from them with the
-same formulas as the library, so it needs no database.
+same formulas as the library, so it needs no database. viewer/places.js holds
+every sub-cell's tehsil, run-length encoded (see pakgrid.places.viewer_data).
 """
 
 import json
@@ -73,11 +74,17 @@ def boundary_js(boundary=None):
     return _module_js("PAKGRID_BOUNDARY", boundary_data(boundary))
 
 
-def write_viewer_files(directory):
-    """Write layout.js and boundary.js into the viewer directory."""
+def places_js(progress=None):
+    from .places import viewer_data
+    return _module_js("PAKGRID_PLACES", viewer_data(progress=progress))
+
+
+def write_viewer_files(directory, progress=None):
+    """Write layout.js, boundary.js and places.js into the viewer directory."""
     directory = Path(directory)
     out = []
-    for name, text in (("layout.js", layout_js()), ("boundary.js", boundary_js())):
+    for name, text in (("layout.js", layout_js()), ("boundary.js", boundary_js()),
+                       ("places.js", places_js(progress))):
         (directory / name).write_text(text, encoding="utf-8")
         out.append(directory / name)
     return out

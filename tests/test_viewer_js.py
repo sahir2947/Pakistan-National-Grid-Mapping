@@ -280,3 +280,54 @@ def test_javascript_navigation_engine_matches_python():
                 else:
                     assert j[k] == v, (e, k)
     assert sources == {None, "gps", "compass", "manual", "movement"}
+
+
+def _places_js_data():
+    text = (VIEWER / "places.js").read_text(encoding="utf-8")
+    start = text.index("var data = ") + len("var data = ")
+    return json.loads(text[start:text.index(";\n", start)])
+
+
+def test_committed_places_data_is_the_official_layer():
+    from pakgrid.checksums import OFFICIAL_PLACES
+    from pakgrid.places import PLACES_VERSION, _places_table
+    data = _places_js_data()
+    assert data["places_version"] == PLACES_VERSION
+    assert data["places_sha256"] == OFFICIAL_PLACES[PLACES_VERSION], \
+        "viewer/places.js is stale: run `pakgrid export-layout`"
+    assert [p[:6] for p in data["places"]] == [list(r[:6]) for r in _places_table()]
+
+
+_JS_PLACES = """
+const P = require(process.argv[1] + '/pakgrid.js');
+const places = new P.Places(require(process.argv[1] + '/places.js'));
+const items = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify(items.map(([q, row, col, sub]) => {
+  const p = places.of(q, row, col, sub);
+  return p && [p.tehsil.id, p.district && p.district.id, p.province && p.province.id, p.label, p.uncertain];
+})));
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+@pytest.mark.parametrize("db", ["lahore_db", "south_edge_db", "north_edge_db"])
+def test_javascript_places_match_python(db, request):
+    from pakgrid import Grid
+    path = request.getfixturevalue(db)
+    rng = random.Random(41)
+    with Grid.open(path) as grid:
+        cells = [cid for cid, _, _ in grid.store.iter_cell_places()]
+        split = [cid for cid, _, _ in grid.store.split_cells()]
+        outside = [c[0] for c in grid.store.iter_cells() if c[7] == 0]
+        chosen = rng.sample(cells, min(300, len(cells))) + split[:100] + rng.sample(outside, min(50, len(outside)))
+        items, expected = [], []
+        for cid in chosen:
+            q, row, col = ids.split_cell_id(cid)
+            for sub in [None] + list(range(25)):
+                items.append([q, row, col, sub])
+                tags = grid.place(cid, "cell") if sub is None else grid.place(ids.sub_cell_id(cid, sub))
+                expected.append(tags and [tags.tehsil.id, tags.district and tags.district.id,
+                                          tags.province and tags.province.id, tags.label, tags.district_uncertain])
+    got = json.loads(subprocess.run([NODE, "-e", _JS_PLACES, str(VIEWER)], input=json.dumps(items),
+                                    capture_output=True, text=True, check=True).stdout)
+    assert len(got) == len(expected) and got == expected

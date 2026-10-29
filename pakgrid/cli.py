@@ -57,7 +57,8 @@ def main(argv=None):
     p = sub.add_parser("info", help="print grid and database information")
     p.add_argument("--db", default=DEFAULT_DB)
 
-    p = sub.add_parser("export-layout", help="write the map viewer's data files (layout.js, boundary.js)")
+    p = sub.add_parser("export-layout",
+                       help="write the map viewer's data files (layout.js, boundary.js, places.js)")
     p.add_argument("-o", "--output-dir", default="viewer")
 
     p = sub.add_parser("export-conformance",
@@ -121,7 +122,8 @@ def _verify(args):
 
 def _export_layout(args):
     from .export import write_viewer_files
-    for path in write_viewer_files(args.output_dir):
+    for path in write_viewer_files(args.output_dir,
+                                   progress=lambda msg: print(f"building {msg}…", file=sys.stderr)):
         print(f"wrote {path}")
     return 0
 

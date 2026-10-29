@@ -589,8 +589,83 @@
     return { q: q, row: row, col: col, sub: sub };
   };
 
+  // -- Places layer (same tags as pakgrid.places; data from places.js) -------
+
+  var PLACE_LEVELS = ["province", "district", "tehsil"];
+
+  // Every sub-cell's tehsil, district and province. `data` is PAKGRID_PLACES: the places, and each
+  // fine row of sub-cells as runs [tag, count, tag, count, ...] from the west (tag 0 = no place).
+  function Places(data) {
+    var self = this;
+    this.version = data.places_version;
+    this.sha256 = data.places_sha256;
+    this.attribution = data.attribution;
+    this.list = data.places.map(function (p) {
+      return { id: p[0], level: PLACE_LEVELS[p[1] - 1], key: p[2], name: p[3], parentId: p[4],
+               parentShare: p[5] == null ? null : p[5] / 1000, uncertain: p[5] != null && p[5] < 700,
+               extent: p[6] };
+    });
+    this.byId = {};
+    this.list.forEach(function (p) { self.byId[p.id] = p; });
+    this._rows = data.rows;
+    this._starts = [{}, {}, {}, {}];
+  }
+
+  // Tag of sub-cell column j in fine row i of quadrant q (0 = none).
+  Places.prototype.tagAt = function (q, i, j) {
+    var runs = this._rows[q][i];
+    if (!runs) return 0;
+    var starts = this._starts[q][i];
+    if (!starts) {
+      starts = [];
+      for (var k = 0, at = 0; k < runs.length; k += 2) { starts.push(at); at += runs[k + 1]; }
+      this._starts[q][i] = starts;
+    }
+    var m = bisectRight(starts, j) - 1;
+    return m < 0 ? 0 : runs[2 * m];
+  };
+
+  // The tag of a sub-cell, or of a cell (sub == null): the tehsil most of its 25 sub-cells have
+  // (ties: the centre sub-cell's, else the smallest), as pakgrid.places does.
+  Places.prototype.tag = function (q, row, col, sub) {
+    if (sub != null) return this.tagAt(q, row * 5 + Math.floor(sub / 5), col * 5 + sub % 5);
+    var counts = {}, best = 0, k, t;
+    var block = [];
+    for (k = 0; k < 25; k++) {
+      t = this.tagAt(q, row * 5 + Math.floor(k / 5), col * 5 + k % 5);
+      block.push(t);
+      if (t) { counts[t] = (counts[t] || 0) + 1; if (counts[t] > best) best = counts[t]; }
+    }
+    if (!best) return 0;
+    if (counts[block[12]] === best) return block[12];
+    var tied = Object.keys(counts).filter(function (x) { return counts[x] === best; }).map(Number);
+    return Math.min.apply(null, tied);
+  };
+
+  // {tehsil, district, province, label, uncertain} for a sub-cell or cell, or null outside Pakistan.
+  Places.prototype.of = function (q, row, col, sub) {
+    var t = this.byId[this.tag(q, row, col, sub)];
+    if (!t) return null;
+    var d = this.byId[t.parentId] || null, p = d ? this.byId[d.parentId] || null : null;
+    return { tehsil: t, district: d, province: p, uncertain: t.uncertain,
+             label: [t, d, p].filter(Boolean).map(function (x) { return x.name; }).join(", ") };
+  };
+
+  // Places whose name contains `text`, or whose key is `text` (case-insensitive), in ID order.
+  Places.prototype.find = function (text) {
+    var t = String(text).trim().toLowerCase();
+    if (!t) return [];
+    return this.list.filter(function (p) { return p.name.toLowerCase().indexOf(t) >= 0 || p.key === t; });
+  };
+
+  Places.prototype.path = function (place) {
+    var out = [];
+    for (var p = place; p; p = this.byId[p.parentId]) out.push(p);
+    return out;
+  };
+
   var api = {
-    Grid: Grid, Boundary: Boundary, FLAG_NAMES: FLAG_NAMES, OUTSIDE: OUTSIDE, BORDER: BORDER, INSIDE: INSIDE,
+    Grid: Grid, Boundary: Boundary, Places: Places, FLAG_NAMES: FLAG_NAMES, OUTSIDE: OUTSIDE, BORDER: BORDER, INSIDE: INSIDE,
     toE7: toE7, bandCentroidLat: bandCentroidLat, metresPerDegree: metresPerDegree,
     localOffset: localOffset, applyOffset: applyOffset, addressText: addressText, bearing: bearing, compass: compass, direction: direction, turnWords: turnWords,
     formatDistance: formatDistance, NavigationSession: NavigationSession, cellId: cellId, subCellId: subCellId,

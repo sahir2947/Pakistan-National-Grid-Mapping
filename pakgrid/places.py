@@ -262,8 +262,12 @@ def _sources():
     return provinces, districts, tehsils, pid, layers
 
 
-def build_places_data(layout, boundary=None, quadrants=None, rows=None, progress=None):
-    """Compute the places layer for the given part of the grid (all of it by default)."""
+def build_places_data(layout, boundary=None, quadrants=None, rows=None, progress=None, on_rows=None):
+    """Compute the places layer for the given part of the grid (all of it by default).
+
+    on_rows(q, tags), if given, is called once per quadrant with {fine row: array of sub-cell tags}
+    (0 = no tag), the final tags of every sub-cell; the map viewer's data is made from it.
+    """
     from .builder import _parse_selection
     boundary = boundary or Boundary.default()
     qs, row_sel = _parse_selection(quadrants, rows)
@@ -297,6 +301,8 @@ def build_places_data(layout, boundary=None, quadrants=None, rows=None, progress
                 nearest += 1
             else:
                 untagged += 1
+        if on_rows:
+            on_rows(q, tags)
         for row in row_range:
             rt = [tags[row * SUB + sr] for sr in range(SUB)]
             for col in range(ql.ncols[row]):
@@ -451,6 +457,59 @@ def _places_table():
         used.add(key)
         r[2] = key
     return [tuple(r) for r in rows]
+
+
+# -- Map viewer data -----------------------------------------------------------------------
+
+def viewer_data(layout=None, progress=None):
+    """The places layer for the map viewer (viewer/places.js): places, and every sub-cell's tag.
+
+    Each fine row of sub-cells that has any tag is stored as runs [tag, count, tag, count, ...]
+    from its west end (tag 0 = outside Pakistan). Each place has its extent [s, w, n, e].
+    """
+    from .layout import GridLayout
+    layout = layout or GridLayout.from_spec()
+    rows_out = [dict() for _ in layout.quadrants]
+    extent = {}
+
+    def grow(tag, s, w, n, e):
+        b = extent.get(tag)
+        extent[tag] = [s, w, n, e] if b is None else [min(b[0], s), min(b[1], w), max(b[2], n), max(b[3], e)]
+
+    def keep(q, tags):
+        ql = layout.quadrants[q]
+        for i in sorted(tags):
+            t = tags[i]
+            if not t.count(0) < len(t):
+                continue
+            runs, start = [], 0
+            for j in range(1, len(t) + 1):
+                if j == len(t) or t[j] != t[start]:
+                    runs += [t[start], j - start]
+                    if t[start]:
+                        row = i // SUB
+                        grow(t[start], ql.fine_lat(i), ql.fine_lon(row, start), ql.fine_lat(i + 1), ql.fine_lon(row, j))
+                    start = j
+            rows_out[q][i] = runs
+
+    data = build_places_data(layout, progress=progress, on_rows=keep)
+    table = {p[0]: list(p) for p in data.places}
+    for pid in sorted(table, reverse=True):          # tehsils first: their extents make their parents'
+        p = table[pid]
+        if pid in extent and p[4]:
+            b = extent[pid]
+            grow(p[4], *b)
+    places = []
+    for pid, p in sorted(table.items()):
+        b = extent.get(pid)
+        places.append([pid, p[1], p[2], p[3], p[4], p[5], [round(x, 5) for x in b] if b else None])
+    return {
+        "places_version": PLACES_VERSION,
+        "places_sha256": places_hash(data.places, data.cells),
+        "attribution": ATTRIBUTION,
+        "places": places,      # [id, level (1-3), key, name, parent, parent share (thousandths), extent]
+        "rows": [{str(i): r for i, r in q.items()} for q in rows_out],
+    }
 
 
 # -- Storing -----------------------------------------------------------------------------
