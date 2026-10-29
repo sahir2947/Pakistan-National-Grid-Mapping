@@ -305,7 +305,9 @@
     var html = "<div class='code'>" + esc(p.name) + "</div><div class='sub'>" +
                p.level.charAt(0).toUpperCase() + p.level.slice(1) +
                (path.length > 1 ? " · " + path.slice(1).map(placeLink).join(", ") : "") + "</div>";
-    html += rowsHtml([["Key", "<code>" + esc(p.key) + "</code>"], ["Place ID", String(p.id)]]
+    var shape = places.shape(grid, p), size = shape.subCells;
+    html += rowsHtml([["Key", "<code>" + esc(p.key) + "</code>"], ["Place ID", String(p.id)],
+                      ["Size", size.toLocaleString() + " sub-cells (≈ " + Math.round(size * 0.04).toLocaleString() + " km²)"]]
       .concat(p.parentShare != null ? [["Share in its " + (p.level === "tehsil" ? "district" : "province"),
         Math.round(p.parentShare * 100) + "%" + (p.uncertain ? " <span class='warn'>uncertain</span>" : "")]] : [])
       .concat(x ? [["Extent", x[0].toFixed(3) + "–" + x[2].toFixed(3) + "° N, " + x[1].toFixed(3) + "–" + x[3].toFixed(3) + "° E"]] : []));
@@ -317,7 +319,8 @@
       html += "<h3>" + (p.level === "province" ? "Districts" : "Tehsils") + " (" + kids.length + ")</h3><ul class='place-list'>" +
               kids.map(function (c) { return "<li>" + placeLink(c) + "</li>"; }).join("") + "</ul>";
     }
-    html += "<p class='sub'>Blocks are coloured by tehsil while <b>Places</b> is ticked.</p>" +
+    html += "<p class='sub'>The outline is the place's exact area in the grid: every sub-cell tagged with it. " +
+            "Blocks are coloured by tehsil while <b>Places</b> is ticked.</p>" +
             "<p><button type='button' id='clear'>Clear</button></p>";
     panel.innerHTML = html;
     document.getElementById("clear").onclick = function () {
@@ -325,8 +328,11 @@
     };
     document.getElementById("placeson").checked = true;
     if (x) {
-      L.rectangle([[x[0], x[1]], [x[2], x[3]]], { color: placeColour(p.id), weight: 2, dashArray: "6 4", fill: false,
-        interactive: false }).addTo(selLayer);
+      // the place's exact shape (its tagged sub-cells), not just the box around it
+      var colour = placeColour(p.id);
+      // the outline rings, filled with the even-odd rule (holes stay open), drawn as one shape
+      L.polygon(shape.rings, { renderer: canvas, color: "#111827", weight: 2.5, opacity: 0.9, fillColor: colour,
+                               fillOpacity: 0.28, fillRule: "evenodd", interactive: false }).addTo(selLayer);
       var view = viewPadding();
       view.maxZoom = 13;
       map.fitBounds([[x[0], x[1]], [x[2], x[3]]], view);
