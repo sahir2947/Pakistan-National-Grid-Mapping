@@ -526,12 +526,82 @@ tests it against the border line itself (stored in the database), so
 
 **Pakistan edition:** `pakgrid build --pakistan-only` leaves out the cells
 that are wholly outside Pakistan, which gives 872,146 cells in 275 MB instead
-of 785 MB. IDs are unchanged; asking for a missing outside cell gives a clear
+of 785 MB (301 MB and 811 MB with the places layer, §5.7). IDs are unchanged; asking for a missing outside cell gives a clear
 `NotInDatabaseError`.
 
 **Updating the border:** replacing the boundary file and rebuilding changes
 only the flags, never the IDs. Each database records the border's checksum,
 and `pakgrid verify` checks it.
+
+### 5.7 Layers on the grid, and the places layer
+
+**The grid is the foundation; everything else is a layer of tags on its IDs.**
+
+```
+FOUNDATION (frozen, grid v1: IDs never change)
+  Big rectangle → Quadrants → Cells → Sub-cells
+LAYERS (tags on sub-cell IDs; each layer is versioned and can be updated
+        without changing a single grid ID)
+  Pakistan cut-out   inside / border / outside            §5.6
+  Province           7 units                               places layer
+  District           126 units                             places layer
+  Tehsil             554 units                             places layer
+  Locality           cities, towns, villages, areas        planned
+```
+
+Every place name that exists, and every one that will exist, is attached to
+pakgrid cell and sub-cell IDs. Apps store grid IDs and look up the current
+names, so a new district or a renamed tehsil never invalidates stored data:
+it is a new version of the places layer.
+
+**How the places layer is made (places version 1).** Sources and licences are
+in [`pakgrid/data/PLACES_SOURCE.md`](pakgrid/data/PLACES_SOURCE.md).
+
+1. Every sub-cell that touches Pakistan (border flag `inside` or `border`) is
+   tagged with the **tehsil** containing its centroid. Tehsils are the
+   detailed 2017-census boundaries. Edge sub-cells that no tehsil polygon
+   reaches take their neighbours' tag; island sub-cells that no tehsil
+   includes (Astola, islands off Karachi) take the nearest tehsil. In a
+   complete build every sub-cell touching Pakistan has a tehsil.
+2. Each tehsil's **district** is the district that covers most of it, and
+   each district's **province** is the province that covers most of it,
+   measured along lines every 0.01° across the country. The hierarchy is
+   therefore always consistent (a sub-cell's district contains its tehsil)
+   and does not depend on which part of the grid is built.
+3. A **cell** takes the tehsil most of its 25 sub-cells have (ties: the
+   centre sub-cell's). Where a tehsil line runs through a cell (57,781 cells),
+   each sub-cell keeps its own tag.
+4. Every place has a stable readable **key**, e.g. `punjab/rawalpindi/taxila`,
+   so same-named places stay apart (`punjab/sahiwal/sahiwal`,
+   `punjab/sargodha/sahiwal`).
+
+**Known limitation.** The district outlines available are coarse (2019) and
+do not match the tehsils well. 79 tehsils whose main district covers less
+than 70% of them are flagged `district_uncertain`, and some of those have the
+wrong district (New Sukkur comes out in Shikarpur, Naurang in Bannu).
+Provinces are reliable. A later places version can switch to the UN OCHA
+boundaries for Pakistan, which state each tehsil's district explicitly.
+
+**Storage.** Two tables beside the grid: `places` (687 rows: id, level, key,
+name, parent, parent share, source name and ID) and `cell_places` (one row per
+cell touching Pakistan: its main tehsil, plus the 25 sub-cell tags only where
+they differ). It adds 26 MB to either edition. The layer has its own checksum,
+separate from the grid's, so the official grid checksums are unchanged; the
+places checksum is the same for the full and Pakistan editions (cells wholly
+outside Pakistan carry no tags in either) and is checked by `pakgrid verify`.
+Everything is computed with exact arithmetic on the grid's 10⁻⁷ degree
+coordinates, so it is identical on every platform.
+
+```python
+with Grid.open("pakgrid_v1_pakistan.sqlite") as grid:
+    grid.locate(33.7463, 72.8397).place.label    # 'Taxila, Rawalpindi, Punjab'
+    grid.place("11-0140-0471-00").tehsil.key     # 'punjab/lahore/lahore-cantt'
+    grid.find_places("sahiwal")                  # districts and tehsils named Sahiwal
+    grid.cells_in_place("punjab/lahore")         # every cell of Lahore district
+```
+
+`pakgrid build-places --db FILE` adds or rebuilds the layer in an existing
+database without touching the grid.
 
 ---
 
@@ -613,6 +683,19 @@ level by itself.
 
 Every result object has a `to_dict()` method that returns JSON-ready data.
 
+**Places** (§5.7; need the places layer, which `pakgrid build` adds):
+
+| Function | Returns |
+|---|---|
+| `place(item, level="sub")` | `PlaceTags` of a sub-cell or cell: `tehsil`, `district`, `province` (`Place` objects), `label` such as `Taxila, Rawalpindi, Punjab`, `district_uncertain`; `None` outside Pakistan |
+| `places(level=None)` | All places, or all provinces, districts or tehsils |
+| `find_places(text, level=None)` | Places whose name contains `text`, or whose key is `text` |
+| `get_place(id_or_key)` | One `Place` by ID or key (`punjab/lahore`) |
+| `cells_in_place(place, level="cell")` | IDs of the cells (main tehsil) or sub-cells (exact) in a province, district or tehsil |
+
+`Location.place` gives the same tags for a located point, and
+`Location.to_dict()` includes them.
+
 These functions need no database, so they also work in an app that never
 downloads it:
 
@@ -659,6 +742,8 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 | `pakgrid info` | Print grid and database information |
 | `pakgrid export-layout` | Write the map viewer's data: `viewer/layout.js` (row and column counts) and `viewer/boundary.js` (the border) |
 | `pakgrid export-conformance [-o DIR]` | Write the conformance test file for ports, `conformance/navigation.json` |
+| `pakgrid build ... --no-places` / `pakgrid build-places [--db FILE]` | Build without the places layer / add or rebuild it in an existing database |
+| `pakgrid places [TEXT] [--level L] [--cells]` | List or search places (province, district, tehsil); `--cells` prints the cells of one place |
 
 The database path defaults to `pakgrid_v1.sqlite`, or the `PAKGRID_DB`
 environment variable.
@@ -1078,6 +1163,8 @@ the same data centre.
 |---|---|
 | `pakgrid build` (full grid, with border flags) | 36 s, 785 MB, ~51 MB peak memory |
 | `pakgrid build --pakistan-only` | 19 s, 275 MB, 872,146 cells |
+| Places layer (part of `pakgrid build`, or `pakgrid build-places`) | ~26 s extra, +26 MB, ~370 MB peak memory during the build |
+| `grid.place(sub_cell)` / extra cost of the place in `locate()` | ~8 µs / ~6 µs |
 | `pakgrid verify --full` | about as long as a build; regenerates every record and flag and compares |
 | Content SHA-256, full database (grid v1) | `f8da541f3865862a18ac25dded339c2a84eeea4b5ff26e59d27676a4309e0109` |
 | Content SHA-256, Pakistan edition | `6c5c2ec492a38f93020b593c554e9d437b39d859948a2cc82e94e6605c30cb01` |
@@ -1153,6 +1240,7 @@ rider guidance on the phone. Step-by-step setup, with tested code:
 | Determinism | Two builds produce byte-identical files and the same checksum; test builds match recorded checksums on Linux, macOS and Windows; no centroid latitude is near enough to a rounding tie for platform differences in `sin`/`cos` to change it |
 | Official checksums | Both complete editions, built from scratch on Linux, macOS and Windows, match `pakgrid/checksums.py` (`.github/workflows/checksums.yml`) |
 | Shared use | One `Grid` shared by many threads, and used after a fork, gives the same answers as a single thread |
+| Places layer | Known places get the right tehsil, district and province (Lahore, Taxila, Astola Island…); every sub-cell touching Pakistan is tagged in a complete build; the hierarchy is consistent and the same for any part built; split cells keep each sub-cell's tag; searches work both ways; the places checksum is the same on Linux, macOS and Windows and matches the official value for both editions |
 | Conformance file | `conformance/navigation.json` is up to date; the Python library and the JavaScript copy (through `conformance/runners/javascript.js`) pass all ~2,000 cases; it covers every heading source, status and call |
 | GPS noise | Simulated noise: the true block is always the result or one of its `candidates` |
 | Border flags | Flags along the real border match an independent brute-force check (segment-box intersection plus ray casting); known places (Lahore, Skardu, Astola Island, Amritsar, the sea off Karachi) are classified correctly |
@@ -1174,6 +1262,8 @@ Windows, on every push to `main` and every pull request. The workflow also runs 
 | **v0.1 — Grid core** ✅ | Python library, full database (option B), CLI, tests, documentation, map viewer, Pakistan border flags, grid addresses (§4.4), navigation engine in Python and JavaScript (§10.6) |
 | **Backend integration** ✅ | Django REST Framework guide (`docs/django.md`), thread- and fork-safe `Grid`, official checksums checked by `pakgrid verify` |
 | **Ports** ✅ | Navigation rules and conformance test file for apps that port navigation to their own language (`conformance/`) |
+| **Places layer** ✅ (layer 1) | Province, district and tehsil tags on every cell and sub-cell (§5.7) |
+| **Next — Localities** | Cities, towns, villages and neighbourhoods from OpenStreetMap, as the next places layer |
 | **Next — Documentation guides** | A guide for every feature, for app developers |
 | **v0.1.0 release** | First tagged GitHub release, with the databases attached |
 | **Pilot** | Dukandaari in one city (Lahore or Karachi): addresses, batching, rider navigation |

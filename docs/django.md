@@ -56,10 +56,12 @@ out cells wholly outside Pakistan.
 
 | Edition | Command | Size | Build time* | Use when |
 |---|---|---|---|---|
-| **Pakistan** (recommended) | `pakgrid build --pakistan-only -o pakgrid_v1_pakistan.sqlite` | ~275 MB | ~20 s | Your service only works inside Pakistan |
-| Full | `pakgrid build -o pakgrid_v1.sqlite` | ~785 MB | ~40 s | You also need cells outside Pakistan's border |
+| **Pakistan** (recommended) | `pakgrid build --pakistan-only -o pakgrid_v1_pakistan.sqlite` | ~301 MB | ~1 min | Your service only works inside Pakistan |
+| Full | `pakgrid build -o pakgrid_v1.sqlite` | ~811 MB | ~1.5 min | You also need cells outside Pakistan's border |
 
-\* Measured on one CPU core; a build needs about 90 MB of memory.
+\* Measured on one CPU core; a build needs about 400 MB of memory. Both
+editions include the places layer (tehsil, district and province of every
+block, §6); `--no-places` leaves it out.
 
 Then verify it:
 
@@ -75,6 +77,9 @@ PASS  record count  (872,146 cells)
 PASS  border flag counts  (860,775 inside, 11,371 border, 0 outside)
 PASS  content checksum  (6c5c2ec492a38f93…)
 PASS  matches the official pakistan edition (grid v1)
+PASS  places layer version  (database 1, library 1)
+PASS  places checksum  (61db16961ad906b2…)
+PASS  places layer matches the official places version 1
 content sha256: 6c5c2ec492a38f93020b593c554e9d437b39d859948a2cc82e94e6605c30cb01
 OK
 ```
@@ -91,6 +96,7 @@ rules and compares them one by one (about as long as a build).
 |---|---|
 | Pakistan | `6c5c2ec492a38f93020b593c554e9d437b39d859948a2cc82e94e6605c30cb01` |
 | Full | `f8da541f3865862a18ac25dded339c2a84eeea4b5ff26e59d27676a4309e0109` |
+| Places layer, version 1 (both editions) | `61db16961ad906b21972bf2796aecbd29c13cd9f1db45577fc88ccb8bc4a21a9` |
 
 The checksum covers the content (the layout, every cell and sub-cell, the
 border flags and the border itself), not the file's bytes, which can differ
@@ -244,6 +250,14 @@ class CustomerAddress(models.Model):
 Grid IDs never change for grid version 1, so stored IDs stay valid for as
 long as you use it.
 
+**Don't store place names; look them up.** A cell's tehsil, district and
+province come from the places layer, which is updated over time (new
+districts, renamed tehsils) while grid IDs stay the same. Store the
+`sub_cell_id` and ask `get_grid().place(sub_cell_id)` when you need the names,
+so they are always current. For zones and reports, `grid.cells_in_place(...)`
+gives every cell of a province, district or tehsil, to match against your
+indexed `cell_id` column.
+
 ## 6. API endpoints
 
 These are examples; design your own API around your app. The serializers:
@@ -362,15 +376,30 @@ returns `Location.to_dict()`:
   "confident": true,
   "edge_distance_m": 76.5,
   "candidates": [],
-  "in_pakistan": true
+  "in_pakistan": true,
+  "place": {
+    "label": "Lahore Cantt, Lahore, Punjab",
+    "tehsil": {"id": 412, "key": "punjab/lahore/lahore-cantt", "name": "Lahore Cantt"},
+    "district": {"id": 69, "key": "punjab/lahore", "name": "Lahore"},
+    "province": {"id": 6, "key": "punjab", "name": "Punjab"},
+    "district_uncertain": false
+  }
 }
 ```
+
+`place` is `null` outside Pakistan. `district_uncertain` is true for the 79
+tehsils whose district comes from outlines that disagree (see
+[PLACES_SOURCE.md](../pakgrid/data/PLACES_SOURCE.md)); show the tehsil and
+province with confidence, and the district with care there.
 
 Other library calls that are useful behind an API (see
 [project.md §7.1](../project.md#71-python-library-16-functions)):
 `grid.cells_in_area(...)` for a delivery zone, `grid.neighbours(...)` for
 "nearby" searches, `grid.cell(...)` and `grid.sub_cell(...)` for a block's
-bounds and centre, `grid.pakistan_flags(...)`, and `direction(...)`.
+bounds and centre, `grid.pakistan_flags(...)`, `direction(...)`, and for
+places `grid.place(...)`, `grid.find_places("sahiwal")`,
+`grid.get_place("punjab/lahore")` and `grid.cells_in_place(...)` (Lahore
+district: 1,736 cells in ~2 ms).
 
 **Confidence.** When the app sends the phone's GPS accuracy, `confident` says
 whether the pin could belong to a neighbouring block, and `candidates` lists
@@ -427,7 +456,7 @@ partial build has no official checksum, so record its checksum and pass it to
 raises `NotInDatabaseError` too, so test only with points inside it; the
 exception handler above would report such points as "outside Pakistan".
 
-Your CI can also build the real Pakistan edition (~20 s) and run against that.
+Your CI can also build the real Pakistan edition (~1 min) and run against that.
 
 ## 10. Performance
 

@@ -132,8 +132,8 @@ Full design documentation: [project.md](project.md).
 
 ```bash
 pip install -e .                 # from this repository
-pakgrid build                    # writes pakgrid_v1.sqlite (~785 MB, ~35 s)
-pakgrid build -o pk.sqlite --pakistan-only   # only cells touching Pakistan (~275 MB), same IDs
+pakgrid build                    # writes pakgrid_v1.sqlite (~811 MB, ~1-1.5 min)
+pakgrid build -o pk.sqlite --pakistan-only   # only cells touching Pakistan (~301 MB), same IDs
 pakgrid verify                   # checks the file against the grid rules and the official checksum
 pakgrid locate 31.5204 74.3587 --accuracy 5
 pakgrid show 11-0140-0471-00
@@ -151,6 +151,8 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
     grid.neighbours(loc.cell_id)     # touching cells, across quadrant lines too
     loc.in_pakistan                  # True (exact, using Pakistan's border line)
     grid.cell(loc.cell_id).pakistan  # 'inside' ('border' or 'outside' elsewhere)
+    loc.place.label                  # 'Lahore Cantt, Lahore, Punjab' (tehsil, district, province)
+    grid.cells_in_place("punjab/lahore")   # every cell of Lahore district
 
 direction(31.5215, 74.3570, 31.5204, 74.3587, heading=90).turn   # 'bear right'
 ```
@@ -185,6 +187,11 @@ models, endpoints and errors.
 sub-cells on OpenStreetMap; tap anywhere to see its grid code. Run
 `python3 -m http.server -d viewer 8000` and open http://localhost:8000, or
 publish the repository with GitHub Pages. See [viewer/README.md](viewer/README.md).
+
+**Place names:** every cell and sub-cell is tagged with its tehsil, district
+and province, as a layer on the grid that can be updated without changing any
+ID (project.md §5.7). Sources and known limitations:
+[pakgrid/data/PLACES_SOURCE.md](pakgrid/data/PLACES_SOURCE.md).
 
 **Border flags:** every cell and sub-cell is flagged `inside`, `border` or
 `outside` Pakistan, using the geoBoundaries / OpenStreetMap border (including

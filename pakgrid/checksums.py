@@ -28,3 +28,20 @@ def official_checksum(meta):
     except (TypeError, ValueError):
         return None
     return OFFICIAL.get((version, meta.get("edition")))
+
+
+# places version -> content SHA-256 of the places layer of a complete build. The same for the full
+# and Pakistan editions: cells wholly outside Pakistan carry no place tags in either.
+OFFICIAL_PLACES = {
+    1: "61db16961ad906b21972bf2796aecbd29c13cd9f1db45577fc88ccb8bc4a21a9",
+}
+
+
+def official_places_checksum(meta):
+    """The official checksum of a database's places layer, or None (partial build, no layer, unknown)."""
+    if meta.get("coverage") != "full" or "places_version" not in meta:
+        return None
+    try:
+        return OFFICIAL_PLACES.get(int(meta["places_version"]))
+    except ValueError:
+        return None

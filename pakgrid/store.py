@@ -164,6 +164,42 @@ class GridStore:
                 out[cid] = (inside, border)
         return out
 
+    # -- Places layer (see pakgrid.places) ----------------------------------------
+
+    def has_places(self):
+        return self._db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cell_places'").fetchone() is not None
+
+    def places_rows(self):
+        """All (id, level, key, name, parent, parent_share, source_name, source_id), in ID order."""
+        return self._db.execute(
+            "SELECT id, level, key, name, parent, parent_share, source_name, source_id FROM places ORDER BY id"
+        ).fetchall()
+
+    def cell_place(self, cid):
+        """(tehsil, subs blob or None) for a cell, or None if it has no places tags."""
+        return self._db.execute("SELECT tehsil, subs FROM cell_places WHERE id = ?", (cid,)).fetchone()
+
+    def cells_with_tehsils(self, tehsils):
+        """(cell ID, tehsil, subs) for cells whose main tehsil is one of `tehsils`."""
+        out, tehsils = [], list(tehsils)
+        for k in range(0, len(tehsils), 900):
+            chunk = tehsils[k:k + 900]
+            out += self._db.execute(f"SELECT id, tehsil, subs FROM cell_places WHERE tehsil IN "
+                                    f"({','.join('?' * len(chunk))})", chunk).fetchall()
+        return out
+
+    def split_cells(self):
+        """(cell ID, tehsil, subs) for cells whose sub-cells have different tehsils."""
+        return self._db.execute("SELECT id, tehsil, subs FROM cell_places WHERE subs IS NOT NULL").fetchall()
+
+    def iter_cell_places(self):
+        """All (cell ID, tehsil, subs) in ID order."""
+        return self._db.execute("SELECT id, tehsil, subs FROM cell_places ORDER BY id")
+
+    def has_cell(self, cid):
+        return self._db.execute("SELECT 1 FROM cells WHERE id = ?", (cid,)).fetchone() is not None
+
     def iter_cells(self):
         """All (id, south, west, north, east, centroid_lat, centroid_lon, pakistan) in ID order."""
         return self._db.execute(
