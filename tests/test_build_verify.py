@@ -139,7 +139,8 @@ def test_complete_build_must_match_the_official_checksum(tmp_path, lahore_db):
     _tamper(step, fake, "UPDATE meta SET value = 'pakistan' WHERE key = 'edition'")
     report = verify_database(fake)
     failed = [name for name, passed, _, required in report.checks if required and not passed]
-    assert failed == ["matches the official pakistan edition (grid v1)"]
+    assert failed == ["matches the official pakistan edition (grid v1)",
+                      "places layer matches the official places version 1"]
     assert not report.ok and report.official_sha256 is not None
 
 

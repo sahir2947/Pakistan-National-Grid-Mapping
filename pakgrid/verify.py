@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from . import spec
 from .boundary import FLAG_NAMES, Boundary
 from .builder import content_hash, hash_cell, hash_layout, iter_cell_records
-from .checksums import official_checksum
+from .checksums import official_checksum, official_places_checksum
 from .grid import _layout_from_store
 from .layout import GridLayout
 from .store import SCHEMA_VERSION, SUB_RECORD, GridStore
@@ -17,6 +17,7 @@ class VerifyReport:
     checks: list = field(default_factory=list)
     content_sha256: str | None = None   # recomputed from the stored records
     official_sha256: str | None = None  # the official value for this edition, if it is a complete build
+    places_sha256: str | None = None    # recomputed from the stored places layer, if there is one
 
     def add(self, name, passed, detail="", required=True):
         """Record a check; one with required=False is information and cannot fail the report."""
@@ -105,6 +106,30 @@ def verify_database(path, full=False, expected_sha256=None):
                     break
             report.add("every record and flag regenerated from the rules", mismatch is None,
                        "" if mismatch is None else f"first difference at cell {mismatch}")
+        _verify_places(report, store, meta, full)
     finally:
         store.close()
     return report
+
+
+def _verify_places(report, store, meta, full):
+    from .places import PLACES_VERSION, build_places_data, places_hash
+    if "places_version" not in meta or not store.has_places():
+        report.add("places layer", False, "not in this database; add it with `pakgrid build-places`",
+                   required=False)
+        return
+    report.add("places layer version", meta["places_version"] == str(PLACES_VERSION),
+               f"database {meta['places_version']}, library {PLACES_VERSION}")
+    digest = report.places_sha256 = places_hash(store.places_rows(), list(store.iter_cell_places()))
+    report.add("places checksum", digest == meta.get("places_sha256"), digest[:16] + "…")
+    official = official_places_checksum(meta)
+    if official is not None:
+        report.add(f"places layer matches the official places version {meta['places_version']}",
+                   digest == official, "" if digest == official else
+                   f"official {official[:16]}…: these place tags differ from the official ones")
+    if full:
+        qs = [int(x, 2) for x in meta["quadrants_built"].split(",")]
+        rows = None if meta["rows_built"] == "all" else tuple(map(int, meta["rows_built"].split(":")))
+        boundary = Boundary.from_packed(store.boundary_rings())
+        fresh = build_places_data(_layout_from_store(store), boundary, qs, rows)
+        report.add("every place tag regenerated from the sources", places_hash(fresh.places, fresh.cells) == digest)

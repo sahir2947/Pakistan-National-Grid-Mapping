@@ -113,7 +113,7 @@ def hash_layout(h, quadrant_rows, row_rows):
 
 
 def build_database(path, quadrants=None, rows=None, progress=None, overwrite=False,
-                   pakistan_only=False, boundary=None):
+                   pakistan_only=False, boundary=None, places=True):
     """Generate the grid database at `path`.
 
     quadrants:     optional subset, as numbers 0-3 or codes such as "11".
@@ -121,6 +121,8 @@ def build_database(path, quadrants=None, rows=None, progress=None, overwrite=Fal
     pakistan_only: leave out cells wholly outside Pakistan (the "Pakistan edition").
                    IDs are unchanged; the cells left out simply are not stored.
     boundary:      the border to flag against; defaults to the packaged Pakistan boundary.
+    places:        also build the places layer (province, district, tehsil tags; see
+                   pakgrid.places). It can be added or rebuilt later with build_places().
 
     A subset produces a *partial* database, useful for tests and pilots; the
     quadrant, row and boundary tables are always complete.
@@ -198,6 +200,10 @@ def build_database(path, quadrants=None, rows=None, progress=None, overwrite=Fal
             "content_sha256": h.hexdigest(),
         }
         db.executemany("INSERT INTO meta VALUES (?, ?)", [(k, str(v)) for k, v in meta.items()])
+        if places:
+            from .places import build_places_data, write_places
+            write_places(db, build_places_data(layout, boundary, qs, row_sel, progress),
+                         "partial" if partial else "full")
         db.commit()
     finally:
         db.close()

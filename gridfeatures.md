@@ -5,13 +5,30 @@ is built as its own tested pull request, and its status is updated here.
 
 **Status:** ⬜ to do · 🔨 in progress · ✅ done
 
+## How pakgrid is structured
+
+Cells, sub-cells and quadrants are the foundation. Everything else is a layer
+of tags on their IDs, and every place name that exists, or will exist, is
+tagged to pakgrid cell and sub-cell IDs. Apps use those tags.
+
+```
+Big rectangle
+  Quadrants
+    Cells and sub-cells          ← foundation: IDs never change
+      Pakistan map cut-out       ← layers: tags on cell and sub-cell IDs,
+        Province                    each versioned and updatable on its own
+          Districts
+            Tehsils
+              Localities
+```
+
 ## Requested
 
 Features asked for by the project owner. Add new requests here.
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| | *(none yet)* | | |
+| R1 | **Place names for every cell and sub-cell** | 🔨 | **Layer 1 ✅:** province, district and tehsil on every cell and sub-cell (project.md §5.7; 79 tehsils have an uncertain district with the current data, see `pakgrid/data/PLACES_SOURCE.md`). **Layer 2 ⬜:** localities (cities, towns, villages, neighbourhoods) from OpenStreetMap; needs `download.geofabrik.de` allowed in the environment's network settings. **Later:** better district data from UN OCHA (needs `data.humdata.org`) |
 
 ## Proposed
 
@@ -42,3 +59,4 @@ Features already in the library, for reference.
 | Map viewer | `viewer/` |
 | Django backend guide, thread-safe `Grid`, official checksums | `docs/django.md` |
 | Navigation rules and conformance test file for ports | `conformance/` |
+| Places layer 1: province, district and tehsil tags (R1) | `pakgrid/places.py`, project.md §5.7 |

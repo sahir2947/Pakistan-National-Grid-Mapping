@@ -1,15 +1,17 @@
 """The public `Grid` class: lookups against the grid database."""
 
 import math
+import struct
 from bisect import bisect_right
 from dataclasses import dataclass
 
 from . import geodesy, ids, navigate, spec
 from .address import address_from_point
 from .boundary import FLAG_NAMES, OUTSIDE, Boundary, sub_flag
-from .checksums import official_checksum
+from .checksums import official_checksum, official_places_checksum
 from .errors import GridMismatchError, IntegrityError, InvalidIdError, NotInDatabaseError, OutsideGridError
 from .layout import SCALE, SUB, GridLayout, QuadrantLayout, to_e7
+from .places import UNCERTAIN_BELOW
 from .store import SCHEMA_VERSION, GridStore
 
 MAX_CANDIDATE_RADIUS_M = 5000.0
@@ -94,6 +96,55 @@ class Offset:
                 "text": self.text}
 
 
+PLACE_LEVELS = ("province", "district", "tehsil")
+
+
+@dataclass(frozen=True)
+class Place:
+    """A named area in the places layer: a province, district or tehsil."""
+    id: int
+    level: str                  # "province", "district" or "tehsil"
+    key: str                    # stable readable key, e.g. 'punjab/rawalpindi/taxila'
+    name: str                   # display name, e.g. 'Taxila'
+    parent_id: int | None       # the district of a tehsil, the province of a district
+    parent_share: float | None  # share of this place that its parent's source outline covers (0-1)
+    source_name: str            # the name exactly as in the source data, e.g. 'TAXILA'
+    source_id: str
+
+    @property
+    def uncertain(self):
+        """True when the source outlines put less than 70% of this place inside its parent."""
+        return self.parent_share is not None and self.parent_share < UNCERTAIN_BELOW
+
+    def to_dict(self):
+        return {"id": self.id, "level": self.level, "key": self.key, "name": self.name,
+                "parent_id": self.parent_id, "parent_share": self.parent_share, "uncertain": self.uncertain}
+
+
+@dataclass(frozen=True)
+class PlaceTags:
+    """The places a cell or sub-cell belongs to (see Grid.place)."""
+    tehsil: Place
+    district: Place | None
+    province: Place | None
+
+    @property
+    def district_uncertain(self):
+        """True when the tehsil's district comes from coarse outlines that disagree (see project.md)."""
+        return self.tehsil.uncertain
+
+    @property
+    def label(self):
+        """'Taxila, Rawalpindi, Punjab'"""
+        return ", ".join(p.name for p in (self.tehsil, self.district, self.province) if p)
+
+    def to_dict(self):
+        def brief(p):
+            return {"id": p.id, "key": p.key, "name": p.name} if p else None
+        return {"label": self.label, "tehsil": brief(self.tehsil), "district": brief(self.district),
+                "province": brief(self.province), "district_uncertain": self.district_uncertain}
+
+
 @dataclass(frozen=True)
 class Location:
     """Result of `Grid.locate`."""
@@ -106,6 +157,7 @@ class Location:
     confident: bool | None   # None when no accuracy was given
     candidates: tuple        # other sub-cell IDs within the accuracy radius, nearest first
     in_pakistan: bool        # the point itself, checked against the border line in border blocks
+    place: PlaceTags | None = None   # the sub-cell's tehsil, district and province (places layer)
 
     @property
     def id(self):
@@ -141,6 +193,7 @@ class Location:
             "edge_distance_m": round(self.edge_distance_m, 1),
             "candidates": [ids.sub_cell_code(c) for c in self.candidates],
             "in_pakistan": self.in_pakistan,
+            "place": self.place.to_dict() if self.place else None,
         }
 
 
@@ -163,6 +216,8 @@ class Grid:
                 f"database schema version {self.meta.get('schema_version')} is not {SCHEMA_VERSION}; "
                 "rebuild it with `pakgrid build`")
         self._boundary = None
+        self._places = None
+        self._has_places = None
         self.layout = _layout_from_store(store)
         if not self.layout.same_shape(GridLayout.from_spec()):
             raise GridMismatchError("database rows and columns do not match the grid rules of this library")
@@ -244,7 +299,8 @@ class Grid:
                 candidates = self._candidates(lat, lon, min(accuracy_m, MAX_CANDIDATE_RADIUS_M), sub.id)
 
         in_pk = sub.pakistan == "inside" or (sub.pakistan == "border" and self.boundary.contains(lat, lon))
-        return Location(lat, lon, sub, offset, edge, accuracy_m, confident, candidates, in_pk)
+        place = self._tags(cid, sub.index) if self.has_places else None
+        return Location(lat, lon, sub, offset, edge, accuracy_m, confident, candidates, in_pk, place)
 
     def _candidates(self, lat, lon, radius_m, own_id):
         m_lat, m_lon = geodesy.metres_per_degree(lat)
@@ -351,6 +407,113 @@ class Grid:
 
     direction = staticmethod(navigate.direction)
 
+    # -- Places (province, district, tehsil) -------------------------------
+
+    @property
+    def has_places(self):
+        """True if this database has the places layer (see pakgrid.places)."""
+        if self._has_places is None:
+            self._has_places = "places_version" in self.meta and self.store.has_places()
+        return self._has_places
+
+    def place(self, item, level="sub"):
+        """The tehsil, district and province of a sub-cell (or a cell), or None outside Pakistan.
+
+        A cell's place is the tehsil most of its 25 sub-cells are in; where a tehsil line runs
+        through the cell, ask for its sub-cells to get each one's own tehsil.
+        """
+        level, item_id = self._resolve_any(item, level)
+        self.layout.item_from_id(item_id, level)
+        if level == "cell":
+            return self._tags(item_id, None)
+        cid, sub = ids.split_sub_cell_id(item_id)
+        return self._tags(cid, sub)
+
+    def places(self, level=None):
+        """All places, or those of one level ("province", "district", "tehsil"), in ID order."""
+        found = self._place_table().values()
+        if level is None:
+            return list(found)
+        if level not in PLACE_LEVELS:
+            raise ValueError(f"level must be one of {PLACE_LEVELS}, got {level!r}")
+        return [p for p in found if p.level == level]
+
+    def find_places(self, text, level=None):
+        """Places whose name contains `text`, or whose key is `text` (case-insensitive)."""
+        t = text.strip().lower()
+        return [p for p in self.places(level) if t in p.name.lower() or t == p.key or t in p.source_name.lower()]
+
+    def get_place(self, place):
+        """A Place by ID, key ('punjab/rawalpindi/taxila') or Place."""
+        table = self._place_table()
+        if isinstance(place, Place):
+            return place
+        if isinstance(place, int) and not isinstance(place, bool) and place in table:
+            return table[place]
+        if isinstance(place, str):
+            for p in table.values():
+                if p.key == place.strip().lower():
+                    return p
+        raise InvalidIdError(f"no such place: {place!r} (use a place ID, or a key such as 'punjab/lahore')")
+
+    def cells_in_place(self, place, level="cell"):
+        """IDs of the cells (or sub-cells) in a province, district or tehsil, in ID order.
+
+        level="cell": cells whose main tehsil is in the place. level="sub": every sub-cell tagged
+        with a tehsil in the place, exactly, including those of cells that a boundary runs through.
+        """
+        p = self.get_place(place)
+        tehsils = {t.id for t in self._place_table().values() if t.level == "tehsil" and self._within(t, p)}
+        rows = self.store.cells_with_tehsils(tehsils)
+        if level == "cell":
+            return sorted(cid for cid, _, _ in rows)
+        if level != "sub":
+            raise ValueError(f"level must be 'cell' or 'sub', got {level!r}")
+        out = []
+        for cid, tehsil, subs in rows:
+            if subs is None:            # the 25 sub-cell IDs of a cell are consecutive
+                first = ids.sub_cell_id(cid, 0)
+                out.extend(range(first, first + SUB * SUB))
+        for cid, tehsil, subs in self.store.split_cells():
+            out.extend(ids.sub_cell_id(cid, k) for k, t in enumerate(struct.unpack("<25H", subs)) if t in tehsils)
+        out.sort()
+        return out
+
+    def _within(self, place, ancestor):
+        table = self._place_table()
+        while place is not None:
+            if place.id == ancestor.id:
+                return True
+            place = table.get(place.parent_id)
+        return False
+
+    def _place_table(self):
+        if self._places is None:
+            if not self.has_places:
+                raise NotInDatabaseError(f"this database ({self.store.path.name}) has no places layer; "
+                                         "add it with `pakgrid build-places`")
+            self._places = {r[0]: Place(r[0], PLACE_LEVELS[r[1] - 1], r[2], r[3], r[4],
+                                        None if r[5] is None else r[5] / 1000, r[6], r[7])
+                            for r in self.store.places_rows()}
+        return self._places
+
+    def _tags(self, cid, sub):
+        """PlaceTags of a cell (sub=None: its main tehsil) or of one of its sub-cells."""
+        table = self._place_table()
+        row = self.store.cell_place(cid)
+        if row is None:
+            if not self.store.has_cell(cid) and not self.store.pakistan_edition:
+                raise self.store._missing(cid)
+            return None                       # wholly outside Pakistan
+        tehsil, subs = row
+        if sub is not None and subs is not None:
+            tehsil = struct.unpack("<25H", subs)[sub]
+        if not tehsil:
+            return None                       # this sub-cell lies outside Pakistan
+        t = table[tehsil]
+        d = table.get(t.parent_id)
+        return PlaceTags(t, d, table.get(d.parent_id) if d else None)
+
     # -- Readable codes --------------------------------------------------
 
     @staticmethod
@@ -393,6 +556,16 @@ class Grid:
                 "boundary_license": self.meta.get("boundary_license"),
                 "attribution": self.meta.get("boundary_attribution"),
                 "boundary_sha256": self.meta.get("boundary_sha256"),
+            },
+            "places": None if "places_version" not in self.meta else {
+                "version": int(self.meta["places_version"]),
+                "places": int(self.meta.get("places_count", 0)),
+                "cells": int(self.meta.get("places_cells", 0)),
+                "split_cells": int(self.meta.get("places_split_cells", 0)),
+                "sources": self.meta.get("places_sources"),
+                "attribution": self.meta.get("places_attribution"),
+                "places_sha256": self.meta.get("places_sha256"),
+                "official_sha256": official_places_checksum(self.meta),
             },
         }
 

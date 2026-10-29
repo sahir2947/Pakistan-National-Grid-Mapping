@@ -1,11 +1,12 @@
-"""Command-line tools: pakgrid build | verify | locate | show | info | export-layout | export-conformance."""
+"""Command-line tools: pakgrid build | build-places | verify | locate | show | places | info |
+export-layout | export-conformance."""
 
 import argparse
 import json
 import os
 import sys
 
-from . import spec
+from . import ids, spec
 from .errors import PakgridError
 
 DEFAULT_DB = os.environ.get("PAKGRID_DB", f"pakgrid_v{spec.GRID_VERSION}.sqlite")
@@ -23,6 +24,11 @@ def main(argv=None):
     p.add_argument("--pakistan-only", action="store_true",
                    help="leave out cells wholly outside Pakistan (IDs are unchanged)")
     p.add_argument("--overwrite", action="store_true", help="replace an existing file")
+    p.add_argument("--no-places", action="store_true",
+                   help="leave out the places layer (province, district, tehsil); add it later with build-places")
+
+    p = sub.add_parser("build-places", help="add or rebuild the places layer in an existing database")
+    p.add_argument("--db", default=DEFAULT_DB)
 
     p = sub.add_parser("verify", help="check a database against the grid rules and its checksum")
     p.add_argument("--db", default=DEFAULT_DB)
@@ -41,10 +47,18 @@ def main(argv=None):
     p.add_argument("code")
     p.add_argument("--db", default=DEFAULT_DB)
 
+    p = sub.add_parser("places", help="list places (province, district, tehsil), or the cells of one")
+    p.add_argument("text", nargs="?", help="only places whose name contains this text, or with this key")
+    p.add_argument("--level", choices=("province", "district", "tehsil"))
+    p.add_argument("--cells", action="store_true",
+                   help="print the codes of the cells in the place (TEXT must match exactly one place)")
+    p.add_argument("--db", default=DEFAULT_DB)
+
     p = sub.add_parser("info", help="print grid and database information")
     p.add_argument("--db", default=DEFAULT_DB)
 
-    p = sub.add_parser("export-layout", help="write the map viewer's data files (layout.js, boundary.js)")
+    p = sub.add_parser("export-layout",
+                       help="write the map viewer's data files (layout.js, boundary.js, places.js)")
     p.add_argument("-o", "--output-dir", default="viewer")
 
     p = sub.add_parser("export-conformance",
@@ -63,12 +77,35 @@ def _build(args):
     from .builder import build_database
     rows = tuple(int(x) for x in args.rows.split(":")) if args.rows else None
     report = build_database(args.output, quadrants=args.quadrant, rows=rows, overwrite=args.overwrite,
-                            pakistan_only=args.pakistan_only,
+                            pakistan_only=args.pakistan_only, places=not args.no_places,
                             progress=lambda msg: print(f"building {msg}…", file=sys.stderr))
     print(f"wrote {report.path}: {report.cells:,} cells, {report.sub_cells:,} sub-cells, "
           f"{report.size_bytes / 1e6:.0f} MB in {report.seconds:.1f} s")
     print(f"content sha256: {report.content_sha256}")
     return 0
+
+
+def _build_places(args):
+    from .places import build_places
+    meta = build_places(args.db, progress=lambda msg: print(f"building {msg}…", file=sys.stderr))
+    print(f"wrote the places layer (version {meta['places_version']}) to {args.db}: {meta['places_count']} places, "
+          f"{meta['places_cells']:,} cells tagged")
+    print(f"places sha256: {meta['places_sha256']}")
+    return 0
+
+
+def _places(grid, args):
+    found = grid.find_places(args.text, args.level) if args.text else grid.places(args.level)
+    if not args.cells:
+        return [p.to_dict() for p in found]
+    exact = [p for p in found if args.text and args.text.strip().lower() in (p.key, p.name.lower())]
+    choice = exact if len(exact) == 1 else found
+    if len(choice) != 1:
+        from .errors import InvalidIdError
+        raise InvalidIdError(f"{len(choice)} places match {args.text!r}; give a key such as "
+                             f"{choice[0].key!r}" if choice else f"no place matches {args.text!r}")
+    p = choice[0]
+    return {"place": p.to_dict(), "cells": [ids.cell_code(c) for c in grid.cells_in_place(p)]}
 
 
 def _verify(args):
@@ -85,7 +122,8 @@ def _verify(args):
 
 def _export_layout(args):
     from .export import write_viewer_files
-    for path in write_viewer_files(args.output_dir):
+    for path in write_viewer_files(args.output_dir,
+                                   progress=lambda msg: print(f"building {msg}…", file=sys.stderr)):
         print(f"wrote {path}")
     return 0
 
@@ -110,11 +148,17 @@ def _show(grid, args):
     from .ids import parse_code
     level, _ = parse_code(args.code)
     item = grid.cell(args.code) if level == "cell" else grid.sub_cell(args.code)
-    return item.to_dict()
+    out = item.to_dict()
+    if grid.has_places:
+        place = grid.place(args.code)
+        out["place"] = place.to_dict() if place else None
+    return out
 
 
 _COMMANDS = {
     "build": _build,
+    "build-places": _build_places,
+    "places": _with_grid(_places),
     "verify": _verify,
     "locate": _with_grid(lambda grid, a: grid.locate(a.lat, a.lon, a.accuracy).to_dict()),
     "show": _with_grid(_show),

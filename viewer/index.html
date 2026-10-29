@@ -64,6 +64,11 @@
   .nav-rider { pointer-events: auto; cursor: grab; }
   .arrow-head { pointer-events: none; }
   .arrow-head svg { display: block; width: 100%; height: 100%; filter: drop-shadow(0 0 2px #fff); }
+  .panel a.place { color: var(--accent); text-decoration: none; font-weight: 600; cursor: pointer; }
+  .panel a.place:hover { text-decoration: underline; }
+  .warn { color: #b45309; font-weight: 600; }
+  .place-list { max-height: 220px; overflow: auto; margin: 4px 0; padding: 0; list-style: none; }
+  .place-list li { padding: 3px 0; border-bottom: 1px solid var(--line); }
   .legend span { display: inline-block; width: 14px; height: 10px; margin-right: 6px; vertical-align: middle;
                  border: 2px solid; }
   @media (max-width: 640px) {
@@ -77,10 +82,11 @@
 <div id="map"></div>
 <form class="bar" id="search">
   <input id="q" type="search" autocomplete="off" spellcheck="false"
-         placeholder="Address (11-0140-0471-00 W23 S18), code, or lat, lon (31.5204, 74.3587)" aria-label="Search">
+         placeholder="Place (Taxila), address (11-0140-0471-00 W23 S18), code, or lat, lon" aria-label="Search">
   <button class="primary" type="submit">Go</button>
   <button type="button" id="me" title="Find my grid block">My location</button>
   <label class="toggle"><input type="checkbox" id="pkonly"> Pakistan only</label>
+  <label class="toggle" title="Colour each block by its tehsil"><input type="checkbox" id="placeson"> Places</label>
 </form>
 <div class="panel" id="panel"></div>
 <div class="status" id="status"></div>
@@ -89,6 +95,7 @@
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script src="layout.js"></script>
 <script src="boundary.js"></script>
+<script src="places.js"></script>
 <script src="pakgrid.js"></script>
 <script src="navigation.js"></script>
 <script>
@@ -96,6 +103,7 @@
   "use strict";
   var grid = new PakGrid.Grid(PAKGRID_LAYOUT);
   var border = new PakGrid.Boundary(PAKGRID_BOUNDARY);
+  var places = new PakGrid.Places(PAKGRID_PLACES);
   var B = grid.bounds, M = grid.mid;
   var FLAG = PakGrid.FLAG_NAMES;
   // cell and sub-cell line styles by border flag: outside, border, inside
@@ -119,7 +127,7 @@
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' +
-      ' · Border: <a href="https://www.geoboundaries.org">geoBoundaries</a> (ODbL)'
+      ' · Border and places: <a href="https://www.geoboundaries.org">geoBoundaries</a> (ODbL; tehsils © PBS 2017)'
   }).addTo(map);
   var canvas = L.canvas({ padding: 0.3 });
 
@@ -171,11 +179,25 @@
   var labelLayer = L.layerGroup().addTo(map);
   var statusEl = document.getElementById("status");
 
-  function drawBoxes(boxes, level, styles) {
+  // A distinct colour for each place, spread around the colour wheel.
+  function placeColour(id) { return "hsl(" + Math.round((id * 137.508) % 360) + ", 70%, 52%)"; }
+
+  // Tehsil of a box returned by grid.itemsInBox (0 = none).
+  function boxTag(b, level) {
+    if (level === "cell") return places.tag(b[4], b[5], b[6], null);
+    return places.tagAt(b[4], b[5], b[6]);
+  }
+
+  function drawBoxes(boxes, level, styles, fillByPlace) {
     boxes.forEach(function (b) {
       var style = styles[b.flag];
       if (level === "cell" && b.flag !== 0 && boxes.withSubs) style = L.extend({}, style, { weight: 2 });
-      L.rectangle([[b[0], b[1]], [b[2], b[3]]], L.extend({ renderer: canvas, fill: false, interactive: false }, style))
+      var fill = { fill: false };
+      if (fillByPlace) {
+        var tag = boxTag(b, level);
+        if (tag) fill = { fill: true, fillColor: placeColour(tag), fillOpacity: 0.38 };
+      }
+      L.rectangle([[b[0], b[1]], [b[2], b[3]]], L.extend({ renderer: canvas, interactive: false }, style, fill))
         .addTo(gridLayer);
     });
   }
@@ -217,20 +239,27 @@
       else msg += z >= SUB_ZOOM ? " · zoom in to see sub-cells" : " · zoom in to see ~200 m sub-cells";
     }
 
-    // sub-cells first, so the cell lines stay on top
-    if (subs) drawBoxes(subs, "sub", SUB_STYLE);
-    if (cells) { cells.withSubs = !!subs; drawBoxes(cells, "cell", CELL_STYLE); }
+    // sub-cells first, so the cell lines stay on top; with Places on, the smallest boxes drawn are
+    // coloured by tehsil
+    var byPlace = document.getElementById("placeson").checked;
+    if (subs) drawBoxes(subs, "sub", SUB_STYLE, byPlace);
+    if (cells) { cells.withSubs = !!subs; drawBoxes(cells, "cell", CELL_STYLE, byPlace && !subs); }
     if (cells && z >= CELL_LABEL_ZOOM && cells.length <= 400) {
       drawLabels(cells, true, "cell-label", [96, 12], function (r) { return PakGrid.cellCode(r.q, r.row, r.col); });
     }
     if (subs && z >= SUB_LABEL_ZOOM && subs.length <= 300) {
       drawLabels(subs, false, "sub-label", [20, 12], function (r) { return String(r.subRow * 5 + r.subCol); });
     }
+    var c = map.getCenter(), here = grid.locate(c.lat, c.lng);
+    var at = here && places.of(here.q, here.row, here.col, here.subRow * 5 + here.subCol);
+    if (at) msg += " · Centre: " + at.label;
+    else if (document.getElementById("placeson").checked && z < CELL_ZOOM) msg += " · Places: zoom in to colour blocks by tehsil";
     statusEl.textContent = msg;
     statusEl.classList.remove("hide");
   }
   map.on("moveend", drawGrid);
   document.getElementById("pkonly").addEventListener("change", drawGrid);
+  document.getElementById("placeson").addEventListener("change", drawGrid);
 
   // -- Selection -----------------------------------------------------------
   var selLayer = L.layerGroup().addTo(map);
@@ -250,6 +279,75 @@
     var m = PakGrid.metresPerDegree((b.south + b.north) / 2);
     return Math.round((b.east - b.west) * m.lon) + " m × " + Math.round((b.north - b.south) * m.lat) + " m";
   }
+
+  function countLevel(level) {
+    return places.list.filter(function (p) { return p.level === level; }).length.toLocaleString();
+  }
+  function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return "&#" + c.charCodeAt(0) + ";"; }); }
+  function placeLink(p) {
+    return p ? "<a class='place' data-place='" + p.id + "'>" + esc(p.name) + "</a>" : "–";
+  }
+  function placeRows(tags) {
+    if (!tags) return [["Place", "outside Pakistan"]];
+    return [["Tehsil", placeLink(tags.tehsil)],
+            ["District", placeLink(tags.district) + (tags.uncertain ? " <span class='warn' title='The district " +
+              "outlines in the source data disagree with this tehsil; the district may be wrong'>uncertain</span>" : "")],
+            ["Province", placeLink(tags.province)]];
+  }
+
+  // A province, district or tehsil: zoom to it and describe it.
+  function showPlace(p) {
+    if (nav.target) nav.close(true);
+    selLayer.clearLayers();
+    arrow = arrowMarker = null;
+    var path = places.path(p), x = p.extent;
+    var kids = places.list.filter(function (c) { return c.parentId === p.id; });
+    var html = "<div class='code'>" + esc(p.name) + "</div><div class='sub'>" +
+               p.level.charAt(0).toUpperCase() + p.level.slice(1) +
+               (path.length > 1 ? " · " + path.slice(1).map(placeLink).join(", ") : "") + "</div>";
+    html += rowsHtml([["Key", "<code>" + esc(p.key) + "</code>"], ["Place ID", String(p.id)]]
+      .concat(p.parentShare != null ? [["Share in its " + (p.level === "tehsil" ? "district" : "province"),
+        Math.round(p.parentShare * 100) + "%" + (p.uncertain ? " <span class='warn'>uncertain</span>" : "")]] : [])
+      .concat(x ? [["Extent", x[0].toFixed(3) + "–" + x[2].toFixed(3) + "° N, " + x[1].toFixed(3) + "–" + x[3].toFixed(3) + "° E"]] : []));
+    if (p.uncertain) {
+      html += "<p class='sub warn'>The district outlines in the source data disagree with this tehsil, so its " +
+              "district may be wrong (see PLACES_SOURCE.md).</p>";
+    }
+    if (kids.length) {
+      html += "<h3>" + (p.level === "province" ? "Districts" : "Tehsils") + " (" + kids.length + ")</h3><ul class='place-list'>" +
+              kids.map(function (c) { return "<li>" + placeLink(c) + "</li>"; }).join("") + "</ul>";
+    }
+    html += "<p class='sub'>Blocks are coloured by tehsil while <b>Places</b> is ticked.</p>" +
+            "<p><button type='button' id='clear'>Clear</button></p>";
+    panel.innerHTML = html;
+    document.getElementById("clear").onclick = function () {
+      selLayer.clearLayers(); showSummary(); history.replaceState(null, "", location.pathname);
+    };
+    document.getElementById("placeson").checked = true;
+    if (x) {
+      L.rectangle([[x[0], x[1]], [x[2], x[3]]], { color: placeColour(p.id), weight: 2, dashArray: "6 4", fill: false,
+        interactive: false }).addTo(selLayer);
+      var view = viewPadding();
+      view.maxZoom = 13;
+      map.fitBounds([[x[0], x[1]], [x[2], x[3]]], view);
+    }
+    drawGrid();
+    history.replaceState(null, "", "#place=" + p.key);
+  }
+
+  function showPlaceChoices(text, found) {
+    panel.innerHTML = "<h2>Places matching “" + esc(text) + "”</h2><ul class='place-list'>" +
+      found.slice(0, 60).map(function (p) {
+        return "<li>" + placeLink(p) + " <span class='sub'>" + p.level +
+               (p.parentId ? ", " + places.path(p).slice(1).map(function (a) { return esc(a.name); }).join(", ") : "") +
+               "</span></li>";
+      }).join("") + "</ul>" + (found.length > 60 ? "<p class='sub'>… and " + (found.length - 60) + " more</p>" : "");
+  }
+
+  panel.addEventListener("click", function (e) {
+    var a = e.target.closest && e.target.closest("a.place");
+    if (a && places.byId[a.getAttribute("data-place")]) { e.preventDefault(); showPlace(places.byId[a.getAttribute("data-place")]); }
+  });
 
   function showSummary() {
     var d = PAKGRID_LAYOUT;
@@ -271,6 +369,12 @@
       "<div><span style='border-color:#7c3aed'></span>Cell on the border</div>" +
       "<div><span style='border-color:#9ca3af;border-style:dashed'></span>Cell outside Pakistan</div>" +
       "<div style='margin-top:4px'>" + border.attribution + "</div></div>" +
+      "<h3>Places</h3>" + rowsHtml([
+        ["Provinces", countLevel("province")], ["Districts", countLevel("district")], ["Tehsils", countLevel("tehsil")],
+        ["Places version", String(places.version)]]) +
+      "<div class='sub'>Every cell and sub-cell is tagged with its tehsil, district and province. Tick " +
+      "<b>Places</b> to colour blocks by tehsil, or search for a place such as <i>Taxila</i>. " +
+      esc(places.attribution) + ".</div>" +
       "<p class='sub'>Tap the map to see the cell and sub-cell at that point. " +
       "Cells appear from zoom " + CELL_ZOOM + ", sub-cells from zoom " + SUB_ZOOM + ".</p>";
   }
@@ -355,6 +459,23 @@
         Math.floor(sub.sub / 5) + ", column " + (sub.sub % 5) + ")"]] : []).concat(
       [["Cell in Pakistan", FLAG[grid.flag(border, r.q, r.row, r.col, null)]]]).concat(
       sub ? [["Sub-cell in Pakistan", FLAG[grid.flag(border, r.q, r.row, r.col, sub.sub)]]] : []));
+    var subTags = sub ? places.of(r.q, r.row, r.col, sub.sub) : null;
+    var cellTags = places.of(r.q, r.row, r.col, null);
+    html += "<h3>Place" + (sub ? " (sub-cell)" : " (cell)") + "</h3>" + rowsHtml(placeRows(sub ? subTags : cellTags));
+    if (sub && cellTags && (!subTags || subTags.tehsil.id !== cellTags.tehsil.id)) {
+      html += "<div class='sub'>A tehsil line runs through this cell; most of it is in " + placeLink(cellTags.tehsil) + ".</div>";
+    } else if (!sub && cellTags) {
+      var inCell = {};
+      for (var sk = 0; sk < 25; sk++) {
+        var st = places.tag(r.q, r.row, r.col, sk);
+        if (st) inCell[st] = (inCell[st] || 0) + 1;
+      }
+      var cellPlaceIds = Object.keys(inCell);
+      if (cellPlaceIds.length > 1) {
+        html += "<div class='sub'>A tehsil line runs through this cell: " + cellPlaceIds.map(function (id) {
+          return placeLink(places.byId[id]) + " (" + inCell[id] + " of 25 sub-cells)"; }).join(", ") + ".</div>";
+      }
+    }
     if (sub) {
       html += "<h3>Sub-cell · " + sizeText(sub.bounds) + "</h3>" +
               rowsHtml([["Centroid", fmt(sub.centroid[0]) + ", " + fmt(sub.centroid[1])]].concat(boundsRows(sub.bounds)));
@@ -430,7 +551,12 @@
     if (parsed) { select({ loc: parsed, fly: true, instant: instant }); return; }
     var pt = pointFromText(text);
     if (pt) { selectPoint(pt[0], pt[1], true, undefined, instant); return; }
-    flash("Enter a grid address such as 11-0140-0471-00 W23 S18, a code, or lat, lon");
+    var pm = /^place=(.+)$/.exec(text), want = (pm ? pm[1] : text).trim().toLowerCase();
+    var found = places.find(want);
+    var exact = found.filter(function (p) { return p.key === want || p.name.toLowerCase() === want; });
+    if (exact.length === 1 || found.length === 1) { showPlace(exact.length === 1 ? exact[0] : found[0]); return; }
+    if (found.length) { showPlaceChoices(text, found); return; }
+    flash("Enter a place (Taxila), a grid address such as 11-0140-0471-00 W23 S18, a code, or lat, lon");
   }
 
   // [lat, lon] from 'lat, lon' or a grid address ('11-0140-0471-00 W23 S18'); null otherwise.
