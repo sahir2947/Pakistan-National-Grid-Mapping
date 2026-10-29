@@ -11,7 +11,7 @@ Features asked for by the project owner. Add new requests here.
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| | *(none yet)* | | |
+| R1 | **Place names for every cell and sub-cell** | ⬜ | Attach each cell and sub-cell to real places in Pakistan. Layer 1: province, district and tehsil from official boundaries (geoBoundaries ADM1–ADM3, full coverage). Layer 2: nearest city, town, village or neighbourhood from OpenStreetMap (needs OSM data; see notes in the conversation/PR) |
 
 ## Proposed
 
