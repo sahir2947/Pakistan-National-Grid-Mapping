@@ -796,6 +796,94 @@
     return rings;
   }
 
+  // -- User places preview (same rules as pakgrid.userplaces) ------------------
+
+  var USER_MAX_SUB_CELLS = 25000, USER_MAX_REFERENCE_KM = 50;
+
+  // Even-odd point-in-polygon in exact integer arithmetic, as pakgrid.userplaces.point_in_rings.
+  // `rings` hold [lat_e7, lon_e7]; the products stay below 2^53 for any locality-sized polygon.
+  function pointInRings(latE7, lonE7, rings) {
+    var inside = false;
+    for (var r = 0; r < rings.length; r++) {
+      var ring = rings[r];
+      for (var k = 0; k + 1 < ring.length; k++) {
+        var y1 = ring[k][0], x1 = ring[k][1], y2 = ring[k + 1][0], x2 = ring[k + 1][1];
+        if ((y1 > latE7) !== (y2 > latE7)) {
+          var lhs = (lonE7 - x1) * (y2 - y1), rhs = (latE7 - y1) * (x2 - x1);
+          if (y2 > y1 ? lhs < rhs : lhs > rhs) inside = !inside;
+        }
+      }
+    }
+    return inside;
+  }
+
+  // Closed rings of [lat_e7, lon_e7] from [[lat, lon], ...] or [[[lat, lon], ...], ...].
+  function ringsE7(polygon) {
+    var rings = typeof polygon[0][0] === "number" ? [polygon] : polygon;
+    return rings.map(function (ring) {
+      var pts = ring.map(function (p) { return [toE7(p[0]), toE7(p[1])]; });
+      var a = pts[0], b = pts[pts.length - 1];
+      if (a[0] !== b[0] || a[1] !== b[1]) pts.push([a[0], a[1]]);
+      return pts;
+    });
+  }
+
+  // What adding `polygon` as a user locality would give: its sub-cells (centroid inside, in
+  // Pakistan), tehsil, centre and the `nearest` official localities as references.
+  // {subCells: [{id, code, q, row, col, sub, bounds}], tehsil, centre: [lat, lon], references, error}
+  Places.prototype.userPreview = function (grid, polygon, nearest) {
+    var rings = ringsE7(polygon), ys = [], xs = [];
+    rings.forEach(function (r) { r.forEach(function (p) { ys.push(p[0]); xs.push(p[1]); }); });
+    var s = Math.min.apply(null, ys), n = Math.max.apply(null, ys), w = Math.min.apply(null, xs), e = Math.max.apply(null, xs);
+    if ((n - s) * (e - w) > USER_MAX_SUB_CELLS * 16 * 18000 * 21000) return { error: "the polygon is far too large for a locality" };
+    var items = grid.itemsInBox(s / SCALE, w / SCALE, n / SCALE, e / SCALE, "sub", USER_MAX_SUB_CELLS * 16) || [];
+    var subs = [], counts = {}, self = this;
+    items.forEach(function (it) {
+      var latE7 = toE7(bandCentroidLat(it[0], it[2])), lonE7 = toE7((it[1] + it[3]) / 2);
+      if (!pointInRings(latE7, lonE7, rings)) return;
+      var tehsil = self.tagAt(it[4], it[5], it[6]);
+      if (!tehsil) return;
+      var row = Math.floor(it[5] / SUB), col = Math.floor(it[6] / SUB), sub = (it[5] % SUB) * SUB + it[6] % SUB;
+      var cid = cellId(it[4], row, col);
+      subs.push({ id: subCellId(cid, sub), code: subCellCode(it[4], row, col, sub), q: it[4], row: row, col: col,
+                  sub: sub, bounds: [it[0], it[1], it[2], it[3]], latE7: latE7, lonE7: lonE7, tehsil: tehsil });
+      counts[tehsil] = (counts[tehsil] || 0) + 1;
+    });
+    subs.sort(function (a, b) { return a.id - b.id; });
+    if (!subs.length) return { subCells: [], error: "the locality covers no sub-cell in Pakistan: a sub-cell counts when its centre is inside the polygon" };
+    if (subs.length > USER_MAX_SUB_CELLS) return { subCells: subs, error: "the locality covers " + subs.length + " sub-cells; at most " + USER_MAX_SUB_CELLS + " are allowed" };
+    var top = 0, tehsil = null;
+    Object.keys(counts).map(Number).sort(function (a, b) { return a - b; }).forEach(function (t) {
+      if (counts[t] > top) { top = counts[t]; tehsil = t; }
+    });
+    var my = 0, mx = 0;
+    subs.forEach(function (c) { my += c.latE7; mx += c.lonE7; });
+    my /= subs.length; mx /= subs.length;
+    var best = null, bestKey = null;
+    subs.forEach(function (c) {
+      var dy = c.latE7 - my, dx = 0.85 * (c.lonE7 - mx), k = [dy * dy + dx * dx, c.latE7, c.lonE7];
+      if (!bestKey || k[0] < bestKey[0] || (k[0] === bestKey[0] && (k[1] < bestKey[1] || (k[1] === bestKey[1] && k[2] < bestKey[2])))) {
+        best = c; bestKey = k;
+      }
+    });
+    var lat = best.latE7 / SCALE, lon = best.lonE7 / SCALE;
+    var found = [];
+    this.list.forEach(function (p) {
+      if (p.level !== "locality") return;
+      var east = (p.lon - lon) * 94350.0, north = (p.lat - lat) * 111000.0;
+      found.push([east * east + north * north, p.id, p]);
+    });
+    found.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+    var refs = found.slice(0, nearest == null ? 1 : nearest).map(function (f) {
+      var p = f[2], way = direction(p.lat, p.lon, lat, lon), off = localOffset(p.lat, p.lon, lat, lon);
+      return { key: p.key, name: p.name, distance_m: way.distance_m, direction: way.compass_short,
+               bearing_deg: way.bearing_deg, east_m: off.east, north_m: off.north,
+               tooFar: way.distance_m > USER_MAX_REFERENCE_KM * 1000,
+               text: formatDistance(way.distance_m) + " " + way.compass_short + " of " + p.name };
+    });
+    return { subCells: subs, tehsil: this.byId[tehsil], centre: [lat, lon], references: refs };
+  };
+
   Places.prototype.path = function (place) {
     var out = [];
     for (var p = place; p; p = this.byId[p.parentId]) out.push(p);
@@ -807,6 +895,7 @@
     toE7: toE7, bandCentroidLat: bandCentroidLat, metresPerDegree: metresPerDegree,
     localOffset: localOffset, applyOffset: applyOffset, addressText: addressText, bearing: bearing, compass: compass, direction: direction, turnWords: turnWords,
     formatDistance: formatDistance, NavigationSession: NavigationSession, cellId: cellId, subCellId: subCellId,
+    pointInRings: pointInRings,
     cellCode: cellCode, subCellCode: subCellCode
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

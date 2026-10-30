@@ -29,6 +29,7 @@ Features asked for by the project owner. Add new requests here.
 | # | Feature | Status | Notes |
 |---|---|---|---|
 | R1 | **Place names for every cell and sub-cell** | ✅ | **Layer 1 ✅:** province, district and tehsil on every cell and sub-cell, now from UN OCHA with the official hierarchy (577 tehsils, 160 districts). **Layer 2 ✅:** localities: 32,512 cities, towns, villages, neighbourhoods and residential areas from OpenStreetMap (HOT export), with Urdu names where mapped, "in" or "near X (1.2 km SE)" (places version 2; project.md §5.7, `pakgrid/data/PLACES_SOURCE.md`) |
+| R2 | **User data feeding: localities drawn by users** | ✅ | An authorised user draws a polygon around cells and sub-cells (or lists them) and names a locality. The library stores it in a separate user places file, located from one or more known localities as distance and direction vectors (`500 m SW of Askari 2`). Lookups show it inside the polygon. Every change is kept with its author. The viewer's **Draw** tool previews it (project.md §5.8) |
 
 ## Proposed
 
@@ -60,3 +61,4 @@ Features already in the library, for reference.
 | Django backend guide, thread-safe `Grid`, official checksums | `docs/django.md` |
 | Navigation rules and conformance test file for ports | `conformance/` |
 | Places: province, district, tehsil and locality tags (R1, places version 2) | `pakgrid/places.py`, project.md §5.7 |
+| User places: localities drawn by users, with references and history (R2) | `pakgrid/userplaces.py`, project.md §5.8 |

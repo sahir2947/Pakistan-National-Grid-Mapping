@@ -407,6 +407,44 @@ places `grid.place(...)`, `grid.find_places("sahiwal")`,
 `grid.get_place("punjab/lahore")` and `grid.cells_in_place(...)` (Lahore
 district: 1,746 cells in ~16 ms).
 
+**Localities your users add.** Shop owners and riders know places the
+official data misses (a gali, a market). Let trusted users draw them in the
+app and send the polygon to an endpoint; your backend checks the permission
+and the library stores the locality, located from known localities by
+distance and direction ([project.md §5.8](../project.md#58-user-places-localities-drawn-by-an-apps-users)).
+Keep the user places file on the same volume as your database backups, not
+inside the image.
+
+```python
+# settings.py
+PAKGRID_USER_PLACES = os.environ.get("PAKGRID_USER_PLACES", "/data/user_places.sqlite")
+
+# grid.py (beside get_grid): attach once, when the grid is first opened
+#     _grid.attach_user_places(settings.PAKGRID_USER_PLACES)
+
+# views.py
+from pakgrid import UserPlacesError
+
+class UserLocalityCreate(APIView):
+    permission_classes = [IsAuthenticated, DjangoModelPermissions]   # or your own "can map" check
+
+    def post(self, request):
+        d = request.data          # {"name": "Gali 7", "polygon": [[lat, lon], ...], "nearest": 2}
+        try:
+            loc = get_grid().user_places.add(
+                d["name"], author=request.user.username, polygon=d["polygon"],
+                kind=d.get("kind", "neighbourhood"), local_name=d.get("local_name"),
+                references=d.get("references", []), nearest=d.get("nearest"))
+        except UserPlacesError as exc:
+            return Response({"error": str(exc)}, status=400)
+        return Response(loc.to_dict(), status=201)
+```
+
+From then on `place` in every `locate` response shows the new locality
+inside it (`"user": true`, with its `references`), and the OpenStreetMap one
+stays in `osm_locality`. Back up with
+`pakgrid user-places --file /data/user_places.sqlite export backup.json`.
+
 **Confidence.** When the app sends the phone's GPS accuracy, `confident` says
 whether the pin could belong to a neighbouring block, and `candidates` lists
 those blocks. For a saved address, ask the customer to confirm the pin on the

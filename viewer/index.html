@@ -60,6 +60,12 @@
   .nav-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
   .panel button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   .panel button.go { background: #dc2626; border-color: #dc2626; color: #fff; }
+  .bar button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .panel textarea { width: 100%; box-sizing: border-box; min-height: 92px; font: 12px/1.4 ui-monospace, Menlo, monospace;
+                    border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+  .panel input.name { width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px;
+                      background: var(--bg); color: var(--fg); font-size: 14px; }
+  .error { color: #dc2626; font-weight: 600; }
   .nav-target, .nav-rider { pointer-events: none; }
   .nav-rider { pointer-events: auto; cursor: grab; }
   .arrow-head { pointer-events: none; }
@@ -87,6 +93,7 @@
   <button type="button" id="me" title="Find my grid block">My location</button>
   <label class="toggle"><input type="checkbox" id="pkonly"> Pakistan only</label>
   <label class="toggle" title="Colour each block by its tehsil"><input type="checkbox" id="placeson"> Places</label>
+  <button type="button" id="draw" title="Draw a new locality and see the sub-cells it would tag">Draw</button>
 </form>
 <div class="panel" id="panel"></div>
 <div class="status" id="status"></div>
@@ -543,8 +550,99 @@
 
   map.on("click", function (e) {
     if (nav.target) return;   // while navigating, taps don't change the selection
+    if (drawing) { addVertex(e.latlng.lat, e.latlng.lng); return; }
     selectPoint(e.latlng.lat, e.latlng.lng, false);
   });
+
+  // -- Draw a user locality (pakgrid.userplaces) ---------------------------------
+  // Tap corners to draw a polygon; the panel shows the sub-cells it would tag (centre inside, in
+  // Pakistan), its tehsil, and where it is from the nearest known localities, plus the call that
+  // adds it with the library. Nothing is stored here: the viewer has no backend.
+  var drawing = null, drawBtn = document.getElementById("draw");
+  function startDrawing() {
+    if (nav.target) nav.close(true);
+    selLayer.clearLayers();
+    arrow = arrowMarker = null;
+    drawing = { pts: [], name: "", nearest: 3 };
+    drawBtn.classList.add("on");
+    map.doubleClickZoom.disable();
+    showDrawing();
+  }
+  function stopDrawing() {
+    drawing = null;
+    drawBtn.classList.remove("on");
+    map.doubleClickZoom.enable();
+    selLayer.clearLayers();
+    showSummary();
+  }
+  drawBtn.addEventListener("click", function () { if (drawing) stopDrawing(); else startDrawing(); });
+  function addVertex(lat, lon) {
+    drawing.pts.push([+lat.toFixed(7), +lon.toFixed(7)]);
+    drawing.preview = null;
+    showDrawing();
+  }
+  function showDrawing() {
+    var d = drawing, pts = d.pts;
+    selLayer.clearLayers();
+    if (pts.length >= 3 && d.preview && d.preview.subCells) {
+      d.preview.subCells.slice(0, 5000).forEach(function (c) {
+        L.rectangle([[c.bounds[0], c.bounds[1]], [c.bounds[2], c.bounds[3]]], { renderer: canvas, color: "#d9480f",
+          weight: 0.6, fillColor: "#d9480f", fillOpacity: 0.35, interactive: false }).addTo(selLayer);
+      });
+    }
+    if (pts.length) {
+      (pts.length >= 3 ? L.polygon(pts, { fill: false }) : L.polyline(pts))
+        .setStyle({ color: "#111827", weight: 2.5, dashArray: d.preview ? null : "6 4", interactive: false }).addTo(selLayer);
+      pts.forEach(function (p) {
+        L.circleMarker(p, { radius: 4, color: "#111827", fillColor: "#fff", fillOpacity: 1, weight: 2,
+                            interactive: false }).addTo(selLayer);
+      });
+    }
+    var html = "<h2>Draw a locality</h2><div class='sub'>Tap the map at each corner, then press <b>Done</b>. " +
+               "A sub-cell is tagged when its centre is inside the shape.</div>" +
+               "<p><button type='button' id='d-undo'" + (pts.length ? "" : " disabled") + ">Undo</button> " +
+               "<button type='button' id='d-done' class='on'" + (pts.length >= 3 ? "" : " disabled") + ">Done</button> " +
+               "<button type='button' id='d-cancel'>Cancel</button></p>";
+    var pv = d.preview;
+    if (pv && pv.error) html += "<p class='error'>" + esc(pv.error) + "</p>";
+    if (pv && !pv.error) {
+      var t = pv.tehsil, path = places.path(t);
+      html += "<h3>New locality</h3><input class='name' id='d-name' placeholder='Name, e.g. Gali 7' value='" +
+              esc(d.name) + "'>" + rowsHtml([
+                ["Sub-cells", pv.subCells.length.toLocaleString() + " (≈ " + (pv.subCells.length * 0.04).toFixed(2) + " km²)"],
+                ["Tehsil", path.map(placeLink).join(", ")],
+                ["Centre", fmt(pv.centre[0]) + ", " + fmt(pv.centre[1])]]) +
+              "<h3>Where it is (nearest " + pv.references.length + ")</h3>" + rowsHtml(pv.references.map(function (r) {
+                return [placeLink(places.list.filter(function (p) { return p.key === r.key; })[0]),
+                        PakGrid.formatDistance(r.distance_m) + " " + r.direction + " · " + Math.round(r.bearing_deg) + "°" +
+                        (r.tooFar ? " <span class='warn'>too far</span>" : "")];
+              })) +
+              "<div class='sub'>Distance and direction from each known locality to the new one's centre, " +
+              "e.g. <i>" + esc(pv.references[0] ? pv.references[0].text : "") + "</i>.</div>" +
+              "<h3>Add it with the library</h3><textarea id='d-code' readonly></textarea>" +
+              "<div class='sub'>Run this in your backend (it checks who may edit; the library records the author " +
+              "and keeps a history). See project.md §5.8.</div>";
+    }
+    panel.innerHTML = html;
+    document.getElementById("d-undo").onclick = function () { pts.pop(); d.preview = null; showDrawing(); };
+    document.getElementById("d-cancel").onclick = stopDrawing;
+    document.getElementById("d-done").onclick = function () {
+      d.preview = places.userPreview(grid, pts, d.nearest);
+      showDrawing();
+    };
+    var nameEl = document.getElementById("d-name");
+    if (nameEl) {
+      var code = document.getElementById("d-code");
+      var update = function () {
+        d.name = nameEl.value;
+        code.value = "user = grid.attach_user_places(\"user_places.sqlite\")\n" +
+          "user.add(" + JSON.stringify(d.name || "New locality") + ", author=request.user.username,\n" +
+          "         polygon=" + JSON.stringify(pts) + ",\n         nearest=" + d.nearest + ")";
+      };
+      nameEl.addEventListener("input", update);
+      update();
+    }
+  }
 
   // -- Navigate mode (viewer/navigation.js) ------------------------------------
   var nav = new PakNav.Navigator({
@@ -597,6 +695,7 @@
 
   document.getElementById("search").addEventListener("submit", function (e) {
     e.preventDefault();
+    if (drawing) stopDrawing();
     runQuery(document.getElementById("q").value);
   });
 
