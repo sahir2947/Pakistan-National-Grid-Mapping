@@ -451,3 +451,44 @@ def test_javascript_user_locality_preview_matches_python(lahore_db, tmp_path):
             assert way == r.direction
             assert abs(dist - r.distance_m) <= 0.051 and abs(east - r.east_m) <= 0.051 and abs(north - r.north_m) <= 0.051
     assert sum(len(e[0]) for e in expected if e != "error") > 500
+
+
+_JS_RADIUS = """
+const P = require(process.argv[1] + '/pakgrid.js');
+const grid = new P.Grid(require(process.argv[1] + '/layout.js'));
+const req = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify({
+  within: req.within.map(([lat, lon, r, level, touching]) =>
+    grid.cellsWithin(lat, lon, r, level, { touching }).map((c) => [c.id, c.distance_m, c.bearing_deg])),
+  distance: req.distance.map(([a, b]) => {
+    const d = grid.distance(grid.parseCode(a), grid.parseCode(b));
+    return [d.from, d.to, d.distance_m, d.bearing_deg, d.compass_short, d.east_m, d.north_m, d.text];
+  }),
+}));
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_radius_and_distance_match_python(lahore_db):
+    from pakgrid import Grid
+    rng = random.Random(71)
+    within = [[31.5204, 74.3587, 5000, "cell", False], [31.5204, 74.3587, 800, "sub", True]]
+    for _ in range(10):
+        lat, lon = round(31.49 + rng.random() * 0.06, 7), round(74.1 + rng.random() * 0.6, 7)
+        within.append([lat, lon, rng.choice([0, 300, 1500, 3000]), rng.choice(["cell", "sub"]), rng.random() < 0.5])
+    codes = ["11-0140-0471", "11-0150-0480", "11-0140-0471-00", "00-0067-0690", "10-0300-0012-24", "01-0010-0400"]
+    distance = [[a, b] for a in codes for b in codes]
+    got = json.loads(subprocess.run([NODE, "-e", _JS_RADIUS, str(VIEWER)],
+                                    input=json.dumps({"within": within, "distance": distance}),
+                                    capture_output=True, text=True, check=True).stdout)
+    with Grid.open(lahore_db) as grid:
+        for (lat, lon, r, level, touching), js in zip(within, got["within"]):
+            py = grid.cells_within(lat, lon, r, level=level, touching=touching)
+            assert [x[0] for x in js] == [n.id for n in py], (lat, lon, r, level, touching)
+            for (_, d, b), n in zip(js, py):
+                assert abs(d - n.distance_m) < 1e-6 and abs(b - n.bearing_deg) < 1e-6
+        for (a, b), js in zip(distance, got["distance"]):
+            sep = grid.distance(a, b)
+            assert js[0] == sep.from_code and js[1] == sep.to_code and js[4] == sep.compass_short and js[7] == sep.text
+            assert abs(js[2] - sep.distance_m) < 1e-6 and abs(js[5] - sep.east_m) < 1e-6 and abs(js[6] - sep.north_m) < 1e-6
+            assert sep.distance_m == 0 or abs(js[3] - sep.bearing_deg) < 1e-9

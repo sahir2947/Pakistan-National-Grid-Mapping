@@ -154,6 +154,8 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
     loc.place.label                  # 'Lahore Cant, Lahore Cantt, Lahore, Punjab'
                                      # (locality, tehsil, district, province)
     grid.cells_in_place("punjab/lahore")   # every cell of Lahore district
+    grid.cells_within(31.5204, 74.3587, 2000)              # cells within 2 km, nearest first
+    grid.distance("11-0140-0471", "11-0150-0480").text     # '13.8 km NE'  (centre to centre)
 
 direction(31.5215, 74.3570, 31.5204, 74.3587, heading=90).turn   # 'bear right'
 ```

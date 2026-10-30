@@ -769,6 +769,8 @@ level by itself.
 | 6 | `children(cell)` | The 25 `SubCell`s of a cell, in order 0–24 |
 | 7 | `neighbours(item, level="cell")` | IDs of touching cells or sub-cells, across quadrant lines too |
 | 8 | `cells_in_area(south, west, north, east, level="cell", pakistan_only=False)` | IDs of cells or sub-cells overlapping a box; optionally only those in Pakistan |
+| 8a | `cells_within(lat, lon, radius_m, level="cell", pakistan_only=False, touching=False)` | Radius search: the cells or sub-cells whose centroid (with `touching=True`, any part) is within `radius_m` of a point, nearest first, as `Nearby` (`id`, `code`, `distance_m`, `bearing_deg`); radius up to 50 km (§7.5) |
+| 8b | `distance(a, b, level="cell")` | Cell-to-cell distance: `Separation` between two blocks' centroids (`distance_m`, `bearing_deg`, `compass`, `compass_short`, `east_m`, `north_m`, `text` such as `13.8 km NE`); codes may mix cells and sub-cells; no database access (§7.5) |
 | **Pakistan border** | | |
 | 9 | `in_pakistan(lat, lon)` | `True` if the point is inside Pakistan's border |
 | 10 | `pakistan_flags(items, level="cell")` | `{id: "inside" \| "border" \| "outside"}` for many cells or sub-cells at once |
@@ -856,6 +858,8 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 | `pakgrid build [-o FILE] [--quadrant CODE] [--rows START:STOP] [--pakistan-only]` | Generate the database; `--quadrant` and `--rows` build part of it for tests or pilots, `--pakistan-only` builds the Pakistan edition |
 | `pakgrid verify [--db FILE] [--full] [--expect SHA256]` | Check a database against the rules, its border, its checksum and (for a complete build) the official checksum; `--full` regenerates every record and flag; `--expect` also requires a given checksum |
 | `pakgrid locate LAT LON [--accuracy M]` | Look up a point; prints JSON |
+| `pakgrid within LAT LON METRES [--level sub] [--pakistan-only] [--touching]` | Radius search, nearest first (§7.5) |
+| `pakgrid distance FROM TO` | Distance and direction between two cells or sub-cells, by code (§7.5) |
 | `pakgrid show CODE` | Print a cell's or sub-cell's details as JSON |
 | `pakgrid info` | Print grid and database information |
 | `pakgrid export-layout` | Write the map viewer's data: `viewer/layout.js` (row and column counts) and `viewer/boundary.js` (the border) |
@@ -884,6 +888,14 @@ for checking the grid visually before it is used in an app:
   outside (grey, dashed); **Pakistan only** hides everything outside
 - **Navigate here:** rider guidance to a pinned point (§10), with live GPS or
   a draggable simulated rider; links such as `#nav=31.5204,74.3587` open it
+- **Grid** shows or hides the rectangle, quadrants, cells and sub-cells (the
+  choice is remembered in the browser); with it off the map is plain, and
+  **Places** still colours blocks by tehsil
+- **Around this point** (in a point's details): the cells or sub-cells
+  within a radius, drawn on the map with the nearest listed (§7.5)
+- **Measure:** tap two blocks, or search `11-0140-0471 to 11-0150-0480`, for
+  the distance and direction between their centres (§7.5)
+- **Draw:** preview a user locality (§5.8)
 
 It needs no database. It recomputes the grid and the border flags from
 `viewer/layout.js` and `viewer/boundary.js` with the same formulas as the
@@ -913,6 +925,54 @@ library, and `tests/test_viewer_js.py` checks that the two agree. See [viewer/RE
 - `direction` runs on the rider's phone (§10).
 
 ---
+
+
+### 7.5 Radius search and cell-to-cell distances
+
+**Radius search** answers "which blocks are near this pin?": shops that
+deliver here, riders near an order, the cells to count in a 3 km zone.
+
+```python
+with Grid.open("pakgrid_v1_pakistan.sqlite") as grid:
+    near = grid.cells_within(31.5204, 74.3587, 2000)          # cells within 2 km, nearest first
+    near[0].code, round(near[0].distance_m)                   # ('11-0140-0471', 595)
+    len(grid.cells_within(31.5204, 74.3587, 1000, level="sub"))   # 77 sub-cells
+    grid.cells_within(lat, lon, 3000, touching=True, pakistan_only=True)
+```
+
+- A block counts when its **centroid** is within the radius, which is the
+  fair choice for counting and zones (about π r² ÷ block area blocks). With
+  `touching=True` it counts when **any part** is within the radius, which is
+  right for "could the pin be in this block"; `distance_m` is then to the
+  block's nearest edge (0 for the block holding the point).
+- Distances are straight lines measured as `direction()` measures them
+  (within 0.01% up to 300 km), from the point to each block's centroid, with
+  the compass bearing. Results are nearest first; ties go to the smaller ID.
+- `pakistan_only=True` keeps blocks inside Pakistan or on its border (it reads
+  the border flags from the database); otherwise no database access is
+  needed. The radius can be up to 50 km.
+
+To match stored rows (shops, riders) against a radius, index their `cell_id`
+and query with the IDs: `Shop.objects.filter(cell_id__in=[n.id for n in near])`,
+then sort by each row's own distance if it has a precise pin.
+
+**Cell-to-cell distance** is the straight line between two blocks' centroids:
+
+```python
+sep = grid.distance("11-0140-0471", "11-0150-0480")
+sep.text, round(sep.distance_m), round(sep.bearing_deg)       # ('13.8 km NE', 13844, 44)
+sep.east_m, sep.north_m                                       # (9582.0, 9992.3)
+grid.distance("11-0140-0471-00", "11-0140-0471").text         # '570 m NE' (a sub-cell to its cell)
+```
+
+Codes set their own level, so a cell and a sub-cell can be compared;
+integer IDs use the `level` argument. It needs no database, so it works for
+any two blocks in the grid. It is a straight line, not a road distance:
+routing along roads is a later feature.
+
+The JavaScript copy in `viewer/pakgrid.js` (`grid.cellsWithin`,
+`grid.distance`) gives the same results, and `tests/test_viewer_js.py` checks
+it against the library.
 
 ## 8. How a lookup works
 
@@ -1276,6 +1336,9 @@ the same data centre.
 | `locate(lat, lon, accuracy_m=8)`, including candidates | 25–30 µs | ~33,000–40,000 |
 | `locate()` in a border sub-cell (point tested against the border line) | ~26 µs | ~39,000 |
 | `cells_in_area(...)` 1° × 1°, `pakistan_only=True` (10,879 cells) | 17 ms | — |
+| `cells_within(...)` 5 km, cells (78) / 1 km, sub-cells (77) | 1.3 ms / 1.5 ms | — |
+| `cells_within(...)` 10 km, cells, `pakistan_only=True` (315) | 5.3 ms | — |
+| `distance(a, b)` | 15 µs | ~65,000 |
 
 **Build and verify:**
 
@@ -1360,6 +1423,7 @@ rider guidance on the phone. Step-by-step setup, with tested code:
 | Determinism | Two builds produce byte-identical files and the same checksum; test builds match recorded checksums on Linux, macOS and Windows; no centroid latitude is near enough to a rounding tie for platform differences in `sin`/`cos` to change it |
 | Official checksums | Both complete editions, built from scratch on Linux, macOS and Windows, match `pakgrid/checksums.py` (`.github/workflows/checksums.yml`) |
 | Shared use | One `Grid` shared by many threads, and used after a fork, gives the same answers as a single thread |
+| Radius search and distances | `cells_within` equals a brute-force measure of every block in a generous box (cells and sub-cells, centroid and touching, radius 0 to 20 km, near the south edge and a quadrant line); counts near π r²; `pakistan_only` equals the border flags; bad radii and levels are refused; `distance` equals `direction()` between centroids, both ways, mixed levels, outside the build; the CLI; the viewer's JavaScript gives the same IDs, distances and bearings |
 | User places | Sub-cells chosen by a polygon equal an independent ray-casting check (holes, GeoJSON, exact edges); tehsil, key and centre rules; references (named, nearest, by ID, user-to-user) match `direction()`, with errors for unknown, non-locality, duplicate and too-distant ones; bad input is refused and leaves nothing; lookups show the user locality with the OpenStreetMap one kept; smallest overlap wins; update, remove, history, export/import, reopen and refresh; ten threads adding at once; the CLI; the viewer's Draw preview equals the library |
 | Places layer | Known places get the right locality, tehsil, district and province (Lahore Cant, Taxila, Kot Addu, New Sukkur…); every sub-cell touching Pakistan has a tehsil in a complete build; the hierarchy is the official one and the same for any part built; split cells keep each sub-cell's tehsil and locality; the in/near rule; searches work both ways (by name, key or Urdu name); the viewer's JavaScript gives the same tags and exact shapes; the places checksum is the same on Linux, macOS and Windows and matches the official value for both editions |
 | Conformance file | `conformance/navigation.json` is up to date; the Python library and the JavaScript copy (through `conformance/runners/javascript.js`) pass all ~2,000 cases; it covers every heading source, status and call |
@@ -1385,6 +1449,7 @@ Windows, on every push to `main` and every pull request. The workflow also runs 
 | **Ports** ✅ | Navigation rules and conformance test file for apps that port navigation to their own language (`conformance/`) |
 | **Places layer** ✅ | Province, district, tehsil and locality tags on every cell and sub-cell (§5.7, places version 2) |
 | **User places** ✅ | Localities drawn by an app's users, located from known localities by distance and direction, with author history (§5.8) |
+| **Radius search and distances** ✅ | Blocks within a radius of a point and cell-to-cell distances, in Python, the CLI and the viewer, plus a Grid show/hide toggle (§7.5) |
 | **Next — Documentation guides** | A guide for every feature, for app developers |
 | **v0.1.0 release** | First tagged GitHub release, with the databases attached |
 | **Pilot** | Dukandaari in one city (Lahore or Karachi): addresses, batching, rider navigation |

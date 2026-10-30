@@ -66,6 +66,11 @@
   .panel input.name { width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px;
                       background: var(--bg); color: var(--fg); font-size: 14px; }
   .error { color: #dc2626; font-weight: 600; }
+  .around { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+  .around input[type=number] { width: 84px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px;
+                               background: var(--bg); color: var(--fg); }
+  .around select { padding: 5px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+  .panel button:disabled { opacity: .5; cursor: default; }
   .nav-target, .nav-rider { pointer-events: none; }
   .nav-rider { pointer-events: auto; cursor: grab; }
   .arrow-head { pointer-events: none; }
@@ -93,6 +98,8 @@
   <button type="button" id="me" title="Find my grid block">My location</button>
   <label class="toggle"><input type="checkbox" id="pkonly"> Pakistan only</label>
   <label class="toggle" title="Colour each block by its tehsil"><input type="checkbox" id="placeson"> Places</label>
+  <label class="toggle" title="Show or hide the rectangle, quadrants, cells and sub-cells"><input type="checkbox" id="gridon" checked> Grid</label>
+  <button type="button" id="measure" title="Distance and direction between two blocks: tap one, then the other">Measure</button>
   <button type="button" id="draw" title="Draw a new locality and see the sub-cells it would tag">Draw</button>
 </form>
 <div class="panel" id="panel"></div>
@@ -196,15 +203,16 @@
     return places.tagAt(b[4], b[5], b[6]);
   }
 
-  function drawBoxes(boxes, level, styles, fillByPlace) {
+  function drawBoxes(boxes, level, styles, fillByPlace, outlines) {
     boxes.forEach(function (b) {
-      var style = styles[b.flag];
+      var style = outlines ? styles[b.flag] : { stroke: false };
       if (level === "cell" && b.flag !== 0 && boxes.withSubs) style = L.extend({}, style, { weight: 2 });
       var fill = { fill: false };
       if (fillByPlace) {
         var tag = boxTag(b, level);
         if (tag) fill = { fill: true, fillColor: placeColour(tag), fillOpacity: 0.38 };
       }
+      if (!outlines && !fill.fill) return;
       L.rectangle([[b[0], b[1]], [b[2], b[3]]], L.extend({ renderer: canvas, interactive: false }, style, fill))
         .addTo(gridLayer);
     });
@@ -249,13 +257,16 @@
 
     // sub-cells first, so the cell lines stay on top; with Places on, the smallest boxes drawn are
     // coloured by tehsil
-    var byPlace = document.getElementById("placeson").checked;
-    if (subs) drawBoxes(subs, "sub", SUB_STYLE, byPlace);
-    if (cells) { cells.withSubs = !!subs; drawBoxes(cells, "cell", CELL_STYLE, byPlace && !subs); }
-    if (cells && z >= CELL_LABEL_ZOOM && cells.length <= 400) {
+    // with Grid off, no lines or labels are drawn (Places still colours the blocks)
+    var byPlace = document.getElementById("placeson").checked, lines = gridOn();
+    if (map.hasLayer(frame) !== lines) { if (lines) frame.addTo(map); else map.removeLayer(frame); }
+    if (!lines && !byPlace) msg = "Grid hidden: tick Grid to show the cells";
+    if (subs) drawBoxes(subs, "sub", SUB_STYLE, byPlace, lines);
+    if (cells) { cells.withSubs = !!subs; drawBoxes(cells, "cell", CELL_STYLE, byPlace && !subs, lines); }
+    if (lines && cells && z >= CELL_LABEL_ZOOM && cells.length <= 400) {
       drawLabels(cells, true, "cell-label", [96, 12], function (r) { return PakGrid.cellCode(r.q, r.row, r.col); });
     }
-    if (subs && z >= SUB_LABEL_ZOOM && subs.length <= 300) {
+    if (lines && subs && z >= SUB_LABEL_ZOOM && subs.length <= 300) {
       drawLabels(subs, false, "sub-label", [20, 12], function (r) { return String(r.subRow * 5 + r.subCol); });
     }
     var c = map.getCenter(), here = grid.locate(c.lat, c.lng);
@@ -268,6 +279,13 @@
   map.on("moveend", drawGrid);
   document.getElementById("pkonly").addEventListener("change", drawGrid);
   document.getElementById("placeson").addEventListener("change", drawGrid);
+  // Show or hide the grid; the choice is remembered in this browser.
+  function gridOn() { return document.getElementById("gridon").checked; }
+  try { if (localStorage.getItem("pakgrid.grid") === "off") document.getElementById("gridon").checked = false; } catch (e) {}
+  document.getElementById("gridon").addEventListener("change", function () {
+    try { localStorage.setItem("pakgrid.grid", gridOn() ? "on" : "off"); } catch (e) {}
+    drawGrid();
+  });
 
   // -- Selection -----------------------------------------------------------
   var selLayer = L.layerGroup().addTo(map);
@@ -375,6 +393,8 @@
   }
 
   panel.addEventListener("click", function (e) {
+    var c = e.target.closest && e.target.closest("a[data-code]");
+    if (c) { e.preventDefault(); runQuery(c.getAttribute("data-code")); return; }
     var a = e.target.closest && e.target.closest("a.place");
     if (a && places.byId[a.getAttribute("data-place")]) { e.preventDefault(); showPlace(places.byId[a.getAttribute("data-place")]); }
   });
@@ -514,9 +534,24 @@
     }
     html += "<h3>Cell · " + sizeText(cb) + "</h3>" +
             rowsHtml([["Centroid", fmt(cell.centroid[0]) + ", " + fmt(cell.centroid[1])]].concat(boundsRows(cb)));
+    html += "<h3>Around " + (opts.point ? "this point" : "this block") + "</h3>" +
+            "<div class='around'><input id='a-radius' type='number' min='0' max='50000' step='100' value='" + aroundRadius +
+            "' aria-label='Radius in metres'> m <select id='a-level'><option value='cell'>cells</option>" +
+            "<option value='sub'" + (aroundLevel === "sub" ? " selected" : "") + ">sub-cells</option></select> " +
+            "<label><input type='checkbox' id='a-touch'" + (aroundTouching ? " checked" : "") + "> touching</label> " +
+            "<button type='button' id='a-go'>Find</button></div><div id='a-out'></div>";
     html += "<p><button type='button' class='go' id='navigate'>Navigate here</button> " +
+            "<button type='button' id='measure-from'>Measure from here</button> " +
             "<button type='button' id='clear'>Clear</button></p>";
     panel.innerHTML = html;
+    var centre = opts.point || (sub || cell).centroid;
+    document.getElementById("a-go").onclick = function () {
+      aroundRadius = +document.getElementById("a-radius").value;
+      aroundLevel = document.getElementById("a-level").value;
+      aroundTouching = document.getElementById("a-touch").checked;
+      showAround(centre[0], centre[1]);
+    };
+    document.getElementById("measure-from").onclick = function () { startMeasure(r); };
     // The pin to navigate to: the exact point if one was chosen, else the block's centre.
     var navTarget = opts.point ? { lat: opts.point[0], lon: opts.point[1], label: addr ? addr.text : (sub || cell).code + " (pin)" }
                                : { lat: (sub || cell).centroid[0], lon: (sub || cell).centroid[1], label: (sub || cell).code };
@@ -532,6 +567,99 @@
     }
     history.replaceState(null, "", "#" + (opts.point ? opts.point[0].toFixed(7) + "," + opts.point[1].toFixed(7)
                                                        : (sub ? sub.code : cell.code)));
+  }
+
+  // -- Radius search (Grid.cells_within) --------------------------------------------
+  var aroundRadius = 1000, aroundLevel = "cell", aroundTouching = false, aroundLayer = null;
+  function showAround(lat, lon) {
+    var out = document.getElementById("a-out");
+    if (aroundLayer) selLayer.removeLayer(aroundLayer);
+    aroundLayer = L.layerGroup().addTo(selLayer);
+    if (!(aroundRadius >= 0 && aroundRadius <= 50000)) { out.innerHTML = "<p class='error'>The radius must be 0 to 50,000 m.</p>"; return; }
+    var found = grid.cellsWithin(lat, lon, aroundRadius, aroundLevel,
+                                 { touching: aroundTouching, boundary: border, pakistanOnly: document.getElementById("pkonly").checked });
+    L.circle([lat, lon], { radius: aroundRadius, color: "#2563eb", weight: 2, fill: false, interactive: false }).addTo(aroundLayer);
+    found.slice(0, 20000).forEach(function (c) {
+      L.rectangle([[c.bounds[0], c.bounds[1]], [c.bounds[2], c.bounds[3]]], { renderer: canvas, color: "#2563eb",
+        weight: 0.5, fillColor: "#2563eb", fillOpacity: 0.18, interactive: false }).addTo(aroundLayer);
+    });
+    var kind = aroundLevel === "cell" ? "cells" : "sub-cells";
+    out.innerHTML = "<p><b>" + found.length.toLocaleString() + " " + kind + "</b> within " +
+      PakGrid.formatDistance(aroundRadius) + (aroundTouching ? " (any part)" : " (centre)") + ". Nearest:</p>" +
+      rowsHtml(found.slice(0, 10).map(function (c) {
+        return ["<a class='place' data-code='" + c.code + "'>" + c.code + "</a>",
+                PakGrid.formatDistance(c.distance_m) + " " + PakGrid.compass(c.bearing_deg).short];
+      })) + "<div class='sub'>Distances run from the point to each block's centre" +
+      (aroundTouching ? " (to its nearest edge for “touching”)" : "") + ". Same as <code>grid.cells_within(...)</code>.</div>";
+    var view = viewPadding(); view.maxZoom = 16;
+    map.fitBounds(L.latLng(lat, lon).toBounds(2 * Math.max(aroundRadius, 200) * 1.1), view);
+  }
+
+  // -- Measure (Grid.distance) -------------------------------------------------------
+  // Tap a block, then another: the distance and direction between their centres.
+  var measuring = null, measureBtn = document.getElementById("measure");
+  function blockAt(lat, lon) {
+    var r = grid.locate(lat, lon);
+    if (!r) return null;
+    // at sub-cell zoom, measure between sub-cells; further out, between cells
+    return { q: r.q, row: r.row, col: r.col, sub: map.getZoom() >= SUB_ZOOM ? r.subRow * 5 + r.subCol : null };
+  }
+  function startMeasure(from) {
+    if (nav.target) nav.close(true);
+    if (drawing) stopDrawing();
+    selLayer.clearLayers(); arrow = arrowMarker = null;
+    measuring = { from: from ? { q: from.q, row: from.row, col: from.col, sub: from.sub == null ? null : from.sub } : null };
+    measureBtn.classList.add("on");
+    showMeasure();
+  }
+  function stopMeasure() {
+    measuring = null;
+    measureBtn.classList.remove("on");
+    selLayer.clearLayers();
+    showSummary();
+  }
+  measureBtn.addEventListener("click", function () { if (measuring) stopMeasure(); else startMeasure(null); });
+  function measureTap(lat, lon) {
+    var b = blockAt(lat, lon);
+    if (!b) { flash("That point is outside the grid rectangle"); return; }
+    if (!measuring.from || measuring.to) { measuring.from = b; measuring.to = null; } else measuring.to = b;
+    showMeasure();
+  }
+  function showMeasure(fit) {
+    var m = measuring;
+    selLayer.clearLayers();
+    [m.from, m.to].forEach(function (b, k) {
+      if (!b) return;
+      var d = grid.describe(b.q, b.row, b.col, b.sub), x = d.bounds;
+      L.rectangle([[x.south, x.west], [x.north, x.east]], { color: k ? "#2563eb" : "#d9480f", weight: 2.5,
+        fillOpacity: 0.2, interactive: false }).addTo(selLayer);
+      L.circleMarker(d.centroid, { radius: 5, color: "#111827", fillColor: "#fff", fillOpacity: 1, weight: 2,
+        interactive: false }).addTo(selLayer);
+    });
+    var html = "<h2>Measure</h2>";
+    if (!m.from) html += "<div class='sub'>Tap the first block (cells below zoom " + SUB_ZOOM + ", sub-cells from it), " +
+                         "or search for two codes: <i>11-0140-0471 to 11-0150-0480</i>.</div>";
+    else if (!m.to) html += "<div class='sub'>From <b>" + grid.describe(m.from.q, m.from.row, m.from.col, m.from.sub).code +
+                            "</b>. Now tap the second block.</div>";
+    else {
+      var r = grid.distance(m.from, m.to), a = grid.describe(m.from.q, m.from.row, m.from.col, m.from.sub),
+          b = grid.describe(m.to.q, m.to.row, m.to.col, m.to.sub);
+      L.polyline([a.centroid, b.centroid], { color: "#111827", weight: 2.5, dashArray: "6 4", interactive: false }).addTo(selLayer);
+      html += "<div class='code'>" + esc(r.text) + "</div>" + rowsHtml([
+        ["From", r.from], ["To", r.to],
+        ["Distance", r.distance_m >= 1000 ? (r.distance_m / 1000).toFixed(3) + " km" : r.distance_m.toFixed(1) + " m"],
+        ["Direction", Math.round(r.bearing_deg) + "° " + r.compass_short + " (" + r.compass + ")"],
+        ["East / north", Math.round(r.east_m).toLocaleString() + " m / " + Math.round(r.north_m).toLocaleString() + " m"]]) +
+        "<div class='sub'>Straight line between the two blocks' centres. Same as <code>grid.distance(\"" + r.from +
+        "\", \"" + r.to + "\")</code>. Tap again to start a new measurement.</div>";
+      if (fit) {
+        var view = viewPadding(); view.maxZoom = 16;
+        map.fitBounds([a.centroid, b.centroid], view);
+      }
+    }
+    html += "<p><button type='button' id='m-done'>Done</button></p>";
+    panel.innerHTML = html;
+    document.getElementById("m-done").onclick = stopMeasure;
   }
 
   function selectPoint(lat, lon, fly, accuracy, instant) {
@@ -551,6 +679,7 @@
   map.on("click", function (e) {
     if (nav.target) return;   // while navigating, taps don't change the selection
     if (drawing) { addVertex(e.latlng.lat, e.latlng.lng); return; }
+    if (measuring) { measureTap(e.latlng.lat, e.latlng.lng); return; }
     selectPoint(e.latlng.lat, e.latlng.lng, false);
   });
 
@@ -561,6 +690,7 @@
   var drawing = null, drawBtn = document.getElementById("draw");
   function startDrawing() {
     if (nav.target) nav.close(true);
+    if (measuring) stopMeasure();
     selLayer.clearLayers();
     arrow = arrowMarker = null;
     drawing = { pts: [], name: "", nearest: 3 };
@@ -696,6 +826,14 @@
   document.getElementById("search").addEventListener("submit", function (e) {
     e.preventDefault();
     if (drawing) stopDrawing();
+    var two = /^\s*(\S+)\s+(?:to|-|→)\s+(\S+)\s*$/i.exec(document.getElementById("q").value);
+    if (two && grid.parseCode(two[1]) && grid.parseCode(two[2])) {     // '11-0140-0471 to 11-0150-0480'
+      startMeasure(grid.parseCode(two[1]));
+      measuring.to = grid.parseCode(two[2]);
+      showMeasure(true);
+      return;
+    }
+    if (measuring) stopMeasure();
     runQuery(document.getElementById("q").value);
   });
 

@@ -197,6 +197,56 @@
     return out;
   };
 
+  // -- Radius search and distances (same as Grid.cells_within and Grid.distance) --
+
+  var MAX_RADIUS_M = 50000;
+
+  // The cells (or sub-cells) within radiusM of a point, nearest first (ties: smaller ID), as
+  // {id, code, q, row, col, sub, bounds: [s, w, n, e], centroid: [lat, lon], distance_m, bearing_deg}.
+  // A block counts when its centroid is within the radius; with opts.touching, when any part of it
+  // is (distance to its nearest edge). opts.boundary + opts.pakistanOnly keep blocks in Pakistan.
+  Grid.prototype.cellsWithin = function (lat, lon, radiusM, level, opts) {
+    opts = opts || {};
+    level = level || "cell";
+    if (!(radiusM >= 0 && radiusM <= MAX_RADIUS_M)) throw new Error("radius must be from 0 to " + MAX_RADIUS_M + " m");
+    lat = toE7(lat) / SCALE; lon = toE7(lon) / SCALE;
+    var m = metresPerDegree(lat), pad = 1.02 * radiusM + (level === "cell" ? 1500 : 300);
+    var items = this.itemsInBox(lat - pad / m.lat, lon - pad / (m.lon * 0.98), lat + pad / m.lat,
+                                lon + pad / (m.lon * 0.98), level, Infinity) || [];
+    var out = [], self = this;
+    items.forEach(function (it) {
+      var s = toE7(it[0]) / SCALE, w = toE7(it[1]) / SCALE, n = toE7(it[2]) / SCALE, e = toE7(it[3]) / SCALE;
+      var clat = toE7(bandCentroidLat(it[0], it[2])) / SCALE, clon = toE7((it[1] + it[3]) / 2) / SCALE;
+      var way = direction(lat, lon, clat, clon), d = way.distance_m;
+      if (opts.touching) d = Math.hypot(Math.max(w - lon, 0, lon - e) * m.lon, Math.max(s - lat, 0, lat - n) * m.lat);
+      if (d > radiusM) return;
+      var q = it[4], row, col, sub = null, id, code;
+      if (level === "cell") {
+        row = it[5]; col = it[6]; id = cellId(q, row, col); code = cellCode(q, row, col);
+      } else {
+        row = Math.floor(it[5] / SUB); col = Math.floor(it[6] / SUB); sub = (it[5] % SUB) * SUB + it[6] % SUB;
+        id = subCellId(cellId(q, row, col), sub); code = subCellCode(q, row, col, sub);
+      }
+      if (opts.pakistanOnly && opts.boundary && self.flag(opts.boundary, q, row, col, sub) === OUTSIDE) return;
+      out.push({ id: id, code: code, q: q, row: row, col: col, sub: sub, bounds: [it[0], it[1], it[2], it[3]],
+                 centroid: [clat, clon], distance_m: d, bearing_deg: way.bearing_deg });
+    });
+    out.sort(function (a, b) { return a.distance_m - b.distance_m || a.id - b.id; });
+    return out;
+  };
+
+  // Distance and direction from one block to another, centroid to centroid. a and b are
+  // {q, row, col, sub} (sub null for a cell), e.g. from parseCode.
+  Grid.prototype.distance = function (a, b) {
+    var A = this.describe(a.q, a.row, a.col, a.sub), Bb = this.describe(b.q, b.row, b.col, b.sub);
+    var way = direction(A.centroid[0], A.centroid[1], Bb.centroid[0], Bb.centroid[1]);
+    var m = metresPerDegree((A.centroid[0] + Bb.centroid[0]) / 2);
+    return { from: A.code, to: Bb.code, distance_m: way.distance_m, bearing_deg: way.bearing_deg,
+             compass: way.compass, compass_short: way.compass_short,
+             east_m: (Bb.centroid[1] - A.centroid[1]) * m.lon, north_m: (Bb.centroid[0] - A.centroid[0]) * m.lat,
+             text: formatDistance(way.distance_m) + " " + way.compass_short };
+  };
+
   // -- Border flags (same as pakgrid.boundary) ------------------------------
 
   var OUTSIDE = 0, BORDER = 1, INSIDE = 2, BAND = 100000;
