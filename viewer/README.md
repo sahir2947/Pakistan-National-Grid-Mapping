@@ -21,6 +21,20 @@ steps in ~200 m sub-cells), never just the box around it. Links such as
 Where a block is just outside a village or town, it shows as
 `near Kharochan (1.2 km S)`. Sources and coverage: `pakgrid/data/PLACES_SOURCE.md`.
 
+**Grid** shows or hides the rectangle, quadrants, cells and sub-cells; the
+choice is remembered in this browser. With the grid hidden, **Places** still
+colours blocks by tehsil.
+
+**Around this point** (in a point's details): enter a radius in metres,
+choose cells or sub-cells, and press **Find**. The blocks whose centre is
+within it are shaded (tick *touching* for those with any part within it),
+with the count and the nearest ten (project.md §7.5).
+
+**Measure:** press it, then tap two blocks (cells when zoomed out, sub-cells
+from zoom 14), or use **Measure from here** in a block's details, or search
+`11-0140-0471 to 11-0150-0480`. It shows the distance and direction between
+their centres, and the east/north metres.
+
 **Draw** previews a new user locality (project.md §5.8). Tap the corners of
 a polygon and press **Done** to see:
 

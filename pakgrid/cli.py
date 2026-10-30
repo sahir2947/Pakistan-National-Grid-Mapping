@@ -1,5 +1,5 @@
-"""Command-line tools: pakgrid build | build-places | verify | locate | show | places | user-places |
-info | export-layout | export-conformance."""
+"""Command-line tools: pakgrid build | build-places | verify | locate | show | within | distance | places |
+user-places | info | export-layout | export-conformance."""
 
 import argparse
 import json
@@ -52,6 +52,21 @@ def main(argv=None):
     p.add_argument("--db", default=DEFAULT_DB)
     p.add_argument("--user-places", default=DEFAULT_USER_PLACES, metavar="FILE",
                    help="also use the localities in this user places file")
+
+    p = sub.add_parser("within", help="list the cells (or sub-cells) within a radius of a point, nearest first")
+    p.add_argument("lat", type=float)
+    p.add_argument("lon", type=float)
+    p.add_argument("radius", type=float, metavar="METRES")
+    p.add_argument("--level", choices=("cell", "sub"), default="cell")
+    p.add_argument("--pakistan-only", action="store_true", help="only blocks inside Pakistan or on its border")
+    p.add_argument("--touching", action="store_true",
+                   help="count a block when any part of it is within the radius (default: its centroid)")
+    p.add_argument("--db", default=DEFAULT_DB)
+
+    p = sub.add_parser("distance", help="distance and direction between two cells or sub-cells (by code)")
+    p.add_argument("a", metavar="FROM")
+    p.add_argument("b", metavar="TO")
+    p.add_argument("--db", default=DEFAULT_DB)
 
     p = sub.add_parser("places", help="list places (province, district, tehsil, locality), or the cells of one")
     p.add_argument("text", nargs="?", help="only places whose name contains this text, or with this key")
@@ -258,6 +273,9 @@ _COMMANDS = {
     "verify": _verify,
     "locate": _with_grid(lambda grid, a: grid.locate(a.lat, a.lon, a.accuracy).to_dict()),
     "show": _with_grid(_show),
+    "within": _with_grid(lambda grid, a: [n.to_dict() for n in grid.cells_within(
+        a.lat, a.lon, a.radius, level=a.level, pakistan_only=a.pakistan_only, touching=a.touching)]),
+    "distance": _with_grid(lambda grid, a: grid.distance(a.a, a.b).to_dict()),
     "info": _with_grid(lambda grid, a: grid.info()),
     "export-layout": _export_layout,
     "export-conformance": _export_conformance,

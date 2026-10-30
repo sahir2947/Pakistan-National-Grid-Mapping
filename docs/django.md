@@ -400,8 +400,11 @@ and coverage: [PLACES_SOURCE.md](../pakgrid/data/PLACES_SOURCE.md).
 
 Other library calls that are useful behind an API (see
 [project.md §7.1](../project.md#71-python-library-16-functions)):
-`grid.cells_in_area(...)` for a delivery zone, `grid.neighbours(...)` for
-"nearby" searches, `grid.cell(...)` and `grid.sub_cell(...)` for a block's
+`grid.cells_in_area(...)` for a delivery zone, `grid.cells_within(lat, lon, radius_m)`
+for "shops that deliver here" or "riders near this order" (match the IDs against
+your indexed `cell_id` column), `grid.distance(a, b)` for the straight-line
+distance and direction between two blocks, `grid.neighbours(...)` for
+touching blocks, `grid.cell(...)` and `grid.sub_cell(...)` for a block's
 bounds and centre, `grid.pakistan_flags(...)`, `direction(...)`, and for
 places `grid.place(...)`, `grid.find_places("sahiwal")`,
 `grid.get_place("punjab/lahore")` and `grid.cells_in_place(...)` (Lahore

@@ -17,6 +17,7 @@ from .store import SCHEMA_VERSION, GridStore
 from .userplaces import USER_ID_BASE
 
 MAX_CANDIDATE_RADIUS_M = 5000.0
+MAX_RADIUS_M = 50_000.0          # largest radius for Grid.cells_within
 _UNPACK = {"tehsil": "<25H", "locality": "<25I"}
 
 
@@ -97,6 +98,43 @@ class Offset:
         return {"east_m": round(self.east_m, 1), "north_m": round(self.north_m, 1),
                 "distance_m": round(self.distance_m, 1), "bearing_deg": round(self.bearing_deg, 1),
                 "text": self.text}
+
+
+@dataclass(frozen=True)
+class Nearby:
+    """A cell or sub-cell found by `Grid.cells_within`."""
+    id: int
+    code: str
+    distance_m: float           # from the point to the block's centroid (to its nearest edge with touching=True)
+    bearing_deg: float          # compass bearing from the point to the block's centroid
+
+    def to_dict(self):
+        return {"id": self.id, "code": self.code, "distance_m": round(self.distance_m, 1),
+                "bearing_deg": round(self.bearing_deg, 1)}
+
+
+@dataclass(frozen=True)
+class Separation:
+    """Distance and direction between two cells or sub-cells, centroid to centroid (`Grid.distance`)."""
+    from_code: str
+    to_code: str
+    distance_m: float
+    bearing_deg: float          # compass bearing from the first block to the second
+    compass: str                # 8-point name, e.g. 'North-East'
+    compass_short: str          # 16-point abbreviation, e.g. 'NNE'
+    east_m: float               # how far east (negative: west) the second block's centroid is
+    north_m: float              # how far north (negative: south)
+
+    @property
+    def text(self):
+        """'3.2 km NE'"""
+        return f"{navigate.format_distance(self.distance_m)} {self.compass_short}"
+
+    def to_dict(self):
+        return {"from": self.from_code, "to": self.to_code, "distance_m": round(self.distance_m, 1),
+                "bearing_deg": round(self.bearing_deg, 1), "compass": self.compass,
+                "compass_short": self.compass_short, "east_m": round(self.east_m, 1),
+                "north_m": round(self.north_m, 1), "text": self.text}
 
 
 PLACE_LEVELS = ("province", "district", "tehsil", "locality")
@@ -438,6 +476,64 @@ class Grid:
             return found
         flags = self._flags(found, level)
         return [i for i in found if flags.get(i, OUTSIDE) != OUTSIDE]
+
+    def cells_within(self, lat, lon, radius_m, level="cell", pakistan_only=False, touching=False):
+        """The cells (or sub-cells) within `radius_m` of a point, nearest first: [Nearby].
+
+        A block counts when its centroid is within the radius; with touching=True, when any part
+        of it is (distance_m is then to its nearest edge, 0 for the block holding the point).
+        Distances are straight lines, as `direction()` measures them. Ties: the smaller ID. With
+        pakistan_only, only blocks inside Pakistan or on its border. Radius: up to MAX_RADIUS_M.
+        """
+        lat_e7, lon_e7 = _point_e7(lat, lon)
+        if isinstance(radius_m, bool) or not isinstance(radius_m, (int, float)) or \
+                not 0 <= radius_m <= MAX_RADIUS_M:
+            raise ValueError(f"radius_m must be a number from 0 to {MAX_RADIUS_M:g}, got {radius_m!r}")
+        if level not in ("cell", "sub"):
+            raise ValueError(f"level must be 'cell' or 'sub', got {level!r}")
+        lat, lon = lat_e7 / SCALE, lon_e7 / SCALE
+        m_lat, m_lon = geodesy.metres_per_degree(lat)
+        # the search box: the radius in degrees at the point's latitude, plus 2% and a block, which
+        # covers the change of scale across the box
+        pad = 1.02 * radius_m + (1500 if level == "cell" else 300)
+        found = []
+        for q, i, j in self.layout.items_in_area(to_e7(lat - pad / m_lat), to_e7(lon - pad / (m_lon * 0.98)),
+                                                 to_e7(lat + pad / m_lat), to_e7(lon + pad / (m_lon * 0.98)), level):
+            ql = self.layout.quadrants[q]
+            clat, clon = (v / SCALE for v in ql.item_centroid_e7(i, j, level))
+            way = navigate.direction(lat, lon, clat, clon)
+            if touching:
+                s, w, n, e = (v / SCALE for v in ql.item_bounds_e7(i, j, level))
+                d = math.hypot(max(w - lon, 0.0, lon - e) * m_lon, max(s - lat, 0.0, lat - n) * m_lat)
+            else:
+                d = way.distance_m
+            if d <= radius_m:
+                item_id = GridLayout.item_id(q, i, j, level)
+                found.append((d, item_id, way.bearing_deg))
+        found.sort()
+        if pakistan_only:
+            flags = self._flags([f[1] for f in found], level)
+            found = [f for f in found if flags.get(f[1], OUTSIDE) != OUTSIDE]
+        code = ids.cell_code if level == "cell" else ids.sub_cell_code
+        return [Nearby(item_id, code(item_id), d, b) for d, item_id, b in found]
+
+    def distance(self, a, b, level="cell"):
+        """Distance and direction from one cell or sub-cell to another, centroid to centroid.
+
+        `a` and `b` are IDs (of `level`) or codes (which set their own level, so a cell and a
+        sub-cell can be compared). No database access is needed.
+        """
+        ends = []
+        for item in (a, b):
+            lv, item_id = self._resolve_any(item, level)
+            q, i, j = self.layout.item_from_id(item_id, lv)
+            clat, clon = (v / SCALE for v in self.layout.quadrants[q].item_centroid_e7(i, j, lv))
+            ends.append((ids.cell_code(item_id) if lv == "cell" else ids.sub_cell_code(item_id), clat, clon))
+        (ca, lat1, lon1), (cb, lat2, lon2) = ends
+        way = navigate.direction(lat1, lon1, lat2, lon2)
+        m_lat, m_lon = geodesy.metres_per_degree((lat1 + lat2) / 2)
+        return Separation(ca, cb, way.distance_m, way.bearing_deg, way.compass, way.compass_short,
+                          (lon2 - lon1) * m_lon, (lat2 - lat1) * m_lat)
 
     def pakistan_flags(self, items, level="cell"):
         """{ID: "inside" | "border" | "outside"} for many cells (or sub-cells) at once."""
