@@ -70,6 +70,15 @@
     return { lat: m * DEG, lon: n * Math.cos(phi) * DEG };
   }
 
+  // Area in m² of a latitude band `widthDeg` degrees wide (as pakgrid.geodesy.rect_area).
+  function areaTerm(phi) {
+    var e = Math.sqrt(E2), s = Math.sin(phi), es = e * s;
+    return s / (2 * (1 - es * es)) + Math.log((1 + es) / (1 - es)) / (4 * e);
+  }
+  function rectArea(south, north, widthDeg) {
+    return A * A * (1 - E2) * widthDeg * DEG * (areaTerm(north * DEG) - areaTerm(south * DEG));
+  }
+
   // Compass names, as in pakgrid.navigate: 8-point name and 16-point abbreviation.
   var COMPASS_8 = ["North", "North-East", "East", "South-East", "South", "South-West", "West", "North-West"];
   var COMPASS_16 = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
@@ -934,6 +943,107 @@
     return { subCells: subs, tehsil: this.byId[tehsil], centre: [lat, lon], references: refs };
   };
 
+  // -- Custom zones (same rules and stored form as pakgrid.zones) ----------------
+
+  var FULL_MASK = 33554431;    // all 25 sub-cells (2^25 - 1)
+
+  // A set of sub-cells: masks maps cell ID -> 25-bit mask of its sub-cells in the zone.
+  function Zone(grid, masks) {
+    this.grid = grid;
+    this.masks = {};
+    for (var c in masks) if (masks[c]) this.masks[c] = masks[c];
+  }
+  function bitCount(m) { var n = 0; while (m) { n += m & 1; m = Math.floor(m / 2); } return n; }
+  function splitCellId(cid) { return { q: Math.floor(cid / 1048576), row: Math.floor(cid / 1024) % 1024, col: cid % 1024 }; }
+
+  // Is the pin in the zone? (The sub-cell containing it is.)
+  Zone.prototype.contains = function (lat, lon) {
+    var r = this.grid.locate(lat, lon);
+    if (!r) return false;
+    var m = this.masks[cellId(r.q, r.row, r.col)] || 0;
+    return Math.floor(m / Math.pow(2, r.subRow * SUB + r.subCol)) % 2 === 1;
+  };
+  Zone.prototype.subCellCount = function () {
+    var n = 0;
+    for (var c in this.masks) n += bitCount(this.masks[c]);
+    return n;
+  };
+  Zone.prototype.cellIds = function (fullOnly) {
+    var self = this;
+    return Object.keys(this.masks).map(Number).filter(function (c) { return !fullOnly || self.masks[c] === FULL_MASK; })
+      .sort(function (a, b) { return a - b; });
+  };
+  // Boxes to draw: [s, w, n, e, full] for whole cells and for each sub-cell of the other cells.
+  Zone.prototype.boxes = function () {
+    var out = [], g = this.grid, self = this;
+    this.cellIds().forEach(function (c) {
+      var p = splitCellId(c), m = self.masks[c];
+      if (m === FULL_MASK) {
+        var b = g.describe(p.q, p.row, p.col, null).bounds;
+        out.push([b.south, b.west, b.north, b.east, true]);
+        return;
+      }
+      for (var k = 0; k < 25; k++) {
+        if (Math.floor(m / Math.pow(2, k)) % 2 !== 1) continue;
+        var x = g.describe(p.q, p.row, p.col, k).bounds;
+        out.push([x.south, x.west, x.north, x.east, false]);
+      }
+    });
+    return out;
+  };
+  // The zone's area in km², from each sub-cell's size at its latitude.
+  Zone.prototype.areaKm2 = function () {
+    var total = 0, g = this.grid, self = this;
+    this.cellIds().forEach(function (c) {
+      var p = splitCellId(c), ql = g.quadrants[p.q], m = self.masks[c];
+      var w = (ql.east - ql.west) / (SUB * ql.ncols[p.row]);
+      for (var sr = 0; sr < SUB; sr++) {
+        var n = bitCount(Math.floor(m / Math.pow(2, sr * SUB)) % 32);
+        if (!n) continue;
+        var s = fineLat(ql, p.row * SUB + sr), nn = fineLat(ql, p.row * SUB + sr + 1);
+        total += n * rectArea(s, nn, w);
+      }
+    });
+    return total / 1e6;
+  };
+  // The stored form, identical to pakgrid.zones.Zone.to_dict().
+  Zone.prototype.toDict = function () {
+    var self = this, ids = this.cellIds();
+    return { zone_version: 1, grid_version: 1, sub_cells: this.subCellCount(),
+             full: ids.filter(function (c) { return self.masks[c] === FULL_MASK; }),
+             partial: ids.filter(function (c) { return self.masks[c] !== FULL_MASK; }).map(function (c) { return [c, self.masks[c]]; }) };
+  };
+  Zone.fromDict = function (grid, data) {
+    if (!data || data.zone_version !== 1 || data.grid_version !== 1) throw new Error("not zone version 1 data for grid version 1");
+    var masks = {};
+    (data.full || []).forEach(function (c) { masks[c] = FULL_MASK; });
+    (data.partial || []).forEach(function (p) {
+      if (!(p[1] > 0 && p[1] < FULL_MASK)) throw new Error("bad sub-cell mask for cell " + p[0]);
+      masks[p[0]] = p[1];
+    });
+    return new Zone(grid, masks);
+  };
+
+  // A zone from a polygon: the sub-cells whose centroid is inside it (as pakgrid.zones). With a
+  // boundary and pakistanOnly, only sub-cells inside Pakistan or on its border.
+  Grid.prototype.zoneFromPolygon = function (polygon, opts) {
+    opts = opts || {};
+    var rings = ringsE7(polygon), ys = [], xs = [];
+    rings.forEach(function (r) { r.forEach(function (p) { ys.push(p[0]); xs.push(p[1]); }); });
+    var s = Math.min.apply(null, ys), n = Math.max.apply(null, ys), w = Math.min.apply(null, xs), e = Math.max.apply(null, xs);
+    var items = this.itemsInBox(s / SCALE, w / SCALE, n / SCALE, e / SCALE, "sub", opts.limit || 3000000);
+    if (!items) throw new Error("the polygon is too large to show here; make big zones with the library");
+    var masks = {}, self = this;
+    items.forEach(function (it) {
+      if (!pointInRings(toE7(bandCentroidLat(it[0], it[2])), toE7((it[1] + it[3]) / 2), rings)) return;
+      var row = Math.floor(it[5] / SUB), col = Math.floor(it[6] / SUB), sub = (it[5] % SUB) * SUB + it[6] % SUB;
+      if (opts.pakistanOnly && opts.boundary && self.flag(opts.boundary, it[4], row, col, sub) === OUTSIDE) return;
+      var c = cellId(it[4], row, col);
+      masks[c] = (masks[c] || 0) + Math.pow(2, sub);
+    });
+    return new Zone(this, masks);
+  };
+
   Places.prototype.path = function (place) {
     var out = [];
     for (var p = place; p; p = this.byId[p.parentId]) out.push(p);
@@ -945,7 +1055,7 @@
     toE7: toE7, bandCentroidLat: bandCentroidLat, metresPerDegree: metresPerDegree,
     localOffset: localOffset, applyOffset: applyOffset, addressText: addressText, bearing: bearing, compass: compass, direction: direction, turnWords: turnWords,
     formatDistance: formatDistance, NavigationSession: NavigationSession, cellId: cellId, subCellId: subCellId,
-    pointInRings: pointInRings,
+    pointInRings: pointInRings, Zone: Zone,
     cellCode: cellCode, subCellCode: subCellCode
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

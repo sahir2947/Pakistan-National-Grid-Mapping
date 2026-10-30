@@ -19,10 +19,12 @@ from .grid import Bounds, Cell, Grid, Location, Nearby, Offset, Separation, SubC
 from .navigate import Direction, NavigationSession, NavState, direction, format_distance  # noqa: E402
 from .spec import GRID_VERSION  # noqa: E402
 from .userplaces import Reference, UserLocality, UserPlaces, UserPlacesError  # noqa: E402
+from .zones import Zone, ZoneError, ZoneIndex  # noqa: E402
 
 __all__ = [
     "Grid", "Location", "Nearby", "Separation", "GridAddress", "address_from_point", "parse_address", "resolve_address", "Cell", "SubCell", "Bounds", "Offset", "Direction", "direction",
     "NavigationSession", "NavState", "format_distance", "ids",
     "GRID_VERSION", "PakgridError", "OutsideGridError", "InvalidIdError", "NotInDatabaseError",
     "GridMismatchError", "IntegrityError", "UserPlaces", "UserLocality", "Reference", "UserPlacesError",
+    "Zone", "ZoneIndex", "ZoneError",
 ]

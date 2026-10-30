@@ -35,6 +35,15 @@ from zoom 14), or use **Measure from here** in a block's details, or search
 `11-0140-0471 to 11-0150-0480`. It shows the distance and direction between
 their centres, and the east/north metres.
 
+**Zone** makes a custom zone, such as a delivery area (project.md §7.6):
+
+1. Tap its corners and press **Done**. The sub-cells whose centre is inside
+   it are shaded green (with **Pakistan only** ticked, only those in
+   Pakistan), with the count and the area.
+2. Tap anywhere to check a pin: green is in the zone, red is not.
+3. The panel gives the zone's data (`Zone.to_dict()`) to store. You can also
+   paste a stored zone's data to see it on the map.
+
 **Draw** previews a new user locality (project.md §5.8). Tap the corners of
 a polygon and press **Done** to see:
 

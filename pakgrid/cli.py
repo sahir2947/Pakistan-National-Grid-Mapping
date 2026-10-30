@@ -1,5 +1,5 @@
-"""Command-line tools: pakgrid build | build-places | verify | locate | show | within | distance | places |
-user-places | info | export-layout | export-conformance."""
+"""Command-line tools: pakgrid build | build-places | verify | locate | show | within | distance | zone |
+places | user-places | info | export-layout | export-conformance."""
 
 import argparse
 import json
@@ -67,6 +67,27 @@ def main(argv=None):
     p.add_argument("a", metavar="FROM")
     p.add_argument("b", metavar="TO")
     p.add_argument("--db", default=DEFAULT_DB)
+
+    p = sub.add_parser("zone", help="make a custom zone (delivery area) and check pins against it")
+    p.add_argument("--db", default=DEFAULT_DB)
+    zact = p.add_subparsers(dest="action", required=True)
+    z = zact.add_parser("make", help="make a zone and write it as JSON")
+    src = z.add_mutually_exclusive_group(required=True)
+    src.add_argument("--polygon", metavar="FILE",
+                     help="JSON file: [[lat, lon], ...], a list of rings, or GeoJSON (Polygon, MultiPolygon, Feature)")
+    src.add_argument("--circle", nargs=3, type=float, metavar=("LAT", "LON", "METRES"))
+    src.add_argument("--cells", nargs="+", metavar="CODE", help="cell and sub-cell codes")
+    src.add_argument("--place", metavar="KEY", help="a place key, e.g. punjab/lahore")
+    z.add_argument("--touching", action="store_true", help="with --circle: blocks with any part inside")
+    z.add_argument("--pakistan-only", action="store_true", help="keep only sub-cells in Pakistan")
+    z.add_argument("-o", "--output", metavar="FILE", help="write the zone JSON here (default: print a summary only)")
+    z = zact.add_parser("show", help="summarise a zone JSON file")
+    z.add_argument("zone", metavar="ZONE.json")
+    z.add_argument("--codes", action="store_true", help="also list its cell and sub-cell codes")
+    z = zact.add_parser("check", help="is a pin in the zone?")
+    z.add_argument("zone", metavar="ZONE.json")
+    z.add_argument("lat", type=float)
+    z.add_argument("lon", type=float)
 
     p = sub.add_parser("places", help="list places (province, district, tehsil, locality), or the cells of one")
     p.add_argument("text", nargs="?", help="only places whose name contains this text, or with this key")
@@ -220,6 +241,40 @@ def _show(grid, args):
     return out
 
 
+def _zone_summary(zone):
+    b = zone.bounds()
+    return {"sub_cells": zone.sub_cell_count, "cells": zone.cell_count, "full_cells": len(zone.cells(full_only=True)),
+            "area_km2": round(zone.area_km2, 3), "bounds": [round(v, 7) for v in b] if b else None}
+
+
+def _zone(grid, args):
+    from .zones import Zone
+    if args.action == "make":
+        polygon = None
+        if args.polygon:
+            with open(args.polygon, encoding="utf-8") as f:
+                polygon = json.load(f)
+        circle = (*args.circle, args.touching) if args.circle else None
+        zone = grid.zone(polygon=polygon, circle=circle, cells=args.cells, place=args.place,
+                         pakistan_only=args.pakistan_only)
+        out = _zone_summary(zone)
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as f:
+                json.dump(zone.to_dict(), f, separators=(",", ":"))
+            out["written"] = args.output
+        return out
+    with open(args.zone, encoding="utf-8") as f:
+        zone = Zone.from_dict(json.load(f), grid)
+    if args.action == "show":
+        out = _zone_summary(zone)
+        if args.codes:
+            out["codes"] = zone.codes()
+        return out
+    loc = grid.layout.locate_e7(*(round(v * 1e7) for v in (args.lat, args.lon)))
+    return {"inside": zone.contains(args.lat, args.lon), "point": [args.lat, args.lon],
+            "sub_cell": ids.sub_cell_code(ids.sub_cell_id(ids.cell_id(*loc[:3]), loc[3] * 5 + loc[4]))}
+
+
 def _user_places(args):
     from .grid import Grid
     with Grid.open(args.db) as grid:
@@ -276,6 +331,7 @@ _COMMANDS = {
     "within": _with_grid(lambda grid, a: [n.to_dict() for n in grid.cells_within(
         a.lat, a.lon, a.radius, level=a.level, pakistan_only=a.pakistan_only, touching=a.touching)]),
     "distance": _with_grid(lambda grid, a: grid.distance(a.a, a.b).to_dict()),
+    "zone": _with_grid(_zone),
     "info": _with_grid(lambda grid, a: grid.info()),
     "export-layout": _export_layout,
     "export-conformance": _export_conformance,

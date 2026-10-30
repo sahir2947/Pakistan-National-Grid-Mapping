@@ -410,6 +410,29 @@ places `grid.place(...)`, `grid.find_places("sahiwal")`,
 `grid.get_place("punjab/lahore")` and `grid.cells_in_place(...)` (Lahore
 district: 1,746 cells in ~16 ms).
 
+**Delivery zones.** Let each shop draw its delivery area in the app, make a
+zone from it, and store the zone's data on the shop. Checking an order's pin
+is then a few microseconds, and `ZoneIndex` answers "which shops deliver
+here?" for many shops at once ([project.md §7.6](../project.md#76-custom-zones)):
+
+```python
+from pakgrid import Zone, ZoneIndex
+
+class Shop(models.Model):
+    delivery_zone = models.JSONField(null=True)      # Zone.to_dict()
+
+# saving the area the owner drew (polygon: [[lat, lon], ...] from the app)
+shop.delivery_zone = get_grid().zone(polygon=polygon, pakistan_only=True).to_dict()
+
+# checking an order
+Zone.from_dict(shop.delivery_zone, get_grid()).contains(order.lat, order.lon)
+
+# which shops deliver here? Build the index once (and again when a zone changes)
+index = ZoneIndex({s.id: Zone.from_dict(s.delivery_zone, get_grid())
+                   for s in Shop.objects.exclude(delivery_zone=None)})
+shop_ids = index.at(lat, lon)
+```
+
 **Localities your users add.** Shop owners and riders know places the
 official data misses (a gali, a market). Let trusted users draw them in the
 app and send the polygon to an endpoint; your backend checks the permission

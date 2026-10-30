@@ -100,6 +100,7 @@
   <label class="toggle" title="Colour each block by its tehsil"><input type="checkbox" id="placeson"> Places</label>
   <label class="toggle" title="Show or hide the rectangle, quadrants, cells and sub-cells"><input type="checkbox" id="gridon" checked> Grid</label>
   <button type="button" id="measure" title="Distance and direction between two blocks: tap one, then the other">Measure</button>
+  <button type="button" id="zonebtn" title="Draw a delivery zone, check pins against it, and copy its data">Zone</button>
   <button type="button" id="draw" title="Draw a new locality and see the sub-cells it would tag">Draw</button>
 </form>
 <div class="panel" id="panel"></div>
@@ -607,6 +608,7 @@
   function startMeasure(from) {
     if (nav.target) nav.close(true);
     if (drawing) stopDrawing();
+    if (zoning) stopZone();
     selLayer.clearLayers(); arrow = arrowMarker = null;
     measuring = { from: from ? { q: from.q, row: from.row, col: from.col, sub: from.sub == null ? null : from.sub } : null };
     measureBtn.classList.add("on");
@@ -679,9 +681,130 @@
   map.on("click", function (e) {
     if (nav.target) return;   // while navigating, taps don't change the selection
     if (drawing) { addVertex(e.latlng.lat, e.latlng.lng); return; }
+    if (zoning) { zoneTap(e.latlng.lat, e.latlng.lng); return; }
     if (measuring) { measureTap(e.latlng.lat, e.latlng.lng); return; }
     selectPoint(e.latlng.lat, e.latlng.lng, false);
   });
+
+  // -- Custom zones (pakgrid.zones) ------------------------------------------------
+  // Tap corners to draw a zone, press Done: the sub-cells whose centre is inside it are shaded.
+  // Then taps check pins against it (green inside, red outside). Its data (Zone.to_dict) can be
+  // copied, or a stored zone pasted in to see it.
+  var zoning = null, zoneBtn = document.getElementById("zonebtn");
+  function startZone() {
+    if (nav.target) nav.close(true);
+    if (drawing) stopDrawing();
+    if (measuring) stopMeasure();
+    selLayer.clearLayers(); arrow = arrowMarker = null;
+    zoning = { pts: [], zone: null, pins: [] };
+    zoneBtn.classList.add("on");
+    map.doubleClickZoom.disable();
+    showZone();
+  }
+  function stopZone() {
+    zoning = null;
+    zoneBtn.classList.remove("on");
+    map.doubleClickZoom.enable();
+    selLayer.clearLayers();
+    showSummary();
+  }
+  zoneBtn.addEventListener("click", function () { if (zoning) stopZone(); else startZone(); });
+  function zoneTap(lat, lon) {
+    var z = zoning;
+    if (z.zone) {
+      var inside = z.zone.contains(lat, lon), r = grid.locate(lat, lon);
+      z.pins.unshift({ lat: lat, lon: lon, inside: inside,
+                       code: r ? PakGrid.subCellCode(r.q, r.row, r.col, r.subRow * 5 + r.subCol) : "outside the grid" });
+      z.pins = z.pins.slice(0, 8);
+    } else {
+      z.pts.push([+lat.toFixed(7), +lon.toFixed(7)]);
+    }
+    showZone();
+  }
+  function finishZone() {
+    var z = zoning;
+    try {
+      z.zone = grid.zoneFromPolygon(z.pts, { boundary: border, pakistanOnly: document.getElementById("pkonly").checked });
+      z.error = null;
+    } catch (err) { z.error = err.message; z.zone = null; }
+    z.pins = [];
+    showZone(true);
+  }
+  function showZone(fit) {
+    var z = zoning;
+    selLayer.clearLayers();
+    if (z.zone) {
+      var boxes = z.zone.boxes();
+      boxes.slice(0, 30000).forEach(function (b) {
+        L.rectangle([[b[0], b[1]], [b[2], b[3]]], { renderer: canvas, stroke: !b[4] || boxes.length < 3000,
+          color: "#16a34a", weight: 0.5, fillColor: "#16a34a", fillOpacity: 0.3, interactive: false }).addTo(selLayer);
+      });
+    }
+    if (z.pts.length) {
+      (z.pts.length >= 3 ? L.polygon(z.pts, { fill: false }) : L.polyline(z.pts))
+        .setStyle({ color: "#111827", weight: 2, dashArray: z.zone ? "4 4" : null, interactive: false }).addTo(selLayer);
+      if (!z.zone) z.pts.forEach(function (p) {
+        L.circleMarker(p, { radius: 4, color: "#111827", fillColor: "#fff", fillOpacity: 1, weight: 2, interactive: false }).addTo(selLayer);
+      });
+    }
+    z.pins.forEach(function (p) {
+      L.circleMarker([p.lat, p.lon], { radius: 7, color: "#fff", weight: 2, fillOpacity: 1,
+        fillColor: p.inside ? "#16a34a" : "#dc2626", interactive: false }).addTo(selLayer);
+    });
+    var html = "<h2>Custom zone</h2>";
+    if (!z.zone) {
+      html += "<div class='sub'>Tap the map at each corner of the delivery area, then press <b>Done</b>. A sub-cell " +
+              "is in the zone when its centre is inside the shape" +
+              (document.getElementById("pkonly").checked ? " and it is in Pakistan" : "") + ".</div>" +
+              "<p><button type='button' id='z-undo'" + (z.pts.length ? "" : " disabled") + ">Undo</button> " +
+              "<button type='button' id='z-done' class='on'" + (z.pts.length >= 3 ? "" : " disabled") + ">Done</button> " +
+              "<button type='button' id='z-cancel'>Cancel</button></p>" +
+              (z.error ? "<p class='error'>" + esc(z.error) + "</p>" : "") +
+              "<h3>Or show a stored zone</h3><textarea id='z-paste' placeholder='Paste zone JSON (Zone.to_dict())'></textarea>" +
+              "<p><button type='button' id='z-load'>Show it</button></p>";
+    } else {
+      var zz = z.zone, n = zz.subCellCount(), d = zz.toDict();
+      html += rowsHtml([["Sub-cells", n.toLocaleString()],
+                        ["Cells", zz.cellIds().length.toLocaleString() + " (" + d.full.length.toLocaleString() + " whole)"],
+                        ["Area", zz.areaKm2().toFixed(2) + " km²"]]);
+      html += "<h3>Check pins</h3><div class='sub'>Tap the map: green is in the zone, red is not. The check is " +
+              "<code>zone.contains(lat, lon)</code>: is the pin's sub-cell in the zone?</div>";
+      if (z.pins.length) html += rowsHtml(z.pins.map(function (p) {
+        return [p.inside ? "<b style='color:#16a34a'>inside</b>" : "<b style='color:#dc2626'>outside</b>",
+                fmt(p.lat).slice(0, 9) + ", " + fmt(p.lon).slice(0, 9) + " · " + p.code];
+      }));
+      html += "<h3>Zone data</h3><textarea id='z-json' readonly></textarea>" +
+              "<div class='sub'>Store this (for example in a JSONField) and load it with " +
+              "<code>Zone.from_dict(data, grid)</code>; it is the same as <code>grid.zone(polygon=...).to_dict()</code>" +
+              (z.pts.length ? " for <code>polygon=" + esc(JSON.stringify(z.pts)) + "</code>" : "") + ".</div>" +
+              "<p><button type='button' id='z-new'>New zone</button> <button type='button' id='z-cancel'>Done</button></p>";
+    }
+    panel.innerHTML = html;
+    var q = function (id) { return document.getElementById(id); };
+    q("z-cancel").onclick = stopZone;
+    if (!z.zone) {
+      q("z-undo").onclick = function () { z.pts.pop(); showZone(); };
+      q("z-done").onclick = finishZone;
+      q("z-load").onclick = function () {
+        try {
+          z.zone = PakGrid.Zone.fromDict(grid, JSON.parse(q("z-paste").value));
+          z.pts = []; z.pins = []; z.error = null;
+        } catch (err) { z.error = "Not zone data: " + err.message; }
+        showZone(true);
+      };
+    } else {
+      q("z-json").value = JSON.stringify(z.zone.toDict());
+      q("z-new").onclick = function () { z.zone = null; z.pts = []; z.pins = []; showZone(); };
+      if (fit) {
+        var ids = z.zone.cellIds(), s = 90, w = 180, nn = -90, e = -180;
+        ids.forEach(function (c) {
+          var b = grid.describe(Math.floor(c / 1048576), Math.floor(c / 1024) % 1024, c % 1024, null).bounds;
+          s = Math.min(s, b.south); w = Math.min(w, b.west); nn = Math.max(nn, b.north); e = Math.max(e, b.east);
+        });
+        if (ids.length) { var view = viewPadding(); view.maxZoom = 16; map.fitBounds([[s, w], [nn, e]], view); }
+      }
+    }
+  }
 
   // -- Draw a user locality (pakgrid.userplaces) ---------------------------------
   // Tap corners to draw a polygon; the panel shows the sub-cells it would tag (centre inside, in
@@ -691,6 +814,7 @@
   function startDrawing() {
     if (nav.target) nav.close(true);
     if (measuring) stopMeasure();
+    if (zoning) stopZone();
     selLayer.clearLayers();
     arrow = arrowMarker = null;
     drawing = { pts: [], name: "", nearest: 3 };
@@ -826,6 +950,7 @@
   document.getElementById("search").addEventListener("submit", function (e) {
     e.preventDefault();
     if (drawing) stopDrawing();
+    if (zoning) stopZone();
     var two = /^\s*(\S+)\s+(?:to|-|→)\s+(\S+)\s*$/i.exec(document.getElementById("q").value);
     if (two && grid.parseCode(two[1]) && grid.parseCode(two[2])) {     // '11-0140-0471 to 11-0150-0480'
       startMeasure(grid.parseCode(two[1]));
