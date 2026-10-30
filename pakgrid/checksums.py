@@ -34,6 +34,7 @@ def official_checksum(meta):
 # and Pakistan editions: cells wholly outside Pakistan carry no place tags in either.
 OFFICIAL_PLACES = {
     1: "61db16961ad906b21972bf2796aecbd29c13cd9f1db45577fc88ccb8bc4a21a9",
+    2: "03ff666089c56b32c31348902d8ab87ff5276072ed74eb30c64bb94f17892ba7",
 }
 
 

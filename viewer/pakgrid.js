@@ -591,50 +591,62 @@
 
   // -- Places layer (same tags as pakgrid.places; data from places.js) -------
 
-  var PLACE_LEVELS = ["province", "district", "tehsil"];
+  var PLACE_LEVELS = ["province", "district", "tehsil", "locality"];
+  var TOWN_KINDS = { city: true, town: true };
 
-  // Every sub-cell's tehsil, district and province. `data` is PAKGRID_PLACES: the places, and each
-  // fine row of sub-cells as runs [tag, count, tag, count, ...] from the west (tag 0 = no place).
+  // Every sub-cell's locality, tehsil, district and province. `data` is PAKGRID_PLACES: the places,
+  // and each fine row of sub-cells as runs [tag, count, tag, count, ...] from the west (tag 0 = no
+  // place), for tehsils (`rows`) and for localities (`locality_rows`).
   function Places(data) {
     var self = this;
     this.version = data.places_version;
     this.sha256 = data.places_sha256;
     this.attribution = data.attribution;
-    this.list = data.places.map(function (p) {
-      return { id: p[0], level: PLACE_LEVELS[p[1] - 1], key: p[2], name: p[3], parentId: p[4],
-               parentShare: p[5] == null ? null : p[5] / 1000, uncertain: p[5] != null && p[5] < 700,
-               extent: p[6] };
-    });
+    this.inLimits = data.in_limits;
     this.byId = {};
-    this.list.forEach(function (p) { self.byId[p.id] = p; });
-    this._rows = data.rows;
-    this._starts = [{}, {}, {}, {}];
+    this.list = data.places.map(function (p) {
+      var place = { id: p[0], level: PLACE_LEVELS[p[1] - 1], name: p[3], parentId: p[4], extent: p[5] };
+      var parent = self.byId[p[4]];             // parents come first (smaller IDs)
+      place.key = parent ? parent.key + "/" + p[2] : p[2];
+      if (p[1] === 4) {
+        place.kind = p[6]; place.localName = p[7]; place.latE7 = p[8]; place.lonE7 = p[9]; place.area = !!p[10];
+        place.lat = p[8] / 1e7; place.lon = p[9] / 1e7;
+      }
+      self.byId[place.id] = place;
+      return place;
+    });
+    this._rows = { tehsil: data.rows, locality: data.locality_rows };
+    this._starts = { tehsil: [{}, {}, {}, {}], locality: [{}, {}, {}, {}] };
   }
 
-  // Tag of sub-cell column j in fine row i of quadrant q (0 = none).
-  Places.prototype.tagAt = function (q, i, j) {
-    var runs = this._rows[q][i];
+  // Tag of sub-cell column j in fine row i of quadrant q (0 = none); layer "tehsil" (default) or
+  // "locality".
+  Places.prototype.tagAt = function (q, i, j, layer) {
+    layer = layer || "tehsil";
+    var runs = this._rows[layer][q][i];
     if (!runs) return 0;
-    var starts = this._starts[q][i];
+    var starts = this._starts[layer][q][i];
     if (!starts) {
       starts = [];
       for (var k = 0, at = 0; k < runs.length; k += 2) { starts.push(at); at += runs[k + 1]; }
-      this._starts[q][i] = starts;
+      this._starts[layer][q][i] = starts;
     }
     var m = bisectRight(starts, j) - 1;
     return m < 0 ? 0 : runs[2 * m];
   };
 
-  // The tag of a sub-cell, or of a cell (sub == null): the tehsil most of its 25 sub-cells have
-  // (ties: the centre sub-cell's, else the smallest), as pakgrid.places does.
-  Places.prototype.tag = function (q, row, col, sub) {
-    if (sub != null) return this.tagAt(q, row * 5 + Math.floor(sub / 5), col * 5 + sub % 5);
+  // The tag of a sub-cell, or of a cell (sub == null): the tag most of its 25 sub-cells have
+  // (ties: the centre sub-cell's, else the smallest), as pakgrid.places does. For tehsils, sub-cells
+  // without a tag do not count; for localities they do (a cell's locality can be none).
+  Places.prototype.tag = function (q, row, col, sub, layer) {
+    if (sub != null) return this.tagAt(q, row * 5 + Math.floor(sub / 5), col * 5 + sub % 5, layer);
+    var skipZero = (layer || "tehsil") === "tehsil";
     var counts = {}, best = 0, k, t;
     var block = [];
     for (k = 0; k < 25; k++) {
-      t = this.tagAt(q, row * 5 + Math.floor(k / 5), col * 5 + k % 5);
+      t = this.tagAt(q, row * 5 + Math.floor(k / 5), col * 5 + k % 5, layer);
       block.push(t);
-      if (t) { counts[t] = (counts[t] || 0) + 1; if (counts[t] > best) best = counts[t]; }
+      if (t || !skipZero) { counts[t] = (counts[t] || 0) + 1; if (counts[t] > best) best = counts[t]; }
     }
     if (!best) return 0;
     if (counts[block[12]] === best) return block[12];
@@ -642,34 +654,63 @@
     return Math.min.apply(null, tied);
   };
 
-  // {tehsil, district, province, label, uncertain} for a sub-cell or cell, or null outside Pakistan.
-  Places.prototype.of = function (q, row, col, sub) {
+  // True when a block (centroid at latE7, lonE7) tagged with a locality is near it rather than in
+  // it, as pakgrid.places.locality_is_near (the limits come from the library, so the
+  // numbers stay below 2^53 and the test is exact).
+  Places.prototype.isNear = function (loc, latE7, lonE7) {
+    if (loc.area) return false;
+    var dx = 85 * (lonE7 - loc.lonE7), dy = 100 * (latE7 - loc.latE7);
+    return dx * dx + dy * dy > this.inLimits[loc.kind];
+  };
+
+  // {locality, near, localityText, tehsil, district, province, label} for a sub-cell or cell, or
+  // null outside Pakistan. Pass the Grid to have "near X (1.2 km SE)" worked out from the block's
+  // centroid, as the library does; without it, the locality is given by name only.
+  Places.prototype.of = function (q, row, col, sub, grid) {
     var t = this.byId[this.tag(q, row, col, sub)];
     if (!t) return null;
     var d = this.byId[t.parentId] || null, p = d ? this.byId[d.parentId] || null : null;
-    return { tehsil: t, district: d, province: p, uncertain: t.uncertain,
-             label: [t, d, p].filter(Boolean).map(function (x) { return x.name; }).join(", ") };
+    var loc = this.byId[this.tag(q, row, col, sub, "locality")] || null, near = false, text = null, way = null;
+    if (loc) {
+      text = loc.name;
+      if (grid && !loc.area) {
+        var centroid = grid.describe(q, row, col, sub == null ? null : sub).centroid;
+        near = this.isNear(loc, toE7(centroid[0]), toE7(centroid[1]));
+        way = direction(loc.lat, loc.lon, centroid[0], centroid[1]);
+        if (near) text = "near " + loc.name + " (" + formatDistance(way.distance_m) + " " + way.compass_short + ")";
+      }
+    }
+    // the label says a name the same as the one before it once, as the library does
+    var names = (text ? [text] : []).concat([t, d, p].filter(Boolean).map(function (x) { return x.name; }));
+    names = names.filter(function (n, k) { return !k || n.toLowerCase() !== names[k - 1].toLowerCase(); });
+    return { locality: loc, near: near, localityText: text, localityDistance: way && way.distance_m,
+             localityDirection: way && way.compass_short, tehsil: t, district: d, province: p,
+             label: names.join(", ") };
   };
 
-  // Places whose name contains `text`, or whose key is `text` (case-insensitive), in ID order.
+  // Places whose name (or local name) contains `text`, or whose key is `text` (case-insensitive),
+  // in ID order.
   Places.prototype.find = function (text) {
     var t = String(text).trim().toLowerCase();
     if (!t) return [];
-    return this.list.filter(function (p) { return p.name.toLowerCase().indexOf(t) >= 0 || p.key === t; });
+    return this.list.filter(function (p) {
+      return p.name.toLowerCase().indexOf(t) >= 0 || p.key === t || (p.localName && p.localName.indexOf(t) >= 0);
+    });
   };
 
-  // The exact shape of a place: the sub-cells tagged with it (or with any of its tehsils).
+  // The exact shape of a place: the sub-cells tagged with it (or, above a tehsil, with any of its tehsils).
   // Returns {rings, rects, edges, subCells}: `rings` are closed [lat, lon] outlines that, filled
   // with the even-odd rule, cover exactly those sub-cells (holes included); `rects` the same area as
   // [s, w, n, e] rectangles (rows with identical spans merged); `edges` the outline as segments.
   Places.prototype.shape = function (grid, place) {
-    var self = this, want = {};
-    this.list.forEach(function (t) {
+    var self = this, want = {}, layer = place.level === "locality" ? "locality" : "tehsil";
+    if (layer === "locality") want[place.id] = true;
+    else this.list.forEach(function (t) {
       if (t.level === "tehsil" && self.path(t).some(function (a) { return a.id === place.id; })) want[t.id] = true;
     });
     var rows = {}, count = 0, q, key, k;
     for (q = 0; q < 4; q++) {
-      var ql = grid.quadrants[q], qrows = this._rows[q];
+      var ql = grid.quadrants[q], qrows = this._rows[layer][q];
       for (key in qrows) {
         var i = +key, runs = qrows[key], row = Math.floor(i / SUB), at = 0, line = null;
         for (k = 0; k < runs.length; k += 2) {

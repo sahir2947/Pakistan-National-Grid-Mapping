@@ -11,10 +11,11 @@ from .boundary import FLAG_NAMES, OUTSIDE, Boundary, sub_flag
 from .checksums import official_checksum, official_places_checksum
 from .errors import GridMismatchError, IntegrityError, InvalidIdError, NotInDatabaseError, OutsideGridError
 from .layout import SCALE, SUB, GridLayout, QuadrantLayout, to_e7
-from .places import UNCERTAIN_BELOW
+from .places import PLACES_VERSION, locality_is_near
 from .store import SCHEMA_VERSION, GridStore
 
 MAX_CANDIDATE_RADIUS_M = 5000.0
+_UNPACK = {"tehsil": "<25H", "locality": "<25I"}
 
 
 @dataclass(frozen=True)
@@ -96,29 +97,31 @@ class Offset:
                 "text": self.text}
 
 
-PLACE_LEVELS = ("province", "district", "tehsil")
+PLACE_LEVELS = ("province", "district", "tehsil", "locality")
 
 
 @dataclass(frozen=True)
 class Place:
-    """A named area in the places layer: a province, district or tehsil."""
+    """A named place in the places layer: a province, district, tehsil or locality."""
     id: int
-    level: str                  # "province", "district" or "tehsil"
+    level: str                  # "province", "district", "tehsil" or "locality"
     key: str                    # stable readable key, e.g. 'punjab/rawalpindi/taxila'
     name: str                   # display name, e.g. 'Taxila'
-    parent_id: int | None       # the district of a tehsil, the province of a district
-    parent_share: float | None  # share of this place that its parent's source outline covers (0-1)
-    source_name: str            # the name exactly as in the source data, e.g. 'TAXILA'
-    source_id: str
-
-    @property
-    def uncertain(self):
-        """True when the source outlines put less than 70% of this place inside its parent."""
-        return self.parent_share is not None and self.parent_share < UNCERTAIN_BELOW
+    parent_id: int | None       # a locality's tehsil, a tehsil's district, a district's province
+    source_name: str            # the name exactly as in the source data
+    source_id: str              # OCHA P-code ('PK60305') or OpenStreetMap ID ('node/123')
+    kind: str | None = None     # a locality's OpenStreetMap kind: 'city', 'town', 'village', ...
+    local_name: str | None = None   # a locality's name in Urdu or another local script, where known
+    lat: float | None = None    # a locality's point (for an area, a point inside it)
+    lon: float | None = None
+    area: bool = False          # True for a locality mapped as an outline, not a point
 
     def to_dict(self):
-        return {"id": self.id, "level": self.level, "key": self.key, "name": self.name,
-                "parent_id": self.parent_id, "parent_share": self.parent_share, "uncertain": self.uncertain}
+        out = {"id": self.id, "level": self.level, "key": self.key, "name": self.name,
+               "parent_id": self.parent_id}
+        if self.level == "locality":
+            out.update(kind=self.kind, local_name=self.local_name, point=[self.lat, self.lon])
+        return out
 
 
 @dataclass(frozen=True)
@@ -127,22 +130,40 @@ class PlaceTags:
     tehsil: Place
     district: Place | None
     province: Place | None
+    locality: Place | None = None
+    near: bool = False              # True when the sub-cell is near the locality rather than in it
+    locality_distance_m: float | None = None   # from the locality's point to the sub-cell's centroid
+    locality_direction: str | None = None      # 16-point compass direction of that, e.g. 'SE'
 
     @property
-    def district_uncertain(self):
-        """True when the tehsil's district comes from coarse outlines that disagree (see project.md)."""
-        return self.tehsil.uncertain
+    def locality_text(self):
+        """'Model Town', or 'near Chak 25 (1.4 km SE)'; None without a locality."""
+        if not self.locality:
+            return None
+        if not self.near:
+            return self.locality.name
+        return (f"near {self.locality.name} ({navigate.format_distance(self.locality_distance_m)} "
+                f"{self.locality_direction})")
 
     @property
     def label(self):
-        """'Taxila, Rawalpindi, Punjab'"""
-        return ", ".join(p.name for p in (self.tehsil, self.district, self.province) if p)
+        """'Lahore Cant, Lahore Cantt, Lahore, Punjab': locality (where there is one), tehsil, district,
+        province. A name the same as the one before it is said once ('Taxila, Rawalpindi, Punjab')."""
+        names = ([self.locality_text] if self.locality else []) + [
+            p.name for p in (self.tehsil, self.district, self.province) if p]
+        return ", ".join(n for k, n in enumerate(names) if not k or n.lower() != names[k - 1].lower())
 
     def to_dict(self):
         def brief(p):
             return {"id": p.id, "key": p.key, "name": p.name} if p else None
-        return {"label": self.label, "tehsil": brief(self.tehsil), "district": brief(self.district),
-                "province": brief(self.province), "district_uncertain": self.district_uncertain}
+        loc = None
+        if self.locality:
+            loc = dict(brief(self.locality), kind=self.locality.kind, local_name=self.locality.local_name,
+                       near=self.near, text=self.locality_text,
+                       distance_m=None if self.locality_distance_m is None else round(self.locality_distance_m),
+                       direction=self.locality_direction)
+        return {"label": self.label, "locality": loc, "tehsil": brief(self.tehsil),
+                "district": brief(self.district), "province": brief(self.province)}
 
 
 @dataclass(frozen=True)
@@ -157,7 +178,7 @@ class Location:
     confident: bool | None   # None when no accuracy was given
     candidates: tuple        # other sub-cell IDs within the accuracy radius, nearest first
     in_pakistan: bool        # the point itself, checked against the border line in border blocks
-    place: PlaceTags | None = None   # the sub-cell's tehsil, district and province (places layer)
+    place: PlaceTags | None = None   # the sub-cell's locality, tehsil, district and province (places layer)
 
     @property
     def id(self):
@@ -217,6 +238,7 @@ class Grid:
                 "rebuild it with `pakgrid build`")
         self._boundary = None
         self._places = None
+        self._keys = None
         self._has_places = None
         self.layout = _layout_from_store(store)
         if not self.layout.same_shape(GridLayout.from_spec()):
@@ -299,7 +321,8 @@ class Grid:
                 candidates = self._candidates(lat, lon, min(accuracy_m, MAX_CANDIDATE_RADIUS_M), sub.id)
 
         in_pk = sub.pakistan == "inside" or (sub.pakistan == "border" and self.boundary.contains(lat, lon))
-        place = self._tags(cid, sub.index) if self.has_places else None
+        place = (self._tags(cid, sub.index, lambda: (to_e7(sub.centroid[0]), to_e7(sub.centroid[1])))
+                 if self.has_places else None)
         return Location(lat, lon, sub, offset, edge, accuracy_m, confident, candidates, in_pk, place)
 
     def _candidates(self, lat, lon, radius_m, own_id):
@@ -407,30 +430,33 @@ class Grid:
 
     direction = staticmethod(navigate.direction)
 
-    # -- Places (province, district, tehsil) -------------------------------
+    # -- Places (province, district, tehsil, locality) ----------------------
 
     @property
     def has_places(self):
-        """True if this database has the places layer (see pakgrid.places)."""
+        """True if this database has the places layer of this library's places version."""
         if self._has_places is None:
-            self._has_places = "places_version" in self.meta and self.store.has_places()
+            self._has_places = (self.meta.get("places_version") == str(PLACES_VERSION)
+                                and self.store.has_places())
         return self._has_places
 
     def place(self, item, level="sub"):
-        """The tehsil, district and province of a sub-cell (or a cell), or None outside Pakistan.
+        """The locality, tehsil, district and province of a sub-cell (or cell); None outside Pakistan.
 
-        A cell's place is the tehsil most of its 25 sub-cells are in; where a tehsil line runs
-        through the cell, ask for its sub-cells to get each one's own tehsil.
+        A cell's place is the tehsil, and the locality, most of its 25 sub-cells have; where a
+        boundary runs through the cell, ask for its sub-cells to get each one's own tags.
         """
         level, item_id = self._resolve_any(item, level)
-        self.layout.item_from_id(item_id, level)
+        q, i, j = self.layout.item_from_id(item_id, level)
+        def centroid():
+            return self.layout.quadrants[q].item_centroid_e7(i, j, level)
         if level == "cell":
-            return self._tags(item_id, None)
+            return self._tags(item_id, None, centroid)
         cid, sub = ids.split_sub_cell_id(item_id)
-        return self._tags(cid, sub)
+        return self._tags(cid, sub, centroid)
 
     def places(self, level=None):
-        """All places, or those of one level ("province", "district", "tehsil"), in ID order."""
+        """All places, or those of one level ("province", "district", "tehsil", "locality"), by ID."""
         found = self._place_table().values()
         if level is None:
             return list(found)
@@ -439,9 +465,11 @@ class Grid:
         return [p for p in found if p.level == level]
 
     def find_places(self, text, level=None):
-        """Places whose name contains `text`, or whose key is `text` (case-insensitive)."""
+        """Places whose name (or local name) contains `text`, or whose key is `text` (case-insensitive)."""
         t = text.strip().lower()
-        return [p for p in self.places(level) if t in p.name.lower() or t == p.key or t in p.source_name.lower()]
+        return [p for p in self.places(level)
+                if t in p.name.lower() or t == p.key or t in p.source_name.lower()
+                or (p.local_name and t in p.local_name)]
 
     def get_place(self, place):
         """A Place by ID, key ('punjab/rawalpindi/taxila') or Place."""
@@ -451,31 +479,39 @@ class Grid:
         if isinstance(place, int) and not isinstance(place, bool) and place in table:
             return table[place]
         if isinstance(place, str):
-            for p in table.values():
-                if p.key == place.strip().lower():
-                    return p
+            key = place.strip().lower()
+            if self._keys is None:
+                self._keys = {p.key: p for p in table.values()}
+            if key in self._keys:
+                return self._keys[key]
         raise InvalidIdError(f"no such place: {place!r} (use a place ID, or a key such as 'punjab/lahore')")
 
     def cells_in_place(self, place, level="cell"):
-        """IDs of the cells (or sub-cells) in a province, district or tehsil, in ID order.
+        """IDs of the cells (or sub-cells) in a place, in ID order.
 
-        level="cell": cells whose main tehsil is in the place. level="sub": every sub-cell tagged
-        with a tehsil in the place, exactly, including those of cells that a boundary runs through.
+        level="cell": cells whose main tehsil (for a locality: main locality) is in the place.
+        level="sub": every sub-cell tagged with the place (or a tehsil in it), exactly, including
+        those of cells that a boundary runs through.
         """
         p = self.get_place(place)
-        tehsils = {t.id for t in self._place_table().values() if t.level == "tehsil" and self._within(t, p)}
-        rows = self.store.cells_with_tehsils(tehsils)
+        if level not in ("cell", "sub"):
+            raise ValueError(f"level must be 'cell' or 'sub', got {level!r}")
+        if p.level == "locality":
+            layer, tags = "locality", {p.id}
+        else:
+            layer = "tehsil"
+            tags = {t.id for t in self._place_table().values() if t.level == "tehsil" and self._within(t, p)}
+        rows = self.store.cells_with_tags(tags, layer)
         if level == "cell":
             return sorted(cid for cid, _, _ in rows)
-        if level != "sub":
-            raise ValueError(f"level must be 'cell' or 'sub', got {level!r}")
         out = []
-        for cid, tehsil, subs in rows:
+        for cid, tag, subs in rows:
             if subs is None:            # the 25 sub-cell IDs of a cell are consecutive
                 first = ids.sub_cell_id(cid, 0)
                 out.extend(range(first, first + SUB * SUB))
-        for cid, tehsil, subs in self.store.split_cells():
-            out.extend(ids.sub_cell_id(cid, k) for k, t in enumerate(struct.unpack("<25H", subs)) if t in tehsils)
+        for cid, tag, subs in self.store.split_cells(layer):
+            out.extend(ids.sub_cell_id(cid, k) for k, t in enumerate(struct.unpack(_UNPACK[layer], subs))
+                       if t in tags)
         out.sort()
         return out
 
@@ -490,15 +526,23 @@ class Grid:
     def _place_table(self):
         if self._places is None:
             if not self.has_places:
-                raise NotInDatabaseError(f"this database ({self.store.path.name}) has no places layer; "
-                                         "add it with `pakgrid build-places`")
-            self._places = {r[0]: Place(r[0], PLACE_LEVELS[r[1] - 1], r[2], r[3], r[4],
-                                        None if r[5] is None else r[5] / 1000, r[6], r[7])
-                            for r in self.store.places_rows()}
+                found = self.meta.get("places_version")
+                raise NotInDatabaseError(
+                    f"this database ({self.store.path.name}) has "
+                    + (f"places version {found}, not {PLACES_VERSION}; rebuild it" if found else "no places layer; add it")
+                    + " with `pakgrid build-places`")
+            self._places = {
+                r[0]: Place(r[0], PLACE_LEVELS[r[1] - 1], r[2], r[3], r[4], r[5], r[6], r[7], r[8],
+                            None if r[9] is None else r[9] / SCALE, None if r[10] is None else r[10] / SCALE,
+                            bool(r[11]))
+                for r in self.store.places_rows()}
         return self._places
 
-    def _tags(self, cid, sub):
-        """PlaceTags of a cell (sub=None: its main tehsil) or of one of its sub-cells."""
+    def _tags(self, cid, sub, centroid):
+        """PlaceTags of a cell (sub=None: its main tags) or one of its sub-cells.
+
+        centroid() gives the block's centroid in 1e-7 degree; it is needed only for a point locality.
+        """
         table = self._place_table()
         row = self.store.cell_place(cid)
         if row is None:
@@ -507,12 +551,27 @@ class Grid:
             return None                       # wholly outside Pakistan
         tehsil, subs = row
         if sub is not None and subs is not None:
-            tehsil = struct.unpack("<25H", subs)[sub]
+            tehsil = struct.unpack(_UNPACK["tehsil"], subs)[sub]
         if not tehsil:
             return None                       # this sub-cell lies outside Pakistan
         t = table[tehsil]
         d = table.get(t.parent_id)
-        return PlaceTags(t, d, table.get(d.parent_id) if d else None)
+        tags = PlaceTags(t, d, table.get(d.parent_id) if d else None)
+        row = self.store.cell_place(cid, "locality")
+        if row is None:
+            return tags
+        locality, subs = row
+        if sub is not None and subs is not None:
+            locality = struct.unpack(_UNPACK["locality"], subs)[sub]
+        if not locality:
+            return tags
+        loc = table[locality]
+        if loc.area:
+            return PlaceTags(t, d, tags.province, loc)
+        lat_e7, lon_e7 = centroid()
+        near = locality_is_near(loc.kind, loc.area, lat_e7, lon_e7, to_e7(loc.lat), to_e7(loc.lon))
+        way = navigate.direction(loc.lat, loc.lon, lat_e7 / SCALE, lon_e7 / SCALE)
+        return PlaceTags(t, d, tags.province, loc, near, way.distance_m, way.compass_short)
 
     # -- Readable codes --------------------------------------------------
 
@@ -560,6 +619,7 @@ class Grid:
             "places": None if "places_version" not in self.meta else {
                 "version": int(self.meta["places_version"]),
                 "places": int(self.meta.get("places_count", 0)),
+                "localities": int(self.meta.get("places_localities", 0)),
                 "cells": int(self.meta.get("places_cells", 0)),
                 "split_cells": int(self.meta.get("places_split_cells", 0)),
                 "sources": self.meta.get("places_sources"),

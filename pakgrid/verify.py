@@ -118,9 +118,13 @@ def _verify_places(report, store, meta, full):
         report.add("places layer", False, "not in this database; add it with `pakgrid build-places`",
                    required=False)
         return
-    report.add("places layer version", meta["places_version"] == str(PLACES_VERSION),
-               f"database {meta['places_version']}, library {PLACES_VERSION}")
-    digest = report.places_sha256 = places_hash(store.places_rows(), list(store.iter_cell_places()))
+    same = meta["places_version"] == str(PLACES_VERSION)
+    report.add("places layer version", same, f"database {meta['places_version']}, library {PLACES_VERSION}"
+               + ("" if same else "; rebuild it with `pakgrid build-places`"))
+    if not same:
+        return
+    digest = report.places_sha256 = places_hash(store.places_rows(), list(store.iter_cell_places()),
+                                                list(store.iter_cell_places("locality")))
     report.add("places checksum", digest == meta.get("places_sha256"), digest[:16] + "…")
     official = official_places_checksum(meta)
     if official is not None:
@@ -132,4 +136,4 @@ def _verify_places(report, store, meta, full):
         rows = None if meta["rows_built"] == "all" else tuple(map(int, meta["rows_built"].split(":")))
         boundary = Boundary.from_packed(store.boundary_rings())
         fresh = build_places_data(_layout_from_store(store), boundary, qs, rows)
-        report.add("every place tag regenerated from the sources", places_hash(fresh.places, fresh.cells) == digest)
+        report.add("every place tag regenerated from the sources", places_hash(fresh.places, fresh.cells, fresh.localities) == digest)

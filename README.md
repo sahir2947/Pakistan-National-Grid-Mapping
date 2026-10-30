@@ -151,7 +151,8 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
     grid.neighbours(loc.cell_id)     # touching cells, across quadrant lines too
     loc.in_pakistan                  # True (exact, using Pakistan's border line)
     grid.cell(loc.cell_id).pakistan  # 'inside' ('border' or 'outside' elsewhere)
-    loc.place.label                  # 'Lahore Cantt, Lahore, Punjab' (tehsil, district, province)
+    loc.place.label                  # 'Lahore Cant, Lahore Cantt, Lahore, Punjab'
+                                     # (locality, tehsil, district, province)
     grid.cells_in_place("punjab/lahore")   # every cell of Lahore district
 
 direction(31.5215, 74.3570, 31.5204, 74.3587, heading=90).turn   # 'bear right'
@@ -189,8 +190,11 @@ sub-cells on OpenStreetMap; tap anywhere to see its grid code. Run
 publish the repository with GitHub Pages. See [viewer/README.md](viewer/README.md).
 
 **Place names:** every cell and sub-cell is tagged with its tehsil, district
-and province, as a layer on the grid that can be updated without changing any
-ID (project.md §5.7). Sources and known limitations:
+and province (UN OCHA boundaries), and with its locality: one of 32,512
+cities, towns, villages, neighbourhoods and residential areas from
+OpenStreetMap, with Urdu names where mapped (`near Chak 25 (1.4 km SE)` when
+a block is just outside one). It is a layer on the grid that can be updated
+without changing any ID (project.md §5.7). Sources and known limitations:
 [pakgrid/data/PLACES_SOURCE.md](pakgrid/data/PLACES_SOURCE.md).
 
 **Border flags:** every cell and sub-cell is flagged `inside`, `border` or

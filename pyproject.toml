@@ -24,7 +24,7 @@ pakgrid = "pakgrid.cli:main"
 packages = ["pakgrid"]
 
 [tool.setuptools.package-data]
-pakgrid = ["data/*.geojson.gz", "data/*.md"]
+pakgrid = ["data/*.geojson.gz", "data/*.json.gz", "data/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

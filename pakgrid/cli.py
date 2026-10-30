@@ -25,7 +25,8 @@ def main(argv=None):
                    help="leave out cells wholly outside Pakistan (IDs are unchanged)")
     p.add_argument("--overwrite", action="store_true", help="replace an existing file")
     p.add_argument("--no-places", action="store_true",
-                   help="leave out the places layer (province, district, tehsil); add it later with build-places")
+                   help="leave out the places layer (province, district, tehsil, locality); "
+                        "add it later with build-places")
 
     p = sub.add_parser("build-places", help="add or rebuild the places layer in an existing database")
     p.add_argument("--db", default=DEFAULT_DB)
@@ -47,9 +48,9 @@ def main(argv=None):
     p.add_argument("code")
     p.add_argument("--db", default=DEFAULT_DB)
 
-    p = sub.add_parser("places", help="list places (province, district, tehsil), or the cells of one")
+    p = sub.add_parser("places", help="list places (province, district, tehsil, locality), or the cells of one")
     p.add_argument("text", nargs="?", help="only places whose name contains this text, or with this key")
-    p.add_argument("--level", choices=("province", "district", "tehsil"))
+    p.add_argument("--level", choices=("province", "district", "tehsil", "locality"))
     p.add_argument("--cells", action="store_true",
                    help="print the codes of the cells in the place (TEXT must match exactly one place)")
     p.add_argument("--db", default=DEFAULT_DB)
@@ -89,16 +90,21 @@ def _build_places(args):
     from .places import build_places
     meta = build_places(args.db, progress=lambda msg: print(f"building {msg}…", file=sys.stderr))
     print(f"wrote the places layer (version {meta['places_version']}) to {args.db}: {meta['places_count']} places, "
-          f"{meta['places_cells']:,} cells tagged")
+          f"{meta['places_cells']:,} cells tagged, "
+          f"{meta['places_locality_sub_cells']:,} sub-cells with a locality")
     print(f"places sha256: {meta['places_sha256']}")
     return 0
 
 
 def _places(grid, args):
+    from .grid import PLACE_LEVELS
     found = grid.find_places(args.text, args.level) if args.text else grid.places(args.level)
     if not args.cells:
         return [p.to_dict() for p in found]
     exact = [p for p in found if args.text and args.text.strip().lower() in (p.key, p.name.lower())]
+    if len(exact) > 1:          # 'Lahore': the district before the city of the same name
+        top = min(PLACE_LEVELS.index(p.level) for p in exact)
+        exact = [p for p in exact if PLACE_LEVELS.index(p.level) == top]
     choice = exact if len(exact) == 1 else found
     if len(choice) != 1:
         from .errors import InvalidIdError
