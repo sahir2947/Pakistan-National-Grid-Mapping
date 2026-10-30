@@ -171,31 +171,38 @@ class GridStore:
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cell_places'").fetchone() is not None
 
     def places_rows(self):
-        """All (id, level, key, name, parent, parent_share, source_name, source_id), in ID order."""
+        """All (id, level, key, name, parent, source_name, source_id, kind, local_name, lat, lon, area), by ID."""
         return self._db.execute(
-            "SELECT id, level, key, name, parent, parent_share, source_name, source_id FROM places ORDER BY id"
-        ).fetchall()
+            "SELECT id, level, key, name, parent, source_name, source_id, kind, local_name, lat, lon, area "
+            "FROM places ORDER BY id").fetchall()
 
-    def cell_place(self, cid):
-        """(tehsil, subs blob or None) for a cell, or None if it has no places tags."""
-        return self._db.execute("SELECT tehsil, subs FROM cell_places WHERE id = ?", (cid,)).fetchone()
+    # The two tag tables: cell_places (tehsils) and cell_localities, each (id, tag, subs).
+    _TAG_TABLES = {"tehsil": ("cell_places", "tehsil"), "locality": ("cell_localities", "locality")}
 
-    def cells_with_tehsils(self, tehsils):
-        """(cell ID, tehsil, subs) for cells whose main tehsil is one of `tehsils`."""
-        out, tehsils = [], list(tehsils)
-        for k in range(0, len(tehsils), 900):
-            chunk = tehsils[k:k + 900]
-            out += self._db.execute(f"SELECT id, tehsil, subs FROM cell_places WHERE tehsil IN "
+    def cell_place(self, cid, layer="tehsil"):
+        """(tag, subs blob or None) for a cell in the tehsil or locality layer, or None if it has none."""
+        table, col = self._TAG_TABLES[layer]
+        return self._db.execute(f"SELECT {col}, subs FROM {table} WHERE id = ?", (cid,)).fetchone()
+
+    def cells_with_tags(self, tags, layer="tehsil"):
+        """(cell ID, tag, subs) for cells whose main tehsil (or locality) is one of `tags`."""
+        table, col = self._TAG_TABLES[layer]
+        out, tags = [], list(tags)
+        for k in range(0, len(tags), 900):
+            chunk = tags[k:k + 900]
+            out += self._db.execute(f"SELECT id, {col}, subs FROM {table} WHERE {col} IN "
                                     f"({','.join('?' * len(chunk))})", chunk).fetchall()
         return out
 
-    def split_cells(self):
-        """(cell ID, tehsil, subs) for cells whose sub-cells have different tehsils."""
-        return self._db.execute("SELECT id, tehsil, subs FROM cell_places WHERE subs IS NOT NULL").fetchall()
+    def split_cells(self, layer="tehsil"):
+        """(cell ID, tag, subs) for cells whose sub-cells have different tehsils (or localities)."""
+        table, col = self._TAG_TABLES[layer]
+        return self._db.execute(f"SELECT id, {col}, subs FROM {table} WHERE subs IS NOT NULL").fetchall()
 
-    def iter_cell_places(self):
-        """All (cell ID, tehsil, subs) in ID order."""
-        return self._db.execute("SELECT id, tehsil, subs FROM cell_places ORDER BY id")
+    def iter_cell_places(self, layer="tehsil"):
+        """All (cell ID, tag, subs) of the tehsil (or locality) layer, in ID order."""
+        table, col = self._TAG_TABLES[layer]
+        return self._db.execute(f"SELECT id, {col}, subs FROM {table} ORDER BY id")
 
     def has_cell(self, cid):
         return self._db.execute("SELECT 1 FROM cells WHERE id = ?", (cid,)).fetchone() is not None

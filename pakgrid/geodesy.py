@@ -3,6 +3,7 @@
 All angles passed in and returned are in degrees unless a name says otherwise.
 """
 
+import functools
 import math
 
 from . import spec
@@ -88,6 +89,7 @@ def _area_weight(phi):
     return math.cos(phi) / (1 - E2 * s * s) ** 2
 
 
+@functools.lru_cache(maxsize=1 << 16)
 def band_centroid_lat(south, north):
     """Area-weighted mean latitude of the band between two latitudes.
 

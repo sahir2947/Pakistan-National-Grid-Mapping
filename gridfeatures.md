@@ -28,7 +28,7 @@ Features asked for by the project owner. Add new requests here.
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| R1 | **Place names for every cell and sub-cell** | 🔨 | **Layer 1 ✅:** province, district and tehsil on every cell and sub-cell (project.md §5.7; 79 tehsils have an uncertain district with the current data, see `pakgrid/data/PLACES_SOURCE.md`). **Layer 2 ⬜:** localities (cities, towns, villages, neighbourhoods) from OpenStreetMap; needs `download.geofabrik.de` allowed in the environment's network settings. **Later:** better district data from UN OCHA (needs `data.humdata.org`) |
+| R1 | **Place names for every cell and sub-cell** | ✅ | **Layer 1 ✅:** province, district and tehsil on every cell and sub-cell, now from UN OCHA with the official hierarchy (577 tehsils, 160 districts). **Layer 2 ✅:** localities: 32,512 cities, towns, villages, neighbourhoods and residential areas from OpenStreetMap (HOT export), with Urdu names where mapped, "in" or "near X (1.2 km SE)" (places version 2; project.md §5.7, `pakgrid/data/PLACES_SOURCE.md`) |
 
 ## Proposed
 
@@ -39,7 +39,7 @@ already has. Move one to **Requested** to start it.
 |---|---|---|---|
 | P1 | **Radius search** | All cells or sub-cells within X km of a point: "shops that deliver here", "riders near this order" | ⬜ |
 | P2 | **Custom zones** | A delivery area drawn as a polygon → the exact cells inside it, and a fast "is this pin in my zone?" check | ⬜ |
-| P3 | **Province / district / city per cell** | Each cell tagged with its administrative area (from the same geoBoundaries source as the border), for reports, pricing and zone setup | ⬜ |
+| P3 | **Province / district / city per cell** | Each cell tagged with its administrative area, for reports, pricing and zone setup | ✅ done as R1 |
 | P4 | **Larger blocks** | Groups of cells, e.g. 5 km or 10 km squares, for heat maps and order counts | ⬜ |
 | P5 | **GeoJSON export** | Any cell, sub-cell or zone as GeoJSON, so apps can draw it on Google Maps, Mapbox or Leaflet | ⬜ |
 | P6 | **Cell-to-cell distances** | Distance and direction between any two cells' centres, for batching and fee estimates | ⬜ |
@@ -59,4 +59,4 @@ Features already in the library, for reference.
 | Map viewer | `viewer/` |
 | Django backend guide, thread-safe `Grid`, official checksums | `docs/django.md` |
 | Navigation rules and conformance test file for ports | `conformance/` |
-| Places layer 1: province, district and tehsil tags (R1) | `pakgrid/places.py`, project.md §5.7 |
+| Places: province, district, tehsil and locality tags (R1, places version 2) | `pakgrid/places.py`, project.md §5.7 |

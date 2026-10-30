@@ -127,7 +127,8 @@
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' +
-      ' · Border and places: <a href="https://www.geoboundaries.org">geoBoundaries</a> (ODbL; tehsils © PBS 2017)'
+      ' · Border: <a href="https://www.geoboundaries.org">geoBoundaries</a> · Tehsils: UN OCHA (CC BY-IGO 3.0)' +
+      ' · Localities: OpenStreetMap via HOT (ODbL)'
   }).addTo(map);
   var canvas = L.canvas({ padding: 0.3 });
 
@@ -251,7 +252,7 @@
       drawLabels(subs, false, "sub-label", [20, 12], function (r) { return String(r.subRow * 5 + r.subCol); });
     }
     var c = map.getCenter(), here = grid.locate(c.lat, c.lng);
-    var at = here && places.of(here.q, here.row, here.col, here.subRow * 5 + here.subCol);
+    var at = here && places.of(here.q, here.row, here.col, here.subRow * 5 + here.subCol, grid);
     if (at) msg += " · Centre: " + at.label;
     else if (document.getElementById("placeson").checked && z < CELL_ZOOM) msg += " · Places: zoom in to colour blocks by tehsil";
     statusEl.textContent = msg;
@@ -287,37 +288,51 @@
   function placeLink(p) {
     return p ? "<a class='place' data-place='" + p.id + "'>" + esc(p.name) + "</a>" : "–";
   }
+  function localityHtml(tags) {
+    var loc = tags.locality;
+    if (!loc) return "–";
+    var html = (tags.near ? "near " : "") + placeLink(loc);
+    if (tags.near) html += " (" + PakGrid.formatDistance(tags.localityDistance) + " " + tags.localityDirection + ")";
+    return html + " <span class='sub'>" + esc(loc.kind) + (loc.localName ? " · <span dir='rtl'>" + esc(loc.localName) +
+           "</span>" : "") + "</span>";
+  }
   function placeRows(tags) {
     if (!tags) return [["Place", "outside Pakistan"]];
-    return [["Tehsil", placeLink(tags.tehsil)],
-            ["District", placeLink(tags.district) + (tags.uncertain ? " <span class='warn' title='The district " +
-              "outlines in the source data disagree with this tehsil; the district may be wrong'>uncertain</span>" : "")],
+    return [["Locality", localityHtml(tags)],
+            ["Tehsil", placeLink(tags.tehsil)],
+            ["District", placeLink(tags.district)],
             ["Province", placeLink(tags.province)]];
   }
 
-  // A province, district or tehsil: zoom to it and describe it.
+  // A province, district, tehsil or locality: zoom to it and describe it.
   function showPlace(p) {
     if (nav.target) nav.close(true);
     selLayer.clearLayers();
     arrow = arrowMarker = null;
     var path = places.path(p), x = p.extent;
-    var kids = places.list.filter(function (c) { return c.parentId === p.id; });
+    var kids = p.level === "locality" ? [] : places.list.filter(function (c) { return c.parentId === p.id; });
     var html = "<div class='code'>" + esc(p.name) + "</div><div class='sub'>" +
-               p.level.charAt(0).toUpperCase() + p.level.slice(1) +
+               (p.level === "locality" ? p.kind.charAt(0).toUpperCase() + p.kind.slice(1).replace(/_/g, " ")
+                              : p.level.charAt(0).toUpperCase() + p.level.slice(1)) +
                (path.length > 1 ? " · " + path.slice(1).map(placeLink).join(", ") : "") + "</div>";
     var shape = places.shape(grid, p), size = shape.subCells;
-    html += rowsHtml([["Key", "<code>" + esc(p.key) + "</code>"], ["Place ID", String(p.id)],
-                      ["Size", size.toLocaleString() + " sub-cells (≈ " + Math.round(size * 0.04).toLocaleString() + " km²)"]]
-      .concat(p.parentShare != null ? [["Share in its " + (p.level === "tehsil" ? "district" : "province"),
-        Math.round(p.parentShare * 100) + "%" + (p.uncertain ? " <span class='warn'>uncertain</span>" : "")]] : [])
+    html += rowsHtml([["Key", "<code>" + esc(p.key) + "</code>"], ["Place ID", String(p.id)]]
+      .concat(p.localName ? [["Local name", "<span dir='rtl'>" + esc(p.localName) + "</span>"]] : [])
+      .concat(p.level === "locality" ? [["Mapped as", p.area ? "an outline" : "a point, " + fmt(p.lat) + ", " + fmt(p.lon)]] : [])
+      .concat([["Size", size.toLocaleString() + " sub-cells (≈ " + Math.round(size * 0.04).toLocaleString() + " km²)"]])
       .concat(x ? [["Extent", x[0].toFixed(3) + "–" + x[2].toFixed(3) + "° N, " + x[1].toFixed(3) + "–" + x[3].toFixed(3) + "° E"]] : []));
-    if (p.uncertain) {
-      html += "<p class='sub warn'>The district outlines in the source data disagree with this tehsil, so its " +
-              "district may be wrong (see PLACES_SOURCE.md).</p>";
-    }
     if (kids.length) {
-      html += "<h3>" + (p.level === "province" ? "Districts" : "Tehsils") + " (" + kids.length + ")</h3><ul class='place-list'>" +
-              kids.map(function (c) { return "<li>" + placeLink(c) + "</li>"; }).join("") + "</ul>";
+      var kidLevel = { province: "Districts", district: "Tehsils", tehsil: "Localities" }[p.level];
+      html += "<h3>" + kidLevel + " (" + kids.length + ")</h3><ul class='place-list'>" +
+              kids.slice(0, 300).map(function (c) { return "<li>" + placeLink(c) + "</li>"; }).join("") + "</ul>" +
+              (kids.length > 300 ? "<p class='sub'>… and " + (kids.length - 300) + " more; search to find one</p>" : "");
+    }
+    if (p.level === "locality" && !size) {
+      html += "<p class='sub'>No sub-cell is tagged with this locality: other localities nearby are nearer.</p>";
+    }
+    if (p.level === "locality" && !p.area) {
+      L.circleMarker([p.lat, p.lon], { radius: 5, color: "#111827", fillColor: "#fff", fillOpacity: 1, weight: 2,
+                                       interactive: false }).addTo(selLayer);
     }
     html += "<p class='sub'>The outline is the place's exact area in the grid: every sub-cell tagged with it. " +
             "Blocks are coloured by tehsil while <b>Places</b> is ticked.</p>" +
@@ -336,6 +351,8 @@
       var view = viewPadding();
       view.maxZoom = 13;
       map.fitBounds([[x[0], x[1]], [x[2], x[3]]], view);
+    } else if (p.lat != null) {
+      map.setView([p.lat, p.lon], 14);
     }
     drawGrid();
     history.replaceState(null, "", "#place=" + p.key);
@@ -344,7 +361,7 @@
   function showPlaceChoices(text, found) {
     panel.innerHTML = "<h2>Places matching “" + esc(text) + "”</h2><ul class='place-list'>" +
       found.slice(0, 60).map(function (p) {
-        return "<li>" + placeLink(p) + " <span class='sub'>" + p.level +
+        return "<li>" + placeLink(p) + " <span class='sub'>" + (p.kind ? p.kind.replace(/_/g, " ") : p.level) +
                (p.parentId ? ", " + places.path(p).slice(1).map(function (a) { return esc(a.name); }).join(", ") : "") +
                "</span></li>";
       }).join("") + "</ul>" + (found.length > 60 ? "<p class='sub'>… and " + (found.length - 60) + " more</p>" : "");
@@ -377,9 +394,11 @@
       "<div style='margin-top:4px'>" + border.attribution + "</div></div>" +
       "<h3>Places</h3>" + rowsHtml([
         ["Provinces", countLevel("province")], ["Districts", countLevel("district")], ["Tehsils", countLevel("tehsil")],
+        ["Localities", countLevel("locality")],
         ["Places version", String(places.version)]]) +
-      "<div class='sub'>Every cell and sub-cell is tagged with its tehsil, district and province. Tick " +
-      "<b>Places</b> to colour blocks by tehsil, or search for a place such as <i>Taxila</i>. " +
+      "<div class='sub'>Every cell and sub-cell is tagged with its tehsil, district and province, and with " +
+      "a locality (city, town, village, neighbourhood) where one is near. Tick " +
+      "<b>Places</b> to colour blocks by tehsil, or search for a place such as <i>Taxila</i> or <i>Kot Addu</i>. " +
       esc(places.attribution) + ".</div>" +
       "<p class='sub'>Tap the map to see the cell and sub-cell at that point. " +
       "Cells appear from zoom " + CELL_ZOOM + ", sub-cells from zoom " + SUB_ZOOM + ".</p>";
@@ -465,8 +484,8 @@
         Math.floor(sub.sub / 5) + ", column " + (sub.sub % 5) + ")"]] : []).concat(
       [["Cell in Pakistan", FLAG[grid.flag(border, r.q, r.row, r.col, null)]]]).concat(
       sub ? [["Sub-cell in Pakistan", FLAG[grid.flag(border, r.q, r.row, r.col, sub.sub)]]] : []));
-    var subTags = sub ? places.of(r.q, r.row, r.col, sub.sub) : null;
-    var cellTags = places.of(r.q, r.row, r.col, null);
+    var subTags = sub ? places.of(r.q, r.row, r.col, sub.sub, grid) : null;
+    var cellTags = places.of(r.q, r.row, r.col, null, grid);
     html += "<h3>Place" + (sub ? " (sub-cell)" : " (cell)") + "</h3>" + rowsHtml(placeRows(sub ? subTags : cellTags));
     if (sub && cellTags && (!subTags || subTags.tehsil.id !== cellTags.tehsil.id)) {
       html += "<div class='sub'>A tehsil line runs through this cell; most of it is in " + placeLink(cellTags.tehsil) + ".</div>";
@@ -560,6 +579,11 @@
     var pm = /^place=(.+)$/.exec(text), want = (pm ? pm[1] : text).trim().toLowerCase();
     var found = places.find(want);
     var exact = found.filter(function (p) { return p.key === want || p.name.toLowerCase() === want; });
+    if (exact.length > 1) {   // 'Lahore': the district before the city of the same name
+      var LEVELS = ["province", "district", "tehsil", "locality"];
+      var top = Math.min.apply(null, exact.map(function (p) { return LEVELS.indexOf(p.level); }));
+      exact = exact.filter(function (p) { return LEVELS.indexOf(p.level) === top; });
+    }
     if (exact.length === 1 || found.length === 1) { showPlace(exact.length === 1 ? exact[0] : found[0]); return; }
     if (found.length) { showPlaceChoices(text, found); return; }
     flash("Enter a place (Taxila), a grid address such as 11-0140-0471-00 W23 S18, a code, or lat, lon");

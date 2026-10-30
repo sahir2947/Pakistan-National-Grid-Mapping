@@ -121,7 +121,7 @@ def build_database(path, quadrants=None, rows=None, progress=None, overwrite=Fal
     pakistan_only: leave out cells wholly outside Pakistan (the "Pakistan edition").
                    IDs are unchanged; the cells left out simply are not stored.
     boundary:      the border to flag against; defaults to the packaged Pakistan boundary.
-    places:        also build the places layer (province, district, tehsil tags; see
+    places:        also build the places layer (province, district, tehsil and locality tags; see
                    pakgrid.places). It can be added or rebuilt later with build_places().
 
     A subset produces a *partial* database, useful for tests and pilots; the
