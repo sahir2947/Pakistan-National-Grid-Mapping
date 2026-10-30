@@ -1,6 +1,7 @@
 """Checks that a grid database matches the grid rules and its own checksum."""
 
 from dataclasses import dataclass, field
+from itertools import zip_longest
 
 from . import spec
 from .boundary import FLAG_NAMES, Boundary
@@ -69,10 +70,13 @@ def verify_database(path, full=False, expected_sha256=None):
         h.update(boundary.sha256.encode())
         n = 0
         counts = [0, 0, 0]
-        for (cid, blob, inside, border), cell in zip(store.iter_sub_blobs(), store.iter_cells()):
-            if cell[0] != cid or len(blob) != SUB_RECORD.size:
-                report.add("cells and sub-cells aligned", False, f"mismatch at cell {cid}")
+        # zip_longest, not zip: a cell or sub-cell record without its partner must fail, even at the end
+        for sub, cell in zip_longest(store.iter_sub_blobs(), store.iter_cells()):
+            if sub is None or cell is None or cell[0] != sub[0] or len(sub[1]) != SUB_RECORD.size:
+                where = (cell or sub)[0]
+                report.add("cells and sub-cells aligned", False, f"mismatch at cell {where}")
                 return report
+            cid, blob, inside, border = sub
             hash_cell(h, cid, cell[1:], blob, (inside, border))
             counts[cell[7]] += 1
             n += 1
@@ -98,8 +102,12 @@ def verify_database(path, full=False, expected_sha256=None):
             rows = None if meta["rows_built"] == "all" else tuple(map(int, meta["rows_built"].split(":")))
             fresh = iter_cell_records(expected, boundary, qs, rows, meta.get("edition") == "pakistan")
             mismatch = None
-            for (cid, cell, sub_values, masks), stored_cell, (_, blob, inside, border) in zip(
-                    fresh, store.iter_cells(), store.iter_sub_blobs()):
+            for made, stored_cell, stored_sub in zip_longest(fresh, store.iter_cells(), store.iter_sub_blobs()):
+                if made is None or stored_cell is None or stored_sub is None:
+                    mismatch = (made or stored_cell or stored_sub)[0]       # a record missing on one side
+                    break
+                cid, cell, sub_values, masks = made
+                _, blob, inside, border = stored_sub
                 if ((cid, *cell) != tuple(stored_cell) or SUB_RECORD.pack(*sub_values) != blob
                         or masks != (inside, border)):
                     mismatch = cid

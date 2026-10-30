@@ -300,3 +300,20 @@ def test_centre_is_the_covered_sub_cell_nearest_the_average(user):
     best = min(cents, key=lambda c: ((c[0] - my) ** 2 + (0.85 * (c[1] - mx)) ** 2, c))
     assert (to_e7(loc.lat), to_e7(loc.lon)) == best
     assert grid.sub_cell(grid.locate(loc.lat, loc.lon).id).centroid == (best[0] / SCALE, best[1] / SCALE)
+
+
+def test_reference_only_updates_measure_from_the_unchanged_centre(user):
+    """Changing only the references (or nearest) keeps the shape and measures each reference from
+    the same centre, as direction() does (Codex review: checked, not a bug)."""
+    grid = user.grid
+    loc = user.add("Gali 7", polygon=BLOCK, author="ali")
+    cant = "punjab/lahore/lahore-cantt/lahore-cant"
+    for kwargs in (dict(references=[cant]), dict(nearest=3), dict(references=[cant], nearest=2)):
+        new = user.update(loc.key, author="sara", **kwargs)
+        assert (new.lat, new.lon) == (loc.lat, loc.lon) and user.sub_cells(new) == user.sub_cells(loc)
+        for r in new.references:
+            p = grid.get_place(r.place_key)
+            way = navigate.direction(p.lat, p.lon, new.lat, new.lon)
+            assert r.distance_m == round(way.distance_m, 1) and r.direction == way.compass_short
+            assert r.distance_m < 50_000
+    assert [r.place_key for r in user.get(loc.key).references][0] == cant

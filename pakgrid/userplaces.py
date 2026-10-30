@@ -39,7 +39,6 @@ connection, writes are transactions, and readers see each committed change at on
 
 import contextlib
 import json
-import math
 import os
 import re
 import sqlite3
@@ -53,7 +52,9 @@ from pathlib import Path
 
 from . import ids, navigate
 from .errors import InvalidIdError, NotInDatabaseError, PakgridError
-from .layout import SCALE, SUB, GridLayout, to_e7
+from .layout import SCALE, SUB, to_e7
+from . import zones as _zones
+from .zones import ZoneError, polygon_masks, rings_e7
 
 USER_PLACES_VERSION = 1
 USER_ID_BASE = 1_000_000_000     # user locality place IDs start above every official place ID
@@ -614,61 +615,16 @@ class UserPlaces:
 
 
 # -- Polygons ------------------------------------------------------------------------------
+# (the polygon rules are those of custom zones, pakgrid.zones)
+
+point_in_rings = _zones.point_in_rings
+
 
 def _rings_e7(polygon):
-    """Rings of (lat_e7, lon_e7), closed, from [(lat, lon), ...], [[ring], [hole], ...] or a GeoJSON
-    Polygon ({"type": "Polygon", "coordinates": [[[lon, lat], ...], ...]})."""
-    if isinstance(polygon, dict):
-        if polygon.get("type") != "Polygon":
-            raise UserPlacesError("a GeoJSON shape must be a Polygon")
-        rings = [[(p[1], p[0]) for p in ring] for ring in polygon["coordinates"]]
-    else:
-        polygon = list(polygon)
-        if polygon and _is_point(polygon[0]):
-            rings = [polygon]
-        else:
-            rings = [list(r) for r in polygon]
-    out = []
-    for ring in rings:
-        pts = []
-        for p in ring:
-            if not _is_point(p):
-                raise UserPlacesError(f"a polygon point must be (lat, lon), got {p!r}")
-            lat, lon = float(p[0]), float(p[1])
-            if not (-90 <= lat <= 90 and -180 <= lon <= 180) or not (math.isfinite(lat) and math.isfinite(lon)):
-                raise UserPlacesError(f"not a (lat, lon) point: {p!r}")
-            pts.append((to_e7(lat), to_e7(lon)))
-        if pts and pts[0] != pts[-1]:
-            pts.append(pts[0])
-        if len(pts) < 4:
-            raise UserPlacesError("a polygon ring needs at least 3 distinct points")
-        out.append(pts)
-    if not out:
-        raise UserPlacesError("the polygon is empty")
-    return out
-
-
-def _is_point(p):
-    return isinstance(p, (list, tuple)) and len(p) == 2 and all(
-        isinstance(v, (int, float)) and not isinstance(v, bool) for v in p)
-
-
-def point_in_rings(lat_e7, lon_e7, rings):
-    """True if the point is inside the rings (even-odd rule), in exact integer arithmetic.
-
-    A ray goes east from the point; an edge counts when it straddles the point's latitude
-    (one end strictly north, y1 > lat, the other not) and crosses the ray east of the point.
-    """
-    inside = False
-    for ring in rings:
-        for (y1, x1), (y2, x2) in zip(ring, ring[1:]):
-            if (y1 > lat_e7) != (y2 > lat_e7):
-                # crossing longitude x = x1 + (lat - y1) (x2 - x1) / (y2 - y1); count it if lon < x
-                lhs = (lon_e7 - x1) * (y2 - y1)
-                rhs = (lat_e7 - y1) * (x2 - x1)
-                if (lhs < rhs) if y2 > y1 else (lhs > rhs):
-                    inside = not inside
-    return inside
+    try:
+        return rings_e7(polygon)
+    except ZoneError as exc:
+        raise UserPlacesError(str(exc)) from None
 
 
 def _sub_cells_in_polygon(layout, rings):
@@ -679,8 +635,7 @@ def _sub_cells_in_polygon(layout, rings):
     if (max(ys) - min(ys)) * (max(xs) - min(xs)) > MAX_SUB_CELLS * 16 * 18_000 * 21_000:
         raise UserPlacesError("the polygon is far too large for a locality")
     out = []
-    for q, i, j in layout.items_in_area(min(ys), min(xs), max(ys), max(xs), "sub"):
-        lat, lon = layout.quadrants[q].item_centroid_e7(i, j, "sub")
-        if point_in_rings(lat, lon, rings):
-            out.append(GridLayout.item_id(q, i, j, "sub"))
+    for c, m in sorted(polygon_masks(layout, rings).items()):
+        base = ids.sub_cell_id(c, 0)
+        out.extend(base + k for k in range(SUB * SUB) if m >> k & 1)
     return out

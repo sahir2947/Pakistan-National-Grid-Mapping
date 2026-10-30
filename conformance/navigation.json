@@ -6984,6 +6984,163 @@
    ]
   },
   {
+   "name": "bad readings are ignored; a negative accuracy counts as 20 m",
+   "target": [
+    31.5204,
+    74.3587
+   ],
+   "options": {},
+   "steps": [
+    {
+     "call": "add_fix",
+     "args": {
+      "lat": 31.515890557519118,
+      "lon": 74.3587,
+      "accuracy": 10.0,
+      "speed": null,
+      "heading": null,
+      "time": 0.0
+     },
+     "expect": {
+      "status": "navigating",
+      "target_lat": 31.5204,
+      "target_lon": 74.3587,
+      "lat": 31.515890557519114,
+      "lon": 74.3587,
+      "accuracy_m": 10.0,
+      "heading_deg": null,
+      "heading_source": null,
+      "distance_m": 499.9998235727245,
+      "distance_ft": 1640.4193686769174,
+      "bearing_deg": 0.0,
+      "compass": "North",
+      "compass_short": "N",
+      "turn_deg": null,
+      "turn": null,
+      "arrow_deg": 0.0,
+      "arrow_mode": "north-up"
+     }
+    },
+    {
+     "call": "add_fix",
+     "args": {
+      "lat": 95.0,
+      "lon": 74.0,
+      "accuracy": null,
+      "speed": null,
+      "heading": null,
+      "time": 1.0
+     },
+     "expect": {
+      "status": "navigating",
+      "target_lat": 31.5204,
+      "target_lon": 74.3587,
+      "lat": 31.515890557519114,
+      "lon": 74.3587,
+      "accuracy_m": 10.0,
+      "heading_deg": null,
+      "heading_source": null,
+      "distance_m": 499.9998235727245,
+      "distance_ft": 1640.4193686769174,
+      "bearing_deg": 0.0,
+      "compass": "North",
+      "compass_short": "N",
+      "turn_deg": null,
+      "turn": null,
+      "arrow_deg": 0.0,
+      "arrow_mode": "north-up"
+     }
+    },
+    {
+     "call": "add_fix",
+     "args": {
+      "lat": 31.5,
+      "lon": 200.0,
+      "accuracy": null,
+      "speed": null,
+      "heading": null,
+      "time": 2.0
+     },
+     "expect": {
+      "status": "navigating",
+      "target_lat": 31.5204,
+      "target_lon": 74.3587,
+      "lat": 31.515890557519114,
+      "lon": 74.3587,
+      "accuracy_m": 10.0,
+      "heading_deg": null,
+      "heading_source": null,
+      "distance_m": 499.9998235727245,
+      "distance_ft": 1640.4193686769174,
+      "bearing_deg": 0.0,
+      "compass": "North",
+      "compass_short": "N",
+      "turn_deg": null,
+      "turn": null,
+      "arrow_deg": 0.0,
+      "arrow_mode": "north-up"
+     }
+    },
+    {
+     "call": "set_position",
+     "args": {
+      "lat": -91.0,
+      "lon": 74.0,
+      "heading": null
+     },
+     "expect": {
+      "status": "navigating",
+      "target_lat": 31.5204,
+      "target_lon": 74.3587,
+      "lat": 31.515890557519114,
+      "lon": 74.3587,
+      "accuracy_m": 10.0,
+      "heading_deg": null,
+      "heading_source": null,
+      "distance_m": 499.9998235727245,
+      "distance_ft": 1640.4193686769174,
+      "bearing_deg": 0.0,
+      "compass": "North",
+      "compass_short": "N",
+      "turn_deg": null,
+      "turn": null,
+      "arrow_deg": 0.0,
+      "arrow_mode": "north-up"
+     }
+    },
+    {
+     "call": "add_fix",
+     "args": {
+      "lat": 31.515890557519118,
+      "lon": 74.35873158503547,
+      "accuracy": -5.0,
+      "speed": null,
+      "heading": null,
+      "time": 3.0
+     },
+     "expect": {
+      "status": "navigating",
+      "target_lat": 31.5204,
+      "target_lon": 74.3587,
+      "lat": 31.515890557519114,
+      "lon": 74.35870631700709,
+      "accuracy_m": null,
+      "heading_deg": null,
+      "heading_source": null,
+      "distance_m": 500.0001835900134,
+      "distance_ft": 1640.4205498360018,
+      "bearing_deg": 359.9312434221315,
+      "compass": "North",
+      "compass_short": "N",
+      "turn_deg": null,
+      "turn": null,
+      "arrow_deg": 359.9312434221315,
+      "arrow_mode": "north-up"
+     }
+    }
+   ]
+  },
+  {
    "name": "missing or zero accuracy counts as 20 m",
    "target": [
     31.5204,

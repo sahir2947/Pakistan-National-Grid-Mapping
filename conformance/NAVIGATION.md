@@ -151,10 +151,13 @@ The last compass reading is kept.
 
 ### add_fix(lat, lon, accuracy, speed, heading, time)
 
-Any of `accuracy`, `speed`, `heading` may be missing.
+Any of `accuracy`, `speed`, `heading` may be missing. A number is *finite*
+when it is a real number, not NaN or ±infinity (a boolean is not a number).
 
 ```
-acc = max(accuracy if accuracy is given and not 0 else 20, 1)
+if lat or lon is not finite, or lat is outside -90..90, or lon outside -180..180:
+    return the state unchanged                   # a bad reading is ignored
+acc = max(accuracy if accuracy is finite and > 0 else 20, 1)
 if not live, or direction(position, (lat, lon)).distance_m > max(acc, 5):
     fixes = []                                   # real movement: start afresh
 append (lat, lon, acc, time) to fixes
@@ -162,10 +165,10 @@ keep only fixes with  time - fix.time < smoothing_window_s,  then only the last 
 sw = slat = slon = 0                             # sum in list order, oldest first
 for each fix:  w = 1 / (fix.acc * fix.acc);  sw += w;  slat += fix.lat * w;  slon += fix.lon * w
 position   = (slat / sw, slon / sw)
-accuracy_m = accuracy                            # as given: none, 0, or a number
+accuracy_m = accuracy if it is finite and >= 0 else none
 live = true;  anchor = none
 
-if speed is given and speed >= moving_mps and heading is valid:
+if speed is finite and speed >= moving_mps and heading is valid:
     heading = (heading mod 360, "gps")
 else if compass is not none and time - compass.time < compass_fresh_s:
     heading = (compass.degrees, "compass")
@@ -193,6 +196,8 @@ it later while it is fresh.
 Places the rider directly (a manual pick, a simulation, a replay). No smoothing.
 
 ```
+if lat or lon is not finite or out of range (as in add_fix):
+    return the state unchanged
 if anchor is not none:
     moved = direction(anchor, (lat, lon))
 else:

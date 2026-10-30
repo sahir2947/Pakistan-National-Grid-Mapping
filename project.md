@@ -720,6 +720,7 @@ pakgrid/
 ├── navigate.py   Distance, bearing and turn guidance between two points
 ├── places.py     The places layer: province, district, tehsil and locality tags (§5.7)
 ├── userplaces.py Localities drawn by users, kept in a separate file (§5.8)
+├── zones.py      Custom zones: sets of sub-cells, pin checks, stored form (§7.6)
 ├── data/         Pakistan's border and the places sources (places-v2.json.gz)
 └── cli.py        Command-line tools
 scripts/          make_places_data.py: makes data/places-v2.json.gz from the source downloads
@@ -771,6 +772,7 @@ level by itself.
 | 8 | `cells_in_area(south, west, north, east, level="cell", pakistan_only=False)` | IDs of cells or sub-cells overlapping a box; optionally only those in Pakistan |
 | 8a | `cells_within(lat, lon, radius_m, level="cell", pakistan_only=False, touching=False)` | Radius search: the cells or sub-cells whose centroid (with `touching=True`, any part) is within `radius_m` of a point, nearest first, as `Nearby` (`id`, `code`, `distance_m`, `bearing_deg`); radius up to 50 km (§7.5) |
 | 8b | `distance(a, b, level="cell")` | Cell-to-cell distance: `Separation` between two blocks' centroids (`distance_m`, `bearing_deg`, `compass`, `compass_short`, `east_m`, `north_m`, `text` such as `13.8 km NE`); codes may mix cells and sub-cells; no database access (§7.5) |
+| 8c | `zone(polygon= / circle= / cells= / place=, pakistan_only=False)` | A custom zone (`Zone`): a set of sub-cells with `contains(lat, lon)`, counts, area, `cells()`, `sub_cells()`, `\|` `&` `-`, `to_dict()` / `Zone.from_dict()`; `ZoneIndex` finds which of many zones hold a pin (§7.6) |
 | **Pakistan border** | | |
 | 9 | `in_pakistan(lat, lon)` | `True` if the point is inside Pakistan's border |
 | 10 | `pakistan_flags(items, level="cell")` | `{id: "inside" \| "border" \| "outside"}` for many cells or sub-cells at once |
@@ -860,6 +862,7 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 | `pakgrid locate LAT LON [--accuracy M]` | Look up a point; prints JSON |
 | `pakgrid within LAT LON METRES [--level sub] [--pakistan-only] [--touching]` | Radius search, nearest first (§7.5) |
 | `pakgrid distance FROM TO` | Distance and direction between two cells or sub-cells, by code (§7.5) |
+| `pakgrid zone make (--polygon FILE \| --circle LAT LON M \| --cells CODE... \| --place KEY) [--pakistan-only] [-o FILE]` / `zone check FILE LAT LON` / `zone show FILE [--codes]` | Make a custom zone, check a pin, summarise one (§7.6) |
 | `pakgrid show CODE` | Print a cell's or sub-cell's details as JSON |
 | `pakgrid info` | Print grid and database information |
 | `pakgrid export-layout` | Write the map viewer's data: `viewer/layout.js` (row and column counts) and `viewer/boundary.js` (the border) |
@@ -895,6 +898,8 @@ for checking the grid visually before it is used in an app:
   within a radius, drawn on the map with the nearest listed (§7.5)
 - **Measure:** tap two blocks, or search `11-0140-0471 to 11-0150-0480`, for
   the distance and direction between their centres (§7.5)
+- **Zone:** draw a custom zone, check pins against it, copy its stored data,
+  or paste a stored zone to see it (§7.6)
 - **Draw:** preview a user locality (§5.8)
 
 It needs no database. It recomputes the grid and the border flags from
@@ -973,6 +978,70 @@ routing along roads is a later feature.
 The JavaScript copy in `viewer/pakgrid.js` (`grid.cellsWithin`,
 `grid.distance`) gives the same results, and `tests/test_viewer_js.py` checks
 it against the library.
+
+
+### 7.6 Custom zones
+
+A **zone** is a set of sub-cells: a shop's delivery area, a rider's
+territory, a pricing band. It is made from a drawn polygon, a circle, a list
+of cells, or a place, and zones combine with `|` (union), `&` (intersection)
+and `-` (difference). Because it is made of grid blocks, "is this pin in my
+zone?" is one grid lookup and a bit test (~3 µs), and a zone is stored the
+same way everywhere (`pakgrid/zones.py`).
+
+```python
+from pakgrid import Zone, ZoneIndex
+
+with Grid.open("pakgrid_v1_pakistan.sqlite") as grid:
+    zone = grid.zone(polygon=[(31.50, 74.33), (31.50, 74.38), (31.54, 74.38), (31.54, 74.33)])
+    zone.contains(31.5204, 74.3587)            # True: the pin is in the delivery area
+    zone.sub_cell_count, zone.area_km2         # (506, 20.2)
+    zone.cells()                               # cell IDs it touches (cells(full_only=True): whole ones)
+
+    lahore = grid.zone(place="punjab/lahore")  # 42,757 sub-cells, 1,709 km²
+    near = grid.zone(circle=(31.5204, 74.3587, 3000))
+    area = (lahore & near) - grid.zone(cells=["11-0140-0471"])
+
+    data = zone.to_dict()                      # store it, e.g. in a JSONField ...
+    zone = Zone.from_dict(data, grid)          # ... and load it back
+
+    index = ZoneIndex({"shop-42": zone, "shop-77": near})
+    index.at(31.5204, 74.3587)                 # ['shop-42', 'shop-77']: who delivers here?
+```
+
+| Made from | Sub-cells in the zone |
+|---|---|
+| `polygon=` | Those whose **centroid** is inside it: even-odd rule, so holes work; rings of `(lat, lon)` or GeoJSON (Polygon, MultiPolygon, Feature); exact integer arithmetic on 10⁻⁷ degree |
+| `circle=(lat, lon, radius_m[, touching])` | As `cells_within(..., level="sub")` (§7.5): centroid within the radius, or any part with `touching` |
+| `cells=` | Cell codes (all 25 sub-cells), sub-cell codes or sub-cell IDs |
+| `place=` | Every sub-cell tagged with the place (a province's or district's through its tehsils; localities and user localities too), as `cells_in_place(level="sub")` |
+
+`pakistan_only=True` keeps only sub-cells inside Pakistan or on its border.
+A zone's edge follows the ~200 m sub-cells, not the drawn line: a pin is in
+the zone when the sub-cell holding it is (the edge rule of §4). That is what
+makes the check fast and identical in Python, JavaScript and any port, and a
+pin within ~100 m of the drawn line can fall either side of it.
+
+**Stored form** (`to_dict()`): `{"zone_version": 1, "grid_version": 1,
+"sub_cells": N, "full": [cell IDs], "partial": [[cell ID, mask], ...]}`, in ID
+order, where `mask` has bit *k* set for sub-cell *k* of the cell. It is the
+same for the same zone everywhere (a 20 km² zone is ~0.5 KB, Lahore district
+~19 KB). For SQL queries such as "which zones cover this cell", also store
+`zone.cells()` in a table of (zone, cell ID) rows.
+
+**Speed.** A polygon zone of a city (~80,000 sub-cells) takes ~16 ms: the
+polygon is scanned one row of sub-cells at a time, so the time follows its
+rows and edges, not its area. Lahore district from the places layer takes
+~0.2 s, all of Punjab (5.1 million sub-cells) ~0.6 s. `contains` takes ~3 µs
+and `ZoneIndex.at` ~4 µs with 100 overlapping zones. A zone can have up to 6
+million sub-cells.
+
+`pakgrid zone make (--polygon FILE | --circle LAT LON M | --cells ... |
+--place KEY) [-o zone.json]`, `pakgrid zone check zone.json LAT LON` and
+`pakgrid zone show zone.json` do the same from the command line. In the map
+viewer, **Zone** draws a zone, checks tapped pins (green inside, red outside),
+gives its JSON, and shows a pasted stored zone; its JavaScript (`grid.zoneFromPolygon`,
+`PakGrid.Zone`) gives the same data, tested against the library.
 
 ## 8. How a lookup works
 
@@ -1339,6 +1408,8 @@ the same data centre.
 | `cells_within(...)` 5 km, cells (78) / 1 km, sub-cells (77) | 1.3 ms / 1.5 ms | — |
 | `cells_within(...)` 10 km, cells, `pakistan_only=True` (315) | 5.3 ms | — |
 | `distance(a, b)` | 15 µs | ~65,000 |
+| `zone.contains(lat, lon)` / `ZoneIndex.at` (100 zones) | ~3 µs / ~4 µs | — |
+| `zone(polygon=...)` ~80,000 sub-cells / `zone(place="punjab")` 5.1 million | 16 ms / 0.6 s | — |
 
 **Build and verify:**
 
@@ -1423,6 +1494,7 @@ rider guidance on the phone. Step-by-step setup, with tested code:
 | Determinism | Two builds produce byte-identical files and the same checksum; test builds match recorded checksums on Linux, macOS and Windows; no centroid latitude is near enough to a rounding tie for platform differences in `sin`/`cos` to change it |
 | Official checksums | Both complete editions, built from scratch on Linux, macOS and Windows, match `pakgrid/checksums.py` (`.github/workflows/checksums.yml`) |
 | Shared use | One `Grid` shared by many threads, and used after a fork, gives the same answers as a single thread |
+| Custom zones | The row-by-row polygon scan equals testing every sub-cell centroid (random and concave polygons, holes, across a quadrant midline, corners and edges exactly on centroids); circle and place zones equal `cells_within` and `cells_in_place`; `contains` equals the pin's sub-cell; area equals the sum of sub-cell areas; `pakistan_only`; set operations; stored form round trip, determinism and bad data; `ZoneIndex`; the CLI; the viewer's JavaScript gives the same data, area and pin answers |
 | Radius search and distances | `cells_within` equals a brute-force measure of every block in a generous box (cells and sub-cells, centroid and touching, radius 0 to 20 km, near the south edge and a quadrant line); counts near π r²; `pakistan_only` equals the border flags; bad radii and levels are refused; `distance` equals `direction()` between centroids, both ways, mixed levels, outside the build; the CLI; the viewer's JavaScript gives the same IDs, distances and bearings |
 | User places | Sub-cells chosen by a polygon equal an independent ray-casting check (holes, GeoJSON, exact edges); tehsil, key and centre rules; references (named, nearest, by ID, user-to-user) match `direction()`, with errors for unknown, non-locality, duplicate and too-distant ones; bad input is refused and leaves nothing; lookups show the user locality with the OpenStreetMap one kept; smallest overlap wins; update, remove, history, export/import, reopen and refresh; ten threads adding at once; the CLI; the viewer's Draw preview equals the library |
 | Places layer | Known places get the right locality, tehsil, district and province (Lahore Cant, Taxila, Kot Addu, New Sukkur…); every sub-cell touching Pakistan has a tehsil in a complete build; the hierarchy is the official one and the same for any part built; split cells keep each sub-cell's tehsil and locality; the in/near rule; searches work both ways (by name, key or Urdu name); the viewer's JavaScript gives the same tags and exact shapes; the places checksum is the same on Linux, macOS and Windows and matches the official value for both editions |
@@ -1449,6 +1521,7 @@ Windows, on every push to `main` and every pull request. The workflow also runs 
 | **Ports** ✅ | Navigation rules and conformance test file for apps that port navigation to their own language (`conformance/`) |
 | **Places layer** ✅ | Province, district, tehsil and locality tags on every cell and sub-cell (§5.7, places version 2) |
 | **User places** ✅ | Localities drawn by an app's users, located from known localities by distance and direction, with author history (§5.8) |
+| **Custom zones** ✅ | Delivery areas as sets of sub-cells from polygons, circles, cells and places, with fast pin checks and a compact stored form (§7.6) |
 | **Radius search and distances** ✅ | Blocks within a radius of a point and cell-to-cell distances, in Python, the CLI and the viewer, plus a Grid show/hide toggle (§7.5) |
 | **Next — Documentation guides** | A guide for every feature, for app developers |
 | **v0.1.0 release** | First tagged GitHub release, with the databases attached |

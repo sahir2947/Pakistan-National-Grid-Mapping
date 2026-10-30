@@ -492,3 +492,72 @@ def test_javascript_radius_and_distance_match_python(lahore_db):
             assert js[0] == sep.from_code and js[1] == sep.to_code and js[4] == sep.compass_short and js[7] == sep.text
             assert abs(js[2] - sep.distance_m) < 1e-6 and abs(js[5] - sep.east_m) < 1e-6 and abs(js[6] - sep.north_m) < 1e-6
             assert sep.distance_m == 0 or abs(js[3] - sep.bearing_deg) < 1e-9
+
+
+_JS_ZONES = """
+const P = require(process.argv[1] + '/pakgrid.js');
+const grid = new P.Grid(require(process.argv[1] + '/layout.js'));
+const req = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify(req.polygons.map((poly) => {
+  const z = grid.zoneFromPolygon(poly);
+  const back = P.Zone.fromDict(grid, JSON.parse(JSON.stringify(z.toDict())));
+  return { data: z.toDict(), area: z.areaKm2(), pins: req.pins.map(([lat, lon]) => back.contains(lat, lon)) };
+})));
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_zones_match_python():
+    """The viewer's Zone tool makes the same zone data (Zone.to_dict), area and pin answers."""
+    from pakgrid.layout import GridLayout
+    from pakgrid.zones import make_zone, polygon_masks, rings_e7
+    layout = GridLayout.from_spec()
+    rng = random.Random(91)
+    polygons = [[(31.50, 74.33), (31.50, 74.38), (31.54, 74.38), (31.54, 74.33)],
+                [[(31.48, 74.30), (31.48, 74.40), (31.56, 74.40), (31.56, 74.30)],
+                 [(31.50, 74.33), (31.50, 74.37), (31.54, 74.37), (31.54, 74.33)]],
+                [(30.0, 69.30), (30.0, 69.50), (30.05, 69.45), (30.08, 69.30)]]           # across the midline
+    for _ in range(8):
+        clat, clon, size = 24.5 + rng.random() * 12, 61.5 + rng.random() * 15, rng.choice([0.003, 0.02, 0.06])
+        n = rng.randint(3, 10)
+        polygons.append([(round(clat + size * (0.3 + rng.random()) * math.sin(2 * math.pi * k / n), 7),
+                          round(clon + size * (0.3 + rng.random()) * math.cos(2 * math.pi * k / n) / 0.85, 7))
+                         for k in range(n)])
+    pins = [(round(31.47 + rng.random() * 0.1, 7), round(74.28 + rng.random() * 0.14, 7)) for _ in range(300)]
+    got = json.loads(subprocess.run([NODE, "-e", _JS_ZONES, str(VIEWER)],
+                                    input=json.dumps({"polygons": polygons, "pins": pins}),
+                                    capture_output=True, text=True, check=True).stdout)
+    for poly, js in zip(polygons, got):
+        zone = make_zone(polygon_masks(layout, rings_e7(poly)), layout)
+        assert js["data"] == zone.to_dict()
+        assert js["area"] == pytest.approx(zone.area_km2, rel=1e-12)
+        assert js["pins"] == [zone.contains(lat, lon) for lat, lon in pins]
+    assert sum(sum(js["pins"]) for js in got[:2]) > 30
+
+
+_JS_BAD_SENSORS = """
+const P = require(process.argv[1] + '/pakgrid.js');
+const out = [];
+const nav = new P.NavigationSession(31.5204, 74.3587);
+const good = JSON.stringify(nav.addFix(31.5215, 74.3570, { accuracy: 8, time: 0 }));
+for (const [lat, lon] of [[NaN, 74.357], [31.5215, Infinity], [95, 74.357], [31.5215, -181], ["31.5", 74.3], [true, 74.3]]) {
+  out.push(JSON.stringify(nav.addFix(lat, lon, { accuracy: 8, time: 1 })) === good);
+  out.push(JSON.stringify(nav.setPosition(lat, lon)) === good);
+}
+for (const bad of [NaN, Infinity, -Infinity, -5, 0, null, "8"]) {
+  const n = new P.NavigationSession(31.5204, 74.3587), r = new P.NavigationSession(31.5204, 74.3587);
+  n.addFix(31.5215, 74.357, { accuracy: 10, time: 0 }); r.addFix(31.5215, 74.357, { accuracy: 10, time: 0 });
+  const s = n.addFix(31.52152, 74.35702, { accuracy: bad, time: 1 }), t = r.addFix(31.52152, 74.35702, { accuracy: 20, time: 1 });
+  out.push(s.lat === t.lat && s.lon === t.lon && s.accuracy_m === (bad === 0 ? 0 : null));
+}
+out.push(nav.addFix(31.5216, 74.3571, { accuracy: 8, speed: NaN, heading: 90, time: 2 }).heading_source === null);
+out.push(nav.addFix(31.5216, 74.3571, { accuracy: 8, speed: Infinity, heading: 90, time: 3 }).heading_source === null);
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_ignores_bad_sensor_readings_like_python():
+    got = json.loads(subprocess.run([NODE, "-e", _JS_BAD_SENSORS, str(VIEWER)], capture_output=True, text=True,
+                                    check=True).stdout)
+    assert got and all(got), got

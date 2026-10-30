@@ -535,6 +535,83 @@ class Grid:
         return Separation(ca, cb, way.distance_m, way.bearing_deg, way.compass, way.compass_short,
                           (lon2 - lon1) * m_lon, (lat2 - lat1) * m_lat)
 
+    def zone(self, *, polygon=None, circle=None, cells=None, place=None, pakistan_only=False):
+        """A custom zone (pakgrid.zones.Zone) made from exactly one of:
+
+        polygon: rings of (lat, lon), or a GeoJSON Polygon/MultiPolygon/Feature; the sub-cells whose
+                 centroid is inside it.
+        circle:  (lat, lon, radius_m) or (lat, lon, radius_m, touching); as cells_within(level="sub").
+        cells:   cell codes (all 25 sub-cells), sub-cell codes or sub-cell IDs.
+        place:   a place key, ID or Place; its sub-cells as cells_in_place(level="sub").
+
+        pakistan_only keeps only sub-cells inside Pakistan or on its border (reads the database).
+        Combine zones with | (union), & (intersection) and - (difference).
+        """
+        from .zones import ZoneError, make_zone, polygon_masks, rings_e7
+        given = [k for k, v in (("polygon", polygon), ("circle", circle), ("cells", cells), ("place", place))
+                 if v is not None]
+        if len(given) != 1:
+            raise ZoneError("give exactly one of polygon, circle, cells or place")
+        masks = {}
+        if polygon is not None:
+            masks = polygon_masks(self.layout, rings_e7(polygon))
+        elif circle is not None:
+            if not isinstance(circle, (list, tuple)) or len(circle) not in (3, 4):
+                raise ZoneError("circle must be (lat, lon, radius_m) or (lat, lon, radius_m, touching)")
+            for n in self.cells_within(*circle[:3], level="sub", touching=bool(circle[3]) if len(circle) == 4 else False):
+                cid, sub = ids.split_sub_cell_id(n.id)
+                masks[cid] = masks.get(cid, 0) | 1 << sub
+        elif cells is not None:
+            if isinstance(cells, (str, int)):
+                cells = [cells]
+            for item in cells:
+                if isinstance(item, str):
+                    level, item_id = ids.parse_code(item)
+                elif isinstance(item, int) and not isinstance(item, bool):
+                    level, item_id = "sub", item
+                else:
+                    raise ZoneError(f"cells must be codes or sub-cell IDs, got {item!r}")
+                self.layout.item_from_id(item_id, level)
+                if level == "cell":
+                    masks[item_id] = (1 << SUB * SUB) - 1
+                else:
+                    cid, sub = ids.split_sub_cell_id(item_id)
+                    masks[cid] = masks.get(cid, 0) | 1 << sub
+        else:
+            masks = self._place_masks(place)
+        if pakistan_only and masks:
+            stored = self.store.sub_masks(masks)
+            missing = [c for c in masks if c not in stored]
+            if missing and not self.store.pakistan_edition:
+                raise self.store._missing(missing[0])
+            masks = {c: m & (stored[c][0] | stored[c][1]) for c, m in masks.items() if c in stored}
+        return make_zone(masks, self.layout)
+
+    def _place_masks(self, place):
+        """{cell ID: mask} of a place's sub-cells, read straight from the tag tables."""
+        p = self.get_place(place)
+        if p.user:
+            masks = {}
+            for s in self._user.sub_cells(p.id):
+                cid, sub = ids.split_sub_cell_id(s)
+                masks[cid] = masks.get(cid, 0) | 1 << sub
+            return masks
+        if p.level == "locality":
+            layer, tags = "locality", {p.id}
+        else:
+            layer = "tehsil"
+            tags = {t.id for t in self._place_table().values() if t.level == "tehsil" and self._within(t, p)}
+        full = (1 << SUB * SUB) - 1
+        masks = {cid: full for cid, _, subs in self.store.cells_with_tags(tags, layer) if subs is None}
+        for cid, _, subs in self.store.split_cells(layer):
+            m = 0
+            for k, t in enumerate(struct.unpack(_UNPACK[layer], subs)):
+                if t in tags:
+                    m |= 1 << k
+            if m:
+                masks[cid] = m
+        return masks
+
     def pakistan_flags(self, items, level="cell"):
         """{ID: "inside" | "border" | "outside"} for many cells (or sub-cells) at once."""
         items = [self._resolve(i, level) for i in items]

@@ -216,7 +216,9 @@ first use and closed when the thread ends. It is also safe to open the grid
 before gunicorn forks its workers (`--preload`): each worker opens fresh
 connections instead of reusing the parent's. Async views can call it through
 `sync_to_async`, which runs it on a thread. The database is opened read-only
-and immutable, so there is no locking between readers.
+and immutable, so there is no locking between readers; this also means the
+file must never be changed while a server has it open (see §11 for how to
+roll out a new one).
 
 ## 5. Store locations
 
@@ -410,6 +412,29 @@ places `grid.place(...)`, `grid.find_places("sahiwal")`,
 `grid.get_place("punjab/lahore")` and `grid.cells_in_place(...)` (Lahore
 district: 1,746 cells in ~16 ms).
 
+**Delivery zones.** Let each shop draw its delivery area in the app, make a
+zone from it, and store the zone's data on the shop. Checking an order's pin
+is then a few microseconds, and `ZoneIndex` answers "which shops deliver
+here?" for many shops at once ([project.md §7.6](../project.md#76-custom-zones)):
+
+```python
+from pakgrid import Zone, ZoneIndex
+
+class Shop(models.Model):
+    delivery_zone = models.JSONField(null=True)      # Zone.to_dict()
+
+# saving the area the owner drew (polygon: [[lat, lon], ...] from the app)
+shop.delivery_zone = get_grid().zone(polygon=polygon, pakistan_only=True).to_dict()
+
+# checking an order
+Zone.from_dict(shop.delivery_zone, get_grid()).contains(order.lat, order.lon)
+
+# which shops deliver here? Build the index once (and again when a zone changes)
+index = ZoneIndex({s.id: Zone.from_dict(s.delivery_zone, get_grid())
+                   for s in Shop.objects.exclude(delivery_zone=None)})
+shop_ids = index.at(lat, lon)
+```
+
 **Localities your users add.** Shop owners and riders know places the
 official data misses (a gali, a market). Let trusted users draw them in the
 app and send the polygon to an endpoint; your backend checks the permission
@@ -523,9 +548,31 @@ table of rows is kept in memory.
 - The **grid version** (`pakgrid.GRID_VERSION`, now 1) fixes every boundary
   and ID. Grid version 1 is frozen; IDs stored in your database stay valid.
 - Upgrading the library within grid version 1 does not require rebuilding the
-  database: the official checksum stays the same. `Grid.open` refuses a
+  grid: the official checksum stays the same. `Grid.open` refuses a
   database built for a different grid version or schema (`GridMismatchError`),
   so a mismatch cannot go unnoticed.
+- A new **places version** (new names or boundaries) needs the places layer
+  rebuilt: `pakgrid build-places --db FILE` on a copy, then `pakgrid verify`.
+  Until then the old layer is not used (`grid.has_places` is false and
+  `verify` says so). After switching, run `pakgrid user-places refresh` so
+  user localities pick up the new tehsils and reference points.
+- **Never change a database file that a running server has open.** The grid
+  is opened read-only and *immutable* (§4): SQLite then assumes the file never
+  changes and skips all locking, which is what makes reads fast, but a file
+  rewritten in place under it can give wrong answers or errors. To roll out a
+  new database:
+  1. build and verify it under a **new name**, e.g.
+     `pakgrid_v1_pakistan_places2.sqlite`;
+  2. point `PAKGRID_DB` at it and **restart** the workers (a new image does
+     both); or, for a volume, replace a symlink to it with `ln -sfn` and
+     restart;
+  3. delete the old file only after every worker has restarted.
+
+  Replacing the file by renaming a new one over it is also safe for workers
+  that restart, because open files keep reading the old copy, but never
+  `cp` or rebuild onto the path a worker has open. The user places file (§5)
+  is a normal writable database and is not replaced this way: back it up with
+  `pakgrid user-places export`.
 - Keep the same tag or commit in `requirements.txt` and in the Dockerfile's
   stage 1, so the library and the database are always built together.
 
