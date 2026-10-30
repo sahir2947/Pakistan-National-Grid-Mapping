@@ -149,7 +149,8 @@ def _run(target, options, steps):
         args = {**{k: None for k in _ARGS[call]}, **args}
         # decisions taken inside the call, checked before making it
         if call == "add_fix" and nav._live:
-            acc = max(args.get("accuracy") or 20.0, 1.0)
+            a = args.get("accuracy")
+            acc = max(a if a is not None and a > 0 else 20.0, 1.0)
             _check(direction(*nav.position, args["lat"], args["lon"]).distance_m, max(acc, 5.0))
         if call == "set_position" and nav._anchor is not None and args.get("heading") is None:
             _check(direction(*nav._anchor, args["lat"], args["lon"]).distance_m, 2.0)
@@ -202,6 +203,10 @@ def _named_sessions():
             fix(2, -499, 2.0, accuracy=10.0), fix(0, -400, 3.0, accuracy=10.0)]),
         ("accuracy weighting: 1 / accuracy squared", t, {}, [
             fix(0, -500, 0.0, accuracy=4.0), fix(3, -500, 1.0, accuracy=8.0)]),
+        ("bad readings are ignored; a negative accuracy counts as 20 m", t, {}, [
+            fix(0, -500, 0.0, accuracy=10.0), ("add_fix", {"lat": 95.0, "lon": 74.0, "time": 1.0}),
+            ("add_fix", {"lat": 31.5, "lon": 200.0, "time": 2.0}), ("set_position", {"lat": -91.0, "lon": 74.0}),
+            fix(3, -500, 3.0, accuracy=-5.0)]),
         ("missing or zero accuracy counts as 20 m", t, {}, [
             fix(0, -500, 0.0), fix(6, -500, 1.0, accuracy=0.0), fix(3, -498, 2.0, accuracy=20.0)]),
         ("only the last 3 readings, each under 10 s old, are averaged", t, {}, [

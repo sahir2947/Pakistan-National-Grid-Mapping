@@ -154,3 +154,27 @@ def test_set_target_keeps_rider():
     nav.set_position(*_offset(0, -500))
     s = nav.set_target(*_offset(0, -1000))
     assert round(s.distance_m) == 500 and s.compass == "South"
+
+
+def test_bad_sensor_readings_are_ignored_or_defaulted():
+    nan, inf = float("nan"), float("inf")
+    nav = NavigationSession(*TARGET)
+    good = nav.add_fix(31.5215, 74.3570, accuracy=8.0, time=0.0)
+    for lat, lon in ((nan, 74.3570), (31.5215, inf), (95.0, 74.3570), (31.5215, -181.0), ("31.5", 74.3), (True, 74.3)):
+        assert nav.add_fix(lat, lon, accuracy=8.0, time=1.0) == good          # ignored: nothing changes
+        assert nav.set_position(lat, lon) == good
+    # an accuracy that is not a finite positive number counts as unknown (20 m), never NaN or a crash
+    for bad in (nan, inf, -inf, -5.0, 0.0, None):
+        n = NavigationSession(*TARGET)
+        n.add_fix(31.5215, 74.3570, accuracy=10.0, time=0.0)
+        s = n.add_fix(31.52152, 74.35702, accuracy=bad, time=1.0)
+        ref = NavigationSession(*TARGET)
+        ref.add_fix(31.5215, 74.3570, accuracy=10.0, time=0.0)
+        r = ref.add_fix(31.52152, 74.35702, accuracy=20.0, time=1.0)
+        assert (s.lat, s.lon) == (r.lat, r.lon)
+        assert s.accuracy_m == (0.0 if bad == 0.0 else None)          # reported as given only when valid
+    # a speed that is not finite does not count as moving
+    s = nav.add_fix(31.5216, 74.3571, accuracy=8.0, speed=nan, heading=90.0, time=2.0)
+    assert s.heading_source is None
+    s = nav.add_fix(31.5216, 74.3571, accuracy=8.0, speed=inf, heading=90.0, time=3.0)
+    assert s.heading_source is None

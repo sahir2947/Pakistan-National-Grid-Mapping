@@ -1,6 +1,24 @@
 # Pakistan-National-Grid-Mapping
 
-Pakistan Custom Spatial Grid Library: Architectural Specification
+> **Note.** Sections 1–6 below are the **original proposal** that started this
+> project. The implemented library, [`pakgrid`](#pakgrid-library-v01), keeps
+> its idea (four quadrants, ~1 km cells, ~200 m sub-cells) but differs in
+> several details. The authoritative description is [project.md](project.md);
+> its §17 lists every change. In particular:
+>
+> - **IDs:** a cell ID is a 22-bit integer (2-bit quadrant, 10-bit row,
+>   10-bit column) and a sub-cell ID is 27 bits (cell ID × 32 + 0–24). Both
+>   fit a 32-bit `INT` (store them as `INTEGER`), not `SMALLINT`/`TINYINT`:
+>   two 10-bit values need 20 bits.
+> - **Geometry:** there is no sinusoidal projection; rows and columns are
+>   measured on the WGS 84 ellipsoid, so every boundary is a latitude or
+>   longitude line.
+> - **Personal data:** the grid database holds no personal data. **CNIC numbers
+>   and other identity data belong only in the app's own database**, under its
+>   own consent, access control, encryption and retention rules. A grid code
+>   is a location, and not an anonymisation of anyone.
+
+Pakistan Custom Spatial Grid Library: Architectural Specification (original proposal)
 
 
 1. Executive Summary & Core Objective
@@ -132,8 +150,8 @@ Full design documentation: [project.md](project.md).
 
 ```bash
 pip install -e .                 # from this repository
-pakgrid build                    # writes pakgrid_v1.sqlite (~811 MB, ~1-1.5 min)
-pakgrid build -o pk.sqlite --pakistan-only   # only cells touching Pakistan (~301 MB), same IDs
+pakgrid build                    # writes pakgrid_v1.sqlite (~837 MB, ~2 min)
+pakgrid build -o pk.sqlite --pakistan-only   # only cells touching Pakistan (~327 MB), same IDs
 pakgrid verify                   # checks the file against the grid rules and the official checksum
 pakgrid locate 31.5204 74.3587 --accuracy 5
 pakgrid show 11-0140-0471-00

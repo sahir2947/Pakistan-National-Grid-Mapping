@@ -517,7 +517,10 @@
     return (roundHalfEven(m / 100) / 10).toFixed(1) + " km";
   }
 
-  function validHeading(h) { return h != null && isFinite(h); }
+  function finite(x) { return typeof x === "number" && isFinite(x); }
+  function validHeading(h) { return finite(h); }
+  // A usable GPS position: finite numbers within -90..90 and -180..180 (as pakgrid.navigate).
+  function validPoint(lat, lon) { return finite(lat) && finite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180; }
   function mod360(h) { return ((h % 360) + 360) % 360; }
   function nowSeconds(t) { return t == null ? Date.now() / 1000 : +t; }
 
@@ -557,7 +560,8 @@
   // A GPS reading. o: {accuracy (m), speed (m/s), heading (degrees), time (s)}, all optional.
   NavigationSession.prototype.addFix = function (lat, lon, o) {
     o = o || {};
-    var now = nowSeconds(o.time), acc = Math.max(o.accuracy || 20, 1), self = this;
+    if (!validPoint(lat, lon)) return this.state();    // a bad reading (NaN, out of range) is ignored
+    var now = nowSeconds(o.time), acc = Math.max(finite(o.accuracy) && o.accuracy > 0 ? o.accuracy : 20, 1), self = this;
     if (!this._live || direction(this.position[0], this.position[1], lat, lon, null).distance_m > Math.max(acc, 5)) {
       this._fixes = [];
     }
@@ -567,10 +571,10 @@
     var sw = 0, slat = 0, slon = 0;
     this._fixes.forEach(function (f) { var w = 1 / (f[2] * f[2]); sw += w; slat += f[0] * w; slon += f[1] * w; });
     this.position = [slat / sw, slon / sw];
-    this.accuracy_m = o.accuracy == null ? null : o.accuracy;
+    this.accuracy_m = finite(o.accuracy) && o.accuracy >= 0 ? o.accuracy : null;
     this._live = true;
     this._anchor = null;
-    if (o.speed != null && o.speed >= this.moving_mps && validHeading(o.heading)) {
+    if (finite(o.speed) && o.speed >= this.moving_mps && validHeading(o.heading)) {
       this.heading = [mod360(o.heading), "gps"];
     } else if (this._compass && now - this._compass[1] < this.compass_fresh_s) {
       this.heading = [this._compass[0], "compass"];
@@ -590,6 +594,7 @@
 
   // Place the rider directly (a manual pick or a simulation); no smoothing.
   NavigationSession.prototype.setPosition = function (lat, lon, heading) {
+    if (!validPoint(lat, lon)) return this.state();
     var moved = null;
     if (this._anchor) {
       moved = direction(this._anchor[0], this._anchor[1], lat, lon, null);

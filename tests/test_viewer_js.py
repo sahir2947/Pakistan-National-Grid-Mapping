@@ -533,3 +533,31 @@ def test_javascript_zones_match_python():
         assert js["area"] == pytest.approx(zone.area_km2, rel=1e-12)
         assert js["pins"] == [zone.contains(lat, lon) for lat, lon in pins]
     assert sum(sum(js["pins"]) for js in got[:2]) > 30
+
+
+_JS_BAD_SENSORS = """
+const P = require(process.argv[1] + '/pakgrid.js');
+const out = [];
+const nav = new P.NavigationSession(31.5204, 74.3587);
+const good = JSON.stringify(nav.addFix(31.5215, 74.3570, { accuracy: 8, time: 0 }));
+for (const [lat, lon] of [[NaN, 74.357], [31.5215, Infinity], [95, 74.357], [31.5215, -181], ["31.5", 74.3], [true, 74.3]]) {
+  out.push(JSON.stringify(nav.addFix(lat, lon, { accuracy: 8, time: 1 })) === good);
+  out.push(JSON.stringify(nav.setPosition(lat, lon)) === good);
+}
+for (const bad of [NaN, Infinity, -Infinity, -5, 0, null, "8"]) {
+  const n = new P.NavigationSession(31.5204, 74.3587), r = new P.NavigationSession(31.5204, 74.3587);
+  n.addFix(31.5215, 74.357, { accuracy: 10, time: 0 }); r.addFix(31.5215, 74.357, { accuracy: 10, time: 0 });
+  const s = n.addFix(31.52152, 74.35702, { accuracy: bad, time: 1 }), t = r.addFix(31.52152, 74.35702, { accuracy: 20, time: 1 });
+  out.push(s.lat === t.lat && s.lon === t.lon && s.accuracy_m === (bad === 0 ? 0 : null));
+}
+out.push(nav.addFix(31.5216, 74.3571, { accuracy: 8, speed: NaN, heading: 90, time: 2 }).heading_source === null);
+out.push(nav.addFix(31.5216, 74.3571, { accuracy: 8, speed: Infinity, heading: 90, time: 3 }).heading_source === null);
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_ignores_bad_sensor_readings_like_python():
+    got = json.loads(subprocess.run([NODE, "-e", _JS_BAD_SENSORS, str(VIEWER)], capture_output=True, text=True,
+                                    check=True).stdout)
+    assert got and all(got), got

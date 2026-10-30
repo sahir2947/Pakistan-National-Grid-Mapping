@@ -152,3 +152,28 @@ def test_verify_expected_checksum(lahore_db, capsys):
     assert f"content sha256: {LAHORE_SHA256}" in out and out.rstrip().endswith("OK")
     assert main(["verify", "--db", str(lahore_db), "--expect", "0" * 64]) == 2
     assert capsys.readouterr().out.rstrip().endswith("FAILED")
+
+
+@pytest.mark.parametrize("where", ["first", "middle", "last", "after"])
+@pytest.mark.parametrize("table", ["cells", "sub_cells"])
+def test_verify_fails_on_a_record_without_its_partner(tmp_path, lahore_db, table, where):
+    """A cell row without its sub-cell row (or the reverse) fails verification, wherever it is,
+    including past the end of the other table."""
+    db = sqlite3.connect(lahore_db)
+    ids_ = [r[0] for r in db.execute("SELECT id FROM cells ORDER BY id")]
+    db.close()
+    bad = tmp_path / "bad.sqlite"
+    if where == "after":                       # an extra record after the last one: copy the last row
+        extra = ids_[-1] + 1
+        cols = "id, south, west, north, east, centroid_lat, centroid_lon, pakistan" if table == "cells" \
+            else "id, record, inside_mask, border_mask"
+        _tamper(lahore_db, bad, f"INSERT INTO {table} ({cols}) SELECT {extra}, {cols.split(', ', 1)[1]} "
+                                f"FROM {table} WHERE id = {ids_[-1]}")
+    else:
+        victim = {"first": ids_[0], "middle": ids_[len(ids_) // 2], "last": ids_[-1]}[where]
+        _tamper(lahore_db, bad, f"DELETE FROM {table} WHERE id = {victim}")
+    for full in (False, True):
+        report = verify_database(bad, full=full)
+        assert not report.ok
+        failed = [name for name, passed, _, required in report.checks if required and not passed]
+        assert failed == ["cells and sub-cells aligned"], (table, where, failed)

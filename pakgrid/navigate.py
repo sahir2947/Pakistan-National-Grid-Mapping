@@ -186,8 +186,10 @@ class NavigationSession:
 
     def add_fix(self, lat, lon, accuracy=None, speed=None, heading=None, time=None):
         """A GPS reading: position, accuracy in metres, speed in m/s, direction of travel in degrees."""
+        if not _valid_point(lat, lon):
+            return self.state                    # a bad reading (NaN, out of range) is ignored
         now = _now(time)
-        acc = max(accuracy or 20.0, 1.0)
+        acc = max(accuracy if _finite(accuracy) and accuracy > 0 else 20.0, 1.0)
         if not self._live or direction(*self.position, lat, lon).distance_m > max(acc, 5.0):
             self._fixes = []
         self._fixes.append((lat, lon, acc, now))
@@ -199,11 +201,11 @@ class NavigationSession:
             slat += flat * w
             slon += flon * w
         self.position = (slat / sw, slon / sw)
-        self.accuracy_m = accuracy
+        self.accuracy_m = accuracy if _finite(accuracy) and accuracy >= 0 else None
         self._live = True
         self._anchor = None
 
-        if speed is not None and speed >= self.moving_mps and _valid(heading):
+        if _finite(speed) and speed >= self.moving_mps and _valid(heading):
             self.heading = (heading % 360.0, "gps")
         elif self._compass is not None and now - self._compass[1] < self.compass_fresh_s:
             self.heading = (self._compass[0], "compass")
@@ -230,6 +232,8 @@ class NavigationSession:
         With a heading, that heading is used ('manual'). Without one, once the rider has moved
         2 m or more since the last change, the direction of that movement is used ('movement').
         """
+        if not _valid_point(lat, lon):
+            return self.state
         if self._anchor is not None:
             moved = direction(*self._anchor, lat, lon)
         else:
@@ -271,5 +275,14 @@ def _now(t):
     return _time.time() if t is None else float(t)
 
 
+def _finite(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
 def _valid(heading):
-    return heading is not None and math.isfinite(heading)
+    return _finite(heading)
+
+
+def _valid_point(lat, lon):
+    """A usable GPS position: finite numbers within -90..90 and -180..180."""
+    return _finite(lat) and _finite(lon) and -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0
