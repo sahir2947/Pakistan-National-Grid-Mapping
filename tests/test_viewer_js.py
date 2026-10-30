@@ -1,6 +1,7 @@
 """The map viewer's JavaScript must agree with the Python library (skipped without node)."""
 
 import json
+import math
 import random
 import shutil
 import subprocess
@@ -393,3 +394,60 @@ def test_javascript_place_shapes_are_exact(lahore_db):
         assert got[key]["rectHits"] == expected[key], key                # the rectangles
     assert got["punjab"]["subCells"] == 5_141_062                        # as Grid.cells_in_place counts
     assert got["punjab/lahore/lahore-cantt/dha-phase-vi"]["subCells"] == 221
+
+
+_JS_USER = """
+const P = require(process.argv[1] + '/pakgrid.js');
+const grid = new P.Grid(require(process.argv[1] + '/layout.js'));
+const places = new P.Places(require(process.argv[1] + '/places.js'));
+const polys = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify(polys.map((poly) => {
+  const pv = places.userPreview(grid, poly, 3);
+  if (pv.error) return { error: pv.error };
+  return { subs: pv.subCells.map((c) => c.id), tehsil: pv.tehsil.id, centre: pv.centre,
+           refs: pv.references.map((r) => [r.key, r.distance_m, r.direction, r.east_m, r.north_m]) };
+})));
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_user_locality_preview_matches_python(lahore_db, tmp_path):
+    """The viewer's Draw tool picks the same sub-cells, tehsil, centre and references as UserPlaces.add."""
+    from pakgrid import Grid
+    from pakgrid.userplaces import _rings_e7, _sub_cells_in_polygon
+    rng = random.Random(61)
+    polys = [[(31.5195, 74.3560), (31.5195, 74.3620), (31.5240, 74.3620), (31.5240, 74.3560)],
+             [[(31.50, 74.30), (31.50, 74.36), (31.54, 74.36), (31.54, 74.30)],          # with a hole
+              [(31.51, 74.32), (31.51, 74.34), (31.53, 74.34), (31.53, 74.32)]],
+             [(31.52040, 74.35870), (31.52041, 74.35870), (31.52041, 74.35871)]]        # covers no centre
+    for _ in range(12):                      # random concave shapes around Lahore
+        clat, clon = 31.495 + rng.random() * 0.06, 74.25 + rng.random() * 0.2      # inside rows 135-145
+        pts = []
+        for k in range(rng.randint(3, 9)):
+            a, r = 2 * math.pi * k / 9 + rng.random() * 0.5, 0.002 + rng.random() * 0.012
+            pts.append((round(clat + r * math.sin(a), 7), round(clon + r * math.cos(a) / 0.85, 7)))
+        polys.append(pts)
+    expected = []
+    with Grid.open(lahore_db) as grid:
+        user = grid.attach_user_places(tmp_path / "u.sqlite")
+        for poly in polys:
+            subs = user._in_pakistan(_sub_cells_in_polygon(grid.layout, _rings_e7(poly)))
+            if not subs:
+                expected.append("error")
+                continue
+            tehsil, (lat, lon) = user._tehsil_and_centre(subs)
+            expected.append((sorted(subs), tehsil.id, [lat / 1e7, lon / 1e7], user._references(lat, lon, [], 3)))
+    got = json.loads(subprocess.run([NODE, "-e", _JS_USER, str(VIEWER)], input=json.dumps(polys),
+                                    capture_output=True, text=True, check=True).stdout)
+    assert len(got) == len(expected)
+    for g, e in zip(got, expected):
+        if e == "error":
+            assert "covers no sub-cell" in g["error"]
+            continue
+        subs, tehsil, centre, refs = e
+        assert g["subs"] == subs and g["tehsil"] == tehsil and g["centre"] == centre
+        assert [r[0] for r in g["refs"]] == [r.place_key for r in refs]
+        for (key, dist, way, east, north), r in zip(g["refs"], refs):
+            assert way == r.direction
+            assert abs(dist - r.distance_m) <= 0.051 and abs(east - r.east_m) <= 0.051 and abs(north - r.north_m) <= 0.051
+    assert sum(len(e[0]) for e in expected if e != "error") > 500

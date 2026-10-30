@@ -1,5 +1,5 @@
-"""Command-line tools: pakgrid build | build-places | verify | locate | show | places | info |
-export-layout | export-conformance."""
+"""Command-line tools: pakgrid build | build-places | verify | locate | show | places | user-places |
+info | export-layout | export-conformance."""
 
 import argparse
 import json
@@ -10,6 +10,7 @@ from . import ids, spec
 from .errors import PakgridError
 
 DEFAULT_DB = os.environ.get("PAKGRID_DB", f"pakgrid_v{spec.GRID_VERSION}.sqlite")
+DEFAULT_USER_PLACES = os.environ.get("PAKGRID_USER_PLACES")
 
 
 def main(argv=None):
@@ -43,10 +44,14 @@ def main(argv=None):
     p.add_argument("lon", type=float)
     p.add_argument("--accuracy", type=float, metavar="METRES")
     p.add_argument("--db", default=DEFAULT_DB)
+    p.add_argument("--user-places", default=DEFAULT_USER_PLACES, metavar="FILE",
+                   help="also use the localities in this user places file")
 
     p = sub.add_parser("show", help="print a cell or sub-cell by code")
     p.add_argument("code")
     p.add_argument("--db", default=DEFAULT_DB)
+    p.add_argument("--user-places", default=DEFAULT_USER_PLACES, metavar="FILE",
+                   help="also use the localities in this user places file")
 
     p = sub.add_parser("places", help="list places (province, district, tehsil, locality), or the cells of one")
     p.add_argument("text", nargs="?", help="only places whose name contains this text, or with this key")
@@ -54,6 +59,45 @@ def main(argv=None):
     p.add_argument("--cells", action="store_true",
                    help="print the codes of the cells in the place (TEXT must match exactly one place)")
     p.add_argument("--db", default=DEFAULT_DB)
+
+    p = sub.add_parser("user-places", help="add, change, remove and list localities drawn by users")
+    p.add_argument("--db", default=DEFAULT_DB)
+    p.add_argument("--file", default=DEFAULT_USER_PLACES or "user_places.sqlite",
+                   help="the user places file (created if missing; default user_places.sqlite)")
+    act = p.add_subparsers(dest="action", required=True)
+    for name, helptext in (("add", "add a locality"), ("update", "change a locality")):
+        a = act.add_parser(name, help=helptext)
+        if name == "add":
+            a.add_argument("name")
+        else:
+            a.add_argument("key")
+            a.add_argument("--name")
+        a.add_argument("--author", required=True, help="who is making the change (kept in the history)")
+        a.add_argument("--polygon", metavar="FILE",
+                       help="JSON file: [[lat, lon], ...], a list of such rings, or a GeoJSON Polygon")
+        a.add_argument("--cells", nargs="+", metavar="CODE", help="cell and sub-cell codes instead of a polygon")
+        a.add_argument("--kind", default="neighbourhood" if name == "add" else None,
+                       help="street, neighbourhood, market, ... (default neighbourhood)")
+        a.add_argument("--local-name", help="the name in Urdu or another local script")
+        a.add_argument("--ref", action="append", metavar="KEY", help="a known locality to locate it from; repeatable")
+        a.add_argument("--nearest", type=int, metavar="N", help="also locate it from the N nearest localities")
+    a = act.add_parser("remove", help="remove a locality (its history is kept)")
+    a.add_argument("key")
+    a.add_argument("--author", required=True)
+    a = act.add_parser("list", help="list the localities")
+    a.add_argument("text", nargs="?", help="only those whose name contains this text")
+    a.add_argument("--removed", action="store_true", help="include removed localities")
+    a = act.add_parser("show", help="print one locality, with its sub-cell codes")
+    a.add_argument("key")
+    a = act.add_parser("history", help="print the change history (of one locality, or all)")
+    a.add_argument("key", nargs="?")
+    a = act.add_parser("export", help="write every locality to a JSON file (for backup)")
+    a.add_argument("output")
+    a = act.add_parser("import", help="add the localities of an exported JSON file")
+    a.add_argument("input")
+    a.add_argument("--author", required=True)
+    a = act.add_parser("refresh", help="recompute tehsils and references after a new places version")
+    a.add_argument("--author", required=True)
 
     p = sub.add_parser("info", help="print grid and database information")
     p.add_argument("--db", default=DEFAULT_DB)
@@ -144,7 +188,7 @@ def _export_conformance(args):
 def _with_grid(fn):
     def run(args):
         from .grid import Grid
-        with Grid.open(args.db) as grid:
+        with Grid.open(args.db, user_places=getattr(args, "user_places", None)) as grid:
             print(json.dumps(fn(grid, args), indent=2, ensure_ascii=False))
         return 0
     return run
@@ -161,7 +205,53 @@ def _show(grid, args):
     return out
 
 
+def _user_places(args):
+    from .grid import Grid
+    with Grid.open(args.db) as grid:
+        user = grid.attach_user_places(args.file)
+        out = _user_action(grid, user, args)
+        if out is not None:
+            print(json.dumps(out, indent=2, ensure_ascii=False))
+    return 0
+
+
+def _user_action(grid, user, args):
+    a = args.action
+    if a in ("add", "update"):
+        polygon = None
+        if args.polygon:
+            with open(args.polygon, encoding="utf-8") as f:
+                polygon = json.load(f)
+        common = dict(author=args.author, polygon=polygon, cells=args.cells, kind=args.kind,
+                      local_name=args.local_name, nearest=args.nearest)
+        if a == "add":
+            return user.add(args.name, references=args.ref or (), **common).to_dict()
+        return user.update(args.key, name=args.name, references=args.ref, **common).to_dict()
+    if a == "remove":
+        return user.remove(args.key, author=args.author).to_dict()
+    if a == "list":
+        found = user.find(args.text) if args.text else user.localities(include_removed=args.removed)
+        return [{"key": loc.key, "name": loc.name, "kind": loc.kind, "text": loc.text,
+                 "sub_cells": loc.sub_cell_count, "removed": loc.removed} for loc in found]
+    if a == "show":
+        loc = user.get(args.key)
+        return dict(loc.to_dict(), sub_cell_codes=[ids.sub_cell_code(s) for s in user.sub_cells(loc)])
+    if a == "history":
+        return user.history(args.key)
+    if a == "export":
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(user.export_data(), f, ensure_ascii=False, indent=1)
+        print(f"wrote {args.output}")
+        return None
+    if a == "import":
+        with open(args.input, encoding="utf-8") as f:
+            added = user.import_data(json.load(f), author=args.author)
+        return [loc.key for loc in added]
+    return [loc.key for loc in user.refresh(author=args.author)]
+
+
 _COMMANDS = {
+    "user-places": _user_places,
     "build": _build,
     "build-places": _build_places,
     "places": _with_grid(_places),

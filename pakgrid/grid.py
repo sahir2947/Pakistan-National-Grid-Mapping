@@ -2,6 +2,7 @@
 
 import math
 import struct
+import threading
 from bisect import bisect_right
 from dataclasses import dataclass
 
@@ -13,6 +14,7 @@ from .errors import GridMismatchError, IntegrityError, InvalidIdError, NotInData
 from .layout import SCALE, SUB, GridLayout, QuadrantLayout, to_e7
 from .places import PLACES_VERSION, locality_is_near
 from .store import SCHEMA_VERSION, GridStore
+from .userplaces import USER_ID_BASE
 
 MAX_CANDIDATE_RADIUS_M = 5000.0
 _UNPACK = {"tehsil": "<25H", "locality": "<25I"}
@@ -116,11 +118,16 @@ class Place:
     lon: float | None = None
     area: bool = False          # True for a locality mapped as an outline, not a point
 
+    @property
+    def user(self):
+        """True for a locality added by a user (see pakgrid.userplaces), not from the official sources."""
+        return self.source_id.startswith("user/")
+
     def to_dict(self):
         out = {"id": self.id, "level": self.level, "key": self.key, "name": self.name,
                "parent_id": self.parent_id}
         if self.level == "locality":
-            out.update(kind=self.kind, local_name=self.local_name, point=[self.lat, self.lon])
+            out.update(kind=self.kind, local_name=self.local_name, point=[self.lat, self.lon], user=self.user)
         return out
 
 
@@ -134,12 +141,17 @@ class PlaceTags:
     near: bool = False              # True when the sub-cell is near the locality rather than in it
     locality_distance_m: float | None = None   # from the locality's point to the sub-cell's centroid
     locality_direction: str | None = None      # 16-point compass direction of that, e.g. 'SE'
+    osm_locality: Place | None = None          # the OpenStreetMap locality, also when a user one is shown
+    user_locality: object = None               # the UserLocality shown as `locality`, if any
 
     @property
     def locality_text(self):
-        """'Model Town', or 'near Chak 25 (1.4 km SE)'; None without a locality."""
+        """'Model Town', 'near Chak 25 (1.4 km SE)', or for a user locality its name and first
+        reference, 'Gali 7 (500 m SW of Askari 2)'; None without a locality."""
         if not self.locality:
             return None
+        if self.user_locality is not None:
+            return self.user_locality.text
         if not self.near:
             return self.locality.name
         return (f"near {self.locality.name} ({navigate.format_distance(self.locality_distance_m)} "
@@ -161,7 +173,10 @@ class PlaceTags:
             loc = dict(brief(self.locality), kind=self.locality.kind, local_name=self.locality.local_name,
                        near=self.near, text=self.locality_text,
                        distance_m=None if self.locality_distance_m is None else round(self.locality_distance_m),
-                       direction=self.locality_direction)
+                       direction=self.locality_direction, user=self.user_locality is not None)
+            if self.user_locality is not None:
+                loc["references"] = [r.to_dict() for r in self.user_locality.references]
+                loc["osm_locality"] = brief(self.osm_locality)
         return {"label": self.label, "locality": loc, "tehsil": brief(self.tehsil),
                 "district": brief(self.district), "province": brief(self.province)}
 
@@ -239,17 +254,49 @@ class Grid:
         self._boundary = None
         self._places = None
         self._keys = None
+        self._load_lock = threading.Lock()
+        self._user = None
         self._has_places = None
         self.layout = _layout_from_store(store)
         if not self.layout.same_shape(GridLayout.from_spec()):
             raise GridMismatchError("database rows and columns do not match the grid rules of this library")
 
     @classmethod
-    def open(cls, path):
-        return cls(GridStore(path))
+    def open(cls, path, user_places=None):
+        """Open a grid database; with user_places, also attach that user places file."""
+        grid = cls(GridStore(path))
+        if user_places is not None:
+            grid.attach_user_places(user_places)
+        return grid
 
     def close(self):
+        if self._user is not None:
+            self._user.close()
         self.store.close()
+
+    # -- User places ---------------------------------------------------------
+
+    def attach_user_places(self, path):
+        """Use a user places file (created if missing; see pakgrid.userplaces) for place lookups,
+        and return it: add, change and remove localities through it."""
+        from .userplaces import UserPlaces
+        if not self.has_places:
+            self._place_table()                 # raises the "no places layer" error
+        if self._user is not None:
+            self._user.close()
+        self._user = UserPlaces(path, self)
+        return self._user
+
+    @property
+    def user_places(self):
+        """The attached UserPlaces, or None."""
+        return self._user
+
+    def _user_place(self, loc):
+        """A user locality as a Place (level 'locality', source_id 'user/N')."""
+        tehsil = self._key_map().get(loc.tehsil_key)
+        return Place(loc.id, "locality", loc.key, loc.name, tehsil.id if tehsil else None, loc.name,
+                     f"user/{loc.id - USER_ID_BASE}", loc.kind, loc.local_name, loc.lat, loc.lon, True)
 
     def __enter__(self):
         return self
@@ -465,11 +512,15 @@ class Grid:
         return [p for p in found if p.level == level]
 
     def find_places(self, text, level=None):
-        """Places whose name (or local name) contains `text`, or whose key is `text` (case-insensitive)."""
+        """Places whose name (or local name) contains `text`, or whose key is `text` (case-insensitive);
+        user localities, if a user places file is attached, come last."""
         t = text.strip().lower()
-        return [p for p in self.places(level)
-                if t in p.name.lower() or t == p.key or t in p.source_name.lower()
-                or (p.local_name and t in p.local_name)]
+        found = [p for p in self.places(level)
+                 if t in p.name.lower() or t == p.key or t in p.source_name.lower()
+                 or (p.local_name and t in p.local_name)]
+        if self._user is not None and level in (None, "locality"):
+            found += [self._user_place(loc) for loc in self._user.find(text)]
+        return found
 
     def get_place(self, place):
         """A Place by ID, key ('punjab/rawalpindi/taxila') or Place."""
@@ -478,12 +529,13 @@ class Grid:
             return place
         if isinstance(place, int) and not isinstance(place, bool) and place in table:
             return table[place]
-        if isinstance(place, str):
-            key = place.strip().lower()
-            if self._keys is None:
-                self._keys = {p.key: p for p in table.values()}
-            if key in self._keys:
-                return self._keys[key]
+        if isinstance(place, str) and place.strip().lower() in self._key_map():
+            return self._key_map()[place.strip().lower()]
+        if self._user is not None and isinstance(place, (int, str)) and not isinstance(place, bool):
+            try:
+                return self._user_place(self._user.get(place))
+            except InvalidIdError:
+                pass
         raise InvalidIdError(f"no such place: {place!r} (use a place ID, or a key such as 'punjab/lahore')")
 
     def cells_in_place(self, place, level="cell"):
@@ -496,6 +548,12 @@ class Grid:
         p = self.get_place(place)
         if level not in ("cell", "sub"):
             raise ValueError(f"level must be 'cell' or 'sub', got {level!r}")
+        if p.user:
+            subs = self._user.sub_cells(p.id)
+            if level == "sub":
+                return subs
+            return sorted(cid for cid in {ids.parent(s) for s in subs}
+                          if (u := self._user.at_cell(cid)) is not None and u.id == p.id)
         if p.level == "locality":
             layer, tags = "locality", {p.id}
         else:
@@ -515,6 +573,14 @@ class Grid:
         out.sort()
         return out
 
+    def _key_map(self):
+        if self._keys is None:
+            table = self._place_table()
+            with self._load_lock:
+                if self._keys is None:
+                    self._keys = {p.key: p for p in table.values()}
+        return self._keys
+
     def _within(self, place, ancestor):
         table = self._place_table()
         while place is not None:
@@ -524,6 +590,12 @@ class Grid:
         return False
 
     def _place_table(self):
+        if self._places is not None:
+            return self._places
+        with self._load_lock:           # threads arriving together load the table once
+            return self._load_place_table()
+
+    def _load_place_table(self):
         if self._places is None:
             if not self.has_places:
                 found = self.meta.get("places_version")
@@ -556,22 +628,25 @@ class Grid:
             return None                       # this sub-cell lies outside Pakistan
         t = table[tehsil]
         d = table.get(t.parent_id)
-        tags = PlaceTags(t, d, table.get(d.parent_id) if d else None)
+        p = table.get(d.parent_id) if d else None
         row = self.store.cell_place(cid, "locality")
-        if row is None:
-            return tags
-        locality, subs = row
-        if sub is not None and subs is not None:
-            locality = struct.unpack(_UNPACK["locality"], subs)[sub]
-        if not locality:
-            return tags
-        loc = table[locality]
-        if loc.area:
-            return PlaceTags(t, d, tags.province, loc)
+        locality = 0
+        if row is not None:
+            locality, subs = row
+            if sub is not None and subs is not None:
+                locality = struct.unpack(_UNPACK["locality"], subs)[sub]
+        osm = table[locality] if locality else None
+        if self._user is not None:
+            user = (self._user.at_cell(cid) if sub is None
+                    else self._user.at_sub_cells([ids.sub_cell_id(cid, sub)]).get(ids.sub_cell_id(cid, sub)))
+            if user is not None:
+                return PlaceTags(t, d, p, self._user_place(user), osm_locality=osm, user_locality=user)
+        if osm is None or osm.area:
+            return PlaceTags(t, d, p, osm, osm_locality=osm)
         lat_e7, lon_e7 = centroid()
-        near = locality_is_near(loc.kind, loc.area, lat_e7, lon_e7, to_e7(loc.lat), to_e7(loc.lon))
-        way = navigate.direction(loc.lat, loc.lon, lat_e7 / SCALE, lon_e7 / SCALE)
-        return PlaceTags(t, d, tags.province, loc, near, way.distance_m, way.compass_short)
+        near = locality_is_near(osm.kind, osm.area, lat_e7, lon_e7, to_e7(osm.lat), to_e7(osm.lon))
+        way = navigate.direction(osm.lat, osm.lon, lat_e7 / SCALE, lon_e7 / SCALE)
+        return PlaceTags(t, d, p, osm, near, way.distance_m, way.compass_short, osm_locality=osm)
 
     # -- Readable codes --------------------------------------------------
 

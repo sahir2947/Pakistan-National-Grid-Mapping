@@ -21,6 +21,16 @@ steps in ~200 m sub-cells), never just the box around it. Links such as
 Where a block is just outside a village or town, it shows as
 `near Kharochan (1.2 km S)`. Sources and coverage: `pakgrid/data/PLACES_SOURCE.md`.
 
+**Draw** previews a new user locality (project.md §5.8). Tap the corners of
+a polygon and press **Done** to see:
+
+- the sub-cells it would tag (those whose centre is inside it);
+- its tehsil and centre;
+- its distance and direction from the three nearest known localities;
+- the `user.add(...)` call that adds it with the library.
+
+Nothing is stored in the viewer.
+
 Tap anywhere to see that point's cell and sub-cell: codes, IDs, boundaries,
 centroids, the point's grid address (for example `11-0140-0471-00 W23 S18`), and
 whether the point, its cell and its sub-cell are in Pakistan. A blue arrow runs

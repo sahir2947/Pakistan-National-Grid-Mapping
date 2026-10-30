@@ -197,6 +197,12 @@ a block is just outside one). It is a layer on the grid that can be updated
 without changing any ID (project.md §5.7). Sources and known limitations:
 [pakgrid/data/PLACES_SOURCE.md](pakgrid/data/PLACES_SOURCE.md).
 
+**User places:** an app's authorised users can draw a polygon around cells
+and sub-cells and name a locality the official data misses. It is stored in a
+separate file, located from known localities by distance and direction
+(`Gali 7, 500 m SW of Askari 2`), and every change is kept with its author
+(project.md §5.8).
+
 **Border flags:** every cell and sub-cell is flagged `inside`, `border` or
 `outside` Pakistan, using the geoBoundaries / OpenStreetMap border (including
 AJK and Gilgit-Baltistan). Border data © OpenStreetMap contributors, ODbL, via

@@ -622,6 +622,84 @@ with Grid.open("pakgrid_v1_pakistan.sqlite") as grid:
 `pakgrid build-places --db FILE` adds or rebuilds the layer in an existing
 database without touching the grid.
 
+### 5.8 User places: localities drawn by an app's users
+
+The official sources miss many places people use every day: a gali, a
+market, a new housing scheme. An app's authorised users can add them. They
+draw a polygon around the cells and sub-cells (or list them), name the
+locality, and the library stores it with where it is from localities
+already known: "Gali 7, 500 m SW of Askari 2".
+
+**Where it is kept.** In a separate SQLite file beside the grid database
+(`user_places.sqlite`). The grid database and the official places layer are
+never changed, so `pakgrid verify` and the official checksums still hold,
+and rebuilding the grid database loses nothing. `export_data()` /
+`pakgrid user-places export` write every locality to JSON for backup or to
+move it to another server.
+
+**How a user locality is made** (`pakgrid/userplaces.py`):
+
+1. **Sub-cells:** those whose centroid lies inside the polygon (even-odd
+   rule, so a polygon can have holes; exact integer arithmetic on 10⁻⁷
+   degree), or the cells and sub-cells given by code. Only sub-cells in
+   Pakistan count. At most 25,000 sub-cells (~1,000 km²).
+2. **Tehsil:** the one most of its sub-cells have. Its **key** is the
+   tehsil's key plus its name, e.g. `punjab/lahore/lahore-cantt/gali-7`,
+   made unique against every official and user key. The key never changes,
+   even when the locality is renamed.
+3. **Centre:** the covered sub-cell centroid nearest their average, so it
+   always lies in the locality.
+4. **References:** one or more known localities it is located from. For
+   each one the library stores the distance, compass bearing and direction,
+   and the east/north vector, from that locality's point to the centre.
+   The user names the references (official localities or other user
+   localities, by key or ID), or asks for the `nearest` N official ones, or
+   both. With neither, the nearest one is used. At most 10 references, each
+   within 50 km.
+5. **Lookups:** with the file attached, `Grid.place` and `Grid.locate` give
+   the user locality inside it. The OpenStreetMap one is still there as
+   `PlaceTags.osm_locality`. The label leads with the name and first
+   reference: `Gali 7 (500 m SW of Askari 2), Lahore Cantt, Lahore, Punjab`.
+   Where user localities overlap, the smallest wins (ties: the newest), so a
+   gali inside a mohalla shows as the gali. A cell's user locality is the
+   one most of its 25 sub-cells have.
+
+**Who may edit.** pakgrid has no logins. The app decides who may add or
+change localities (for example a Django permission), and the library
+requires an `author` for every change. Every add, update, remove and refresh
+is kept in a history with author, time and the full record, so each entry
+can be traced. Removing a locality hides it from lookups but keeps its
+record and history.
+
+**Changing.** `update()` can change the name, local name, kind, shape and
+references; references are recomputed whenever the shape changes. After a
+new official places version, `refresh()` recomputes every tehsil, centre and
+reference vector. Sub-cells never change, because grid IDs never change.
+
+**Safety.** One file can be shared by every thread of a web server: each
+thread has its own connection, writes are transactions (one at a time), and
+readers see each committed change at once.
+
+```python
+with Grid.open("pakgrid_v1_pakistan.sqlite") as grid:
+    user = grid.attach_user_places("user_places.sqlite")      # created if missing
+    gali = user.add("Gali 7", author="ali@shop-42", kind="street", nearest=2,
+                    polygon=[(31.5195, 74.3560), (31.5195, 74.3620),
+                             (31.5240, 74.3620), (31.5240, 74.3560)])
+    gali.references[0].text          # '500 m SW of Askari 2'
+    gali.references[0].east_m        # -315.5 (and north_m, distance_m, bearing_deg)
+    shop = user.add("Shop Row", cells=["11-0140-0470"], author="ali@shop-42",
+                    references=[gali.key, "punjab/lahore/lahore-cantt/lahore-cant"])
+    grid.locate(31.5204, 74.3587).place.label
+    # 'Gali 7 (500 m SW of Askari 2), Lahore Cantt, Lahore, Punjab'
+    user.update(gali.key, author="sara", local_name="گلی ۷")
+    user.history(gali.key)           # who changed what, and when
+```
+
+The map viewer's **Draw** tool previews a polygon: the sub-cells it would
+tag, its tehsil, the nearest localities with distance and direction, and the
+`user.add(...)` call that adds it.
+
 ---
 
 ## 6. Library architecture
@@ -641,6 +719,7 @@ pakgrid/
 ├── grid.py       The public Grid class
 ├── navigate.py   Distance, bearing and turn guidance between two points
 ├── places.py     The places layer: province, district, tehsil and locality tags (§5.7)
+├── userplaces.py Localities drawn by users, kept in a separate file (§5.8)
 ├── data/         Pakistan's border and the places sources (places-v2.json.gz)
 └── cli.py        Command-line tools
 scripts/          make_places_data.py: makes data/places-v2.json.gz from the source downloads
@@ -718,6 +797,23 @@ Every result object has a `to_dict()` method that returns JSON-ready data.
 `Location.place` gives the same tags for a located point, and
 `Location.to_dict()` includes them.
 
+**User places** (§5.8; `user = grid.attach_user_places("user_places.sqlite")`, or `Grid.open(db, user_places=...)`):
+
+| Function | Returns |
+|---|---|
+| `user.add(name, author=..., polygon=... or cells=..., kind="neighbourhood", local_name=None, references=(), nearest=None)` | The new `UserLocality`: `key`, `name`, `tehsil_key`, centre `lat`/`lon`, `references` (each `Reference` with `distance_m`, `bearing_deg`, `direction`, `east_m`, `north_m`, `text`), `text` such as `Gali 7 (500 m SW of Askari 2)` |
+| `user.update(key, author=..., name=, local_name=, kind=, polygon= / cells=, references=, nearest=)` | The changed locality (same key) |
+| `user.remove(key, author=...)` | Hides it from lookups; history kept |
+| `user.get(key_or_id)` / `user.localities()` / `user.find(text)` | User localities |
+| `user.sub_cells(key)` | Its sub-cell IDs |
+| `user.history(key=None)` | Every change: time, author, action and the record after it |
+| `user.export_data()` / `user.import_data(data, author=...)` | Backup and restore as JSON |
+| `user.refresh(author=...)` | Recompute tehsils, centres and reference vectors after a new places version |
+
+With a user places file attached, `place`, `locate`, `find_places`,
+`get_place` and `cells_in_place` include user localities (`Place.user` is
+true for them, and `PlaceTags.user_locality` holds the `UserLocality`).
+
 These functions need no database, so they also work in an app that never
 downloads it:
 
@@ -766,6 +862,8 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 | `pakgrid export-conformance [-o DIR]` | Write the conformance test file for ports, `conformance/navigation.json` |
 | `pakgrid build ... --no-places` / `pakgrid build-places [--db FILE]` | Build without the places layer / add or rebuild it in an existing database |
 | `pakgrid places [TEXT] [--level L] [--cells]` | List or search places (province, district, tehsil, locality); `--cells` prints the cells of one place |
+| `pakgrid user-places [--file F] add NAME (--polygon FILE \| --cells CODE...) --author A [--kind K] [--local-name L] [--ref KEY]... [--nearest N]` | Add a user locality (§5.8); also `update KEY`, `remove KEY`, `list`, `show KEY`, `history [KEY]`, `export FILE`, `import FILE`, `refresh` |
+| `pakgrid locate ... --user-places FILE` / `pakgrid show ... --user-places FILE` | Include user localities in the answer |
 
 The database path defaults to `pakgrid_v1.sqlite`, or the `PAKGRID_DB`
 environment variable.
@@ -1262,6 +1360,7 @@ rider guidance on the phone. Step-by-step setup, with tested code:
 | Determinism | Two builds produce byte-identical files and the same checksum; test builds match recorded checksums on Linux, macOS and Windows; no centroid latitude is near enough to a rounding tie for platform differences in `sin`/`cos` to change it |
 | Official checksums | Both complete editions, built from scratch on Linux, macOS and Windows, match `pakgrid/checksums.py` (`.github/workflows/checksums.yml`) |
 | Shared use | One `Grid` shared by many threads, and used after a fork, gives the same answers as a single thread |
+| User places | Sub-cells chosen by a polygon equal an independent ray-casting check (holes, GeoJSON, exact edges); tehsil, key and centre rules; references (named, nearest, by ID, user-to-user) match `direction()`, with errors for unknown, non-locality, duplicate and too-distant ones; bad input is refused and leaves nothing; lookups show the user locality with the OpenStreetMap one kept; smallest overlap wins; update, remove, history, export/import, reopen and refresh; ten threads adding at once; the CLI; the viewer's Draw preview equals the library |
 | Places layer | Known places get the right locality, tehsil, district and province (Lahore Cant, Taxila, Kot Addu, New Sukkur…); every sub-cell touching Pakistan has a tehsil in a complete build; the hierarchy is the official one and the same for any part built; split cells keep each sub-cell's tehsil and locality; the in/near rule; searches work both ways (by name, key or Urdu name); the viewer's JavaScript gives the same tags and exact shapes; the places checksum is the same on Linux, macOS and Windows and matches the official value for both editions |
 | Conformance file | `conformance/navigation.json` is up to date; the Python library and the JavaScript copy (through `conformance/runners/javascript.js`) pass all ~2,000 cases; it covers every heading source, status and call |
 | GPS noise | Simulated noise: the true block is always the result or one of its `candidates` |
@@ -1285,6 +1384,7 @@ Windows, on every push to `main` and every pull request. The workflow also runs 
 | **Backend integration** ✅ | Django REST Framework guide (`docs/django.md`), thread- and fork-safe `Grid`, official checksums checked by `pakgrid verify` |
 | **Ports** ✅ | Navigation rules and conformance test file for apps that port navigation to their own language (`conformance/`) |
 | **Places layer** ✅ | Province, district, tehsil and locality tags on every cell and sub-cell (§5.7, places version 2) |
+| **User places** ✅ | Localities drawn by an app's users, located from known localities by distance and direction, with author history (§5.8) |
 | **Next — Documentation guides** | A guide for every feature, for app developers |
 | **v0.1.0 release** | First tagged GitHub release, with the databases attached |
 | **Pilot** | Dukandaari in one city (Lahore or Karachi): addresses, batching, rider navigation |
