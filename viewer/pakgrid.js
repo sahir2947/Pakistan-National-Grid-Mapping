@@ -1049,6 +1049,221 @@
     return new Zone(this, masks);
   };
 
+  // -- GeoJSON (same rules and output as pakgrid.geojson) --------------------------
+
+  var RUNS = [];               // runs of set bits in a 5-bit sub-row pattern: [[first, end], ...]
+  (function () {
+    for (var p = 0; p < 32; p++) {
+      var r = [], k = 0;
+      while (k < SUB) {
+        if ((p >> k) & 1) { var s0 = k; while (k < SUB && ((p >> k) & 1)) k++; r.push([s0, k]); } else k++;
+      }
+      RUNS.push(r);
+    }
+  })();
+  var TURN_LEFT = { E: "N", N: "W", W: "S", S: "E" }, TURN_RIGHT = { N: "E", W: "N", S: "W", E: "S" };
+
+  function outlineBlocks(grid, masks) {
+    var runs = {}, out = [];
+    Object.keys(masks).forEach(function (key) {
+      var c = +key, m = masks[key], p = splitCellId(c);
+      for (var sr = 0; sr < SUB; sr++) {
+        var bits = Math.floor(m / Math.pow(2, sr * SUB)) % 32, rk = p.q + ":" + (p.row * SUB + sr);
+        RUNS[bits].forEach(function (ab) {
+          (runs[rk] || (runs[rk] = [])).push([p.col * SUB + ab[0], p.col * SUB + ab[1]]);
+        });
+      }
+    });
+    Object.keys(runs).forEach(function (rk) {
+      var parts = rk.split(":"), q = +parts[0], i = +parts[1], ql = grid.quadrants[q], row = Math.floor(i / SUB);
+      var s = ql.latE7[i], n = ql.latE7[i + 1], rs = runs[rk].sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+      var j0 = rs[0][0], j1 = rs[0][1];
+      for (var k = 1; k < rs.length; k++) {
+        if (rs[k][0] <= j1) j1 = Math.max(j1, rs[k][1]);
+        else { out.push([s, n, toE7(fineLon(ql, row, j0)), toE7(fineLon(ql, row, j1))]); j0 = rs[k][0]; j1 = rs[k][1]; }
+      }
+      out.push([s, n, toE7(fineLon(ql, row, j0)), toE7(fineLon(ql, row, j1))]);
+    });
+    return out;
+  }
+
+  function netSegments(lines) {
+    var out = [];
+    Object.keys(lines).forEach(function (ck) {
+      var c = +ck, delta = {};
+      lines[ck].forEach(function (pc) { delta[pc[0]] = (delta[pc[0]] || 0) + pc[2]; delta[pc[1]] = (delta[pc[1]] || 0) - pc[2]; });
+      var xs = Object.keys(delta).map(Number).sort(function (a, b) { return a - b; }), net = 0, run = null;
+      for (var k = 0; k + 1 < xs.length; k++) {
+        net += delta[xs[k]];
+        var a = xs[k], b = xs[k + 1];
+        if (net && run && run[2] === net && run[1] === a) run[1] = b;
+        else { if (run) out.push([c, run[0], run[1], run[2]]); run = net ? [a, b, net] : null; }
+      }
+      if (run) out.push([c, run[0], run[1], run[2]]);
+    });
+    return out;
+  }
+
+  function cmpPoint(a, b) { return a[0] - b[0] || a[1] - b[1]; }
+
+  // Closed rings [[lon_e7, lat_e7], ...] of the sub-cells in masks: outer rings anticlockwise, holes clockwise.
+  function outlineRings(grid, masks) {
+    var hor = {}, ver = {};
+    outlineBlocks(grid, masks).forEach(function (b) {
+      var s = b[0], n = b[1], w = b[2], e = b[3];
+      (hor[s] || (hor[s] = [])).push([w, e, 1]);
+      (hor[n] || (hor[n] = [])).push([w, e, -1]);
+      (ver[e] || (ver[e] = [])).push([s, n, 1]);
+      (ver[w] || (ver[w] = [])).push([s, n, -1]);
+    });
+    var edges = [];
+    netSegments(hor).forEach(function (g) {
+      edges.push(g[3] > 0 ? [[g[1], g[0]], [g[2], g[0]], "E"] : [[g[2], g[0]], [g[1], g[0]], "W"]);
+    });
+    netSegments(ver).forEach(function (g) {
+      edges.push(g[3] > 0 ? [[g[0], g[1]], [g[0], g[2]], "N"] : [[g[0], g[2]], [g[0], g[1]], "S"]);
+    });
+    edges.sort(function (a, b) { return cmpPoint(a[0], b[0]) || cmpPoint(a[1], b[1]) || (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0); });
+    var leaving = {};
+    edges.forEach(function (e, k) { var key = e[0][0] + "," + e[0][1]; (leaving[key] || (leaving[key] = [])).push([e[2], k]); });
+    var used = new Array(edges.length), rings = [];
+    for (var k0 = 0; k0 < edges.length; k0++) {
+      if (used[k0]) continue;
+      var ring = [edges[k0][0]], k = k0;
+      while (!used[k]) {
+        used[k] = true;
+        var end = edges[k][1], d = edges[k][2];
+        ring.push(end);
+        k = leftmostEdge(leaving[end[0] + "," + end[1]], d);
+      }
+      splitRing(ring).forEach(function (loop) { rings.push(simplifyRing(loop)); });
+    }
+    return rings;
+  }
+  function leftmostEdge(options, d) {
+    var wants = [TURN_LEFT[d], d, TURN_RIGHT[d]];
+    for (var w = 0; w < 3; w++) for (var k = 0; k < options.length; k++) if (options[k][0] === wants[w]) return options[k][1];
+    throw new Error("the outline is not closed");
+  }
+  function splitRing(ring) {
+    var seen = {};
+    for (var k = 0; k + 1 < ring.length; k++) {
+      var key = ring[k][0] + "," + ring[k][1];
+      if (key in seen) {
+        var i = seen[key];
+        return splitRing(ring.slice(i, k + 1)).concat(splitRing(ring.slice(0, i).concat(ring.slice(k))));
+      }
+      seen[key] = k;
+    }
+    return [ring];
+  }
+  function simplifyRing(ring) {
+    var pts = ring.slice(0, -1), n = pts.length, keep = [];
+    for (var k = 0; k < n; k++) {
+      var a = pts[(k - 1 + n) % n], b = pts[k], c = pts[(k + 1) % n];
+      if (!((a[0] === b[0] && b[0] === c[0]) || (a[1] === b[1] && b[1] === c[1]))) keep.push(b);
+    }
+    var first = 0;
+    for (k = 1; k < keep.length; k++) if (keep[k][1] < keep[first][1] || (keep[k][1] === keep[first][1] && keep[k][0] < keep[first][0])) first = k;
+    keep = keep.slice(first).concat(keep.slice(0, first));
+    return keep.concat([keep[0]]);
+  }
+  function ringArea2(r) {      // floating point is enough: it only orders rings that differ by whole sub-cells
+    var a = 0, x0 = r[0][0], y0 = r[0][1];
+    for (var k = 0; k + 1 < r.length; k++) a += (r[k][0] - x0) * (r[k + 1][1] - y0) - (r[k + 1][0] - x0) * (r[k][1] - y0);
+    return a;
+  }
+  function insideRing(px2, py2, r) {   // doubled coordinates; only vertical edges cross an eastward ray
+    var inside = false;
+    for (var k = 0; k + 1 < r.length; k++) {
+      var x1 = r[k][0], y1 = r[k][1], x2 = r[k + 1][0], y2 = r[k + 1][1];
+      if (x1 === x2 && (2 * y1 > py2) !== (2 * y2 > py2) && 2 * x1 > px2) inside = !inside;
+    }
+    return inside;
+  }
+  function ringPolygons(rings) {
+    var outers = [], holes = [];
+    rings.forEach(function (r) { (ringArea2(r) > 0 ? outers : holes).push(r); });
+    var boxes = outers.map(function (r) {
+      var b = [Infinity, Infinity, -Infinity, -Infinity];
+      r.forEach(function (p) { b[0] = Math.min(b[0], p[0]); b[1] = Math.min(b[1], p[1]); b[2] = Math.max(b[2], p[0]); b[3] = Math.max(b[3], p[1]); });
+      return b;
+    });
+    var areas = outers.map(ringArea2), members = outers.map(function () { return []; });
+    holes.forEach(function (h) {
+      var px2 = h[0][0] + h[1][0], py2 = h[0][1] + h[1][1], best = -1;
+      for (var k = 0; k < outers.length; k++) {
+        var b = boxes[k];
+        if (2 * b[0] <= px2 && px2 <= 2 * b[2] && 2 * b[1] <= py2 && py2 <= 2 * b[3] && insideRing(px2, py2, outers[k]) &&
+            (best < 0 || areas[k] < areas[best])) best = k;
+      }
+      if (best < 0) throw new Error("a hole outside every outer ring");
+      members[best].push(h);
+    });
+    var key = function (a, b) { return a[0][1] - b[0][1] || a[0][0] - b[0][0]; };
+    var out = outers.map(function (r, k) { return [r].concat(members[k].sort(key)); });
+    out.sort(function (a, b) { return key(a[0], b[0]); });
+    return out;
+  }
+  function ringCoords(r) { return r.map(function (p) { return [p[0] / SCALE, p[1] / SCALE]; }); }
+
+  // GeoJSON geometry (Polygon or MultiPolygon) of the sub-cells in masks {cell ID: mask}; null if none.
+  function geojsonGeometry(grid, masks) {
+    var polys = ringPolygons(outlineRings(grid, masks));
+    if (!polys.length) return null;
+    if (polys.length === 1) return { type: "Polygon", coordinates: polys[0].map(ringCoords) };
+    return { type: "MultiPolygon", coordinates: polys.map(function (p) { return p.map(ringCoords); }) };
+  }
+  function boxGeometry(s, w, n, e) { return { type: "Polygon", coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] }; }
+
+  // The zone as a GeoJSON Feature (as Zone.to_geojson): one outline, with sub_cells and area_km2.
+  Zone.prototype.toGeoJSON = function (properties) {
+    var props = { sub_cells: this.subCellCount(), area_km2: Math.round(this.areaKm2() * 1e6) / 1e6 };
+    for (var k in properties || {}) props[k] = properties[k];
+    return { type: "Feature", geometry: geojsonGeometry(this.grid, this.masks), properties: props };
+  };
+
+  // A cell (sub == null) or sub-cell as a GeoJSON Feature (as Grid.geojson, without the database
+  // fields): its box, with id, code, level and centroid [lon, lat]; with a Boundary, its border flag.
+  Grid.prototype.blockGeoJSON = function (q, row, col, sub, boundary) {
+    var d = this.describe(q, row, col, sub), b = d.bounds;
+    var props = { id: d.id, code: d.code, level: d.level, centroid: [d.centroid[1], d.centroid[0]] };
+    if (boundary) props.pakistan = FLAG_NAMES[this.flag(boundary, q, row, col, sub)];
+    return { type: "Feature", geometry: boxGeometry(b.south, b.west, b.north, b.east), properties: props, id: d.code };
+  };
+
+  // {cell ID: mask} of a place's sub-cells (for a province or district, through its tehsils).
+  Places.prototype.masks = function (grid, place) {
+    var self = this, want = {}, layer = place.level === "locality" ? "locality" : "tehsil", masks = {};
+    if (layer === "locality") want[place.id] = true;
+    else this.list.forEach(function (t) {
+      if (t.level === "tehsil" && self.path(t).some(function (a) { return a.id === place.id; })) want[t.id] = true;
+    });
+    for (var q = 0; q < 4; q++) {
+      var qrows = this._rows[layer][q];
+      for (var key in qrows) {
+        var i = +key, runs = qrows[key], row = Math.floor(i / SUB), sr = i % SUB, at = 0;
+        for (var k = 0; k < runs.length; k += 2) {
+          if (want[runs[k]]) for (var j = at; j < at + runs[k + 1]; j++) {
+            var c = cellId(q, row, Math.floor(j / SUB));
+            masks[c] = (masks[c] || 0) + Math.pow(2, sr * SUB + j % SUB);
+          }
+          at += runs[k + 1];
+        }
+      }
+    }
+    return masks;
+  };
+
+  // A place as a GeoJSON Feature (as Grid.place_geojson): its exact outline and its names.
+  Places.prototype.geojson = function (grid, place) {
+    var props = { id: place.id, key: place.key, name: place.name, level: place.level, parent_id: place.parentId };
+    if (place.level === "locality") {
+      props.kind = place.kind; props.local_name = place.localName; props.point = [place.lon, place.lat]; props.user = false;
+    }
+    return new Zone(grid, this.masks(grid, place)).toGeoJSON(props);
+  };
+
   Places.prototype.path = function (place) {
     var out = [];
     for (var p = place; p; p = this.byId[p.parentId]) out.push(p);
@@ -1060,7 +1275,7 @@
     toE7: toE7, bandCentroidLat: bandCentroidLat, metresPerDegree: metresPerDegree,
     localOffset: localOffset, applyOffset: applyOffset, addressText: addressText, bearing: bearing, compass: compass, direction: direction, turnWords: turnWords,
     formatDistance: formatDistance, NavigationSession: NavigationSession, cellId: cellId, subCellId: subCellId,
-    pointInRings: pointInRings, Zone: Zone,
+    pointInRings: pointInRings, Zone: Zone, geojsonGeometry: geojsonGeometry,
     cellCode: cellCode, subCellCode: subCellCode
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

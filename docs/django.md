@@ -435,6 +435,34 @@ index = ZoneIndex({s.id: Zone.from_dict(s.delivery_zone, get_grid())
 shop_ids = index.at(lat, lon)
 ```
 
+**Shapes for the app's map (GeoJSON).** Send GeoJSON and the Flutter app
+draws it with its map library, with no grid maths on the phone
+([project.md §7.7](../project.md#77-geojson)):
+
+```python
+from django.core.cache import cache
+from django.http import JsonResponse
+
+GEOJSON = "application/geo+json"
+
+def shop_zone_geojson(request, shop_id):                 # GET /api/shops/<id>/zone.geojson
+    shop = Shop.objects.get(pk=shop_id)
+    zone = Zone.from_dict(shop.delivery_zone, get_grid())
+    return JsonResponse(zone.to_geojson({"shop": shop.id}), content_type=GEOJSON)
+
+def place_geojson(request, key):                         # GET /api/places/<path:key>.geojson
+    data = cache.get_or_set(f"place-geojson:{key}",       # places change only with a new places version
+                            lambda: get_grid().place_geojson(key), None)
+    return JsonResponse(data, content_type=GEOJSON)
+
+def block_geojson(request, code):                        # GET /api/blocks/<code>.geojson
+    return JsonResponse(get_grid().geojson(code), content_type=GEOJSON)
+```
+
+`grid.cells_geojson(ids)` returns a radius search's or zone's blocks one by
+one, for example to colour them by order count. GeoJSON puts longitude first:
+`[lon, lat]`.
+
 **Localities your users add.** Shop owners and riders know places the
 official data misses (a gali, a market). Let trusted users draw them in the
 app and send the polygon to an endpoint; your backend checks the permission

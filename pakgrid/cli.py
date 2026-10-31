@@ -1,5 +1,5 @@
 """Command-line tools: pakgrid build | build-places | verify | locate | show | within | distance | zone |
-places | user-places | info | export-layout | export-conformance."""
+geojson | places | user-places | info | export-layout | export-conformance."""
 
 import argparse
 import json
@@ -88,6 +88,21 @@ def main(argv=None):
     z.add_argument("zone", metavar="ZONE.json")
     z.add_argument("lat", type=float)
     z.add_argument("lon", type=float)
+
+    p = sub.add_parser("geojson", help="write cells, a zone or a place as GeoJSON (for Google Maps, Mapbox, Leaflet ...)")
+    p.add_argument("--db", default=DEFAULT_DB)
+    src = p.add_mutually_exclusive_group(required=False)
+    src.add_argument("--cells", nargs="+", metavar="CODE", help="cell and sub-cell codes")
+    src.add_argument("--place", metavar="KEY", help="a place's exact outline, e.g. punjab/lahore")
+    src.add_argument("--zone", metavar="ZONE.json", help="a zone file from `pakgrid zone make`")
+    src.add_argument("--circle", nargs=3, type=float, metavar=("LAT", "LON", "METRES"),
+                     help="the sub-cells within a radius, as one outline")
+    src.add_argument("--polygon", metavar="FILE", help="the sub-cells inside a polygon (as `zone make`), as one outline")
+    p.add_argument("--merge", action="store_true", help="with --cells: one outline instead of one box per block")
+    p.add_argument("--pakistan-only", action="store_true", help="keep only sub-cells in Pakistan")
+    p.add_argument("--user-places", default=DEFAULT_USER_PLACES, metavar="FILE",
+                   help="also find --place among the localities of this user places file")
+    p.add_argument("-o", "--output", metavar="FILE", help="write here instead of printing")
 
     p = sub.add_parser("places", help="list places (province, district, tehsil, locality), or the cells of one")
     p.add_argument("text", nargs="?", help="only places whose name contains this text, or with this key")
@@ -275,6 +290,37 @@ def _zone(grid, args):
             "sub_cell": ids.sub_cell_code(ids.sub_cell_id(ids.cell_id(*loc[:3]), loc[3] * 5 + loc[4]))}
 
 
+def _geojson(args):
+    from .grid import Grid
+    from .zones import Zone
+    with Grid.open(args.db, user_places=args.user_places) as grid:
+        if args.cells:
+            out = grid.cells_geojson(args.cells, merge=args.merge)
+        elif args.place:
+            out = grid.place_geojson(args.place)
+        elif args.zone:
+            with open(args.zone, encoding="utf-8") as f:
+                out = Zone.from_dict(json.load(f), grid).to_geojson()
+        elif args.circle or args.polygon:
+            polygon = None
+            if args.polygon:
+                with open(args.polygon, encoding="utf-8") as f:
+                    polygon = json.load(f)
+            out = grid.zone(circle=tuple(args.circle) if args.circle else None, polygon=polygon,
+                            pakistan_only=args.pakistan_only).to_geojson()
+        else:
+            from .errors import InvalidIdError
+            raise InvalidIdError("give --cells, --place, --zone, --circle or --polygon")
+    text = json.dumps(out, ensure_ascii=False, separators=(",", ":"))
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(f"wrote {args.output}")
+    else:
+        print(text)
+    return 0
+
+
 def _user_places(args):
     from .grid import Grid
     with Grid.open(args.db) as grid:
@@ -332,6 +378,7 @@ _COMMANDS = {
         a.lat, a.lon, a.radius, level=a.level, pakistan_only=a.pakistan_only, touching=a.touching)]),
     "distance": _with_grid(lambda grid, a: grid.distance(a.a, a.b).to_dict()),
     "zone": _with_grid(_zone),
+    "geojson": _geojson,
     "info": _with_grid(lambda grid, a: grid.info()),
     "export-layout": _export_layout,
     "export-conformance": _export_conformance,

@@ -721,6 +721,7 @@ pakgrid/
 ├── places.py     The places layer: province, district, tehsil and locality tags (§5.7)
 ├── userplaces.py Localities drawn by users, kept in a separate file (§5.8)
 ├── zones.py      Custom zones: sets of sub-cells, pin checks, stored form (§7.6)
+├── geojson.py    GeoJSON: blocks, zones and places' exact outlines (§7.7)
 ├── data/         Pakistan's border and the places sources (places-v2.json.gz)
 └── cli.py        Command-line tools
 scripts/          make_places_data.py: makes data/places-v2.json.gz from the source downloads
@@ -773,6 +774,7 @@ level by itself.
 | 8a | `cells_within(lat, lon, radius_m, level="cell", pakistan_only=False, touching=False)` | Radius search: the cells or sub-cells whose centroid (with `touching=True`, any part) is within `radius_m` of a point, nearest first, as `Nearby` (`id`, `code`, `distance_m`, `bearing_deg`); radius up to 50 km (§7.5) |
 | 8b | `distance(a, b, level="cell")` | Cell-to-cell distance: `Separation` between two blocks' centroids (`distance_m`, `bearing_deg`, `compass`, `compass_short`, `east_m`, `north_m`, `text` such as `13.8 km NE`); codes may mix cells and sub-cells; no database access (§7.5) |
 | 8c | `zone(polygon= / circle= / cells= / place=, pakistan_only=False)` | A custom zone (`Zone`): a set of sub-cells with `contains(lat, lon)`, counts, area, `cells()`, `sub_cells()`, `\|` `&` `-`, `to_dict()` / `Zone.from_dict()`; `ZoneIndex` finds which of many zones hold a pin (§7.6) |
+| 8d | `geojson(item)`, `cells_geojson(items, merge=False)`, `place_geojson(place)` | GeoJSON Features of blocks, sets of blocks and places' exact outlines; `zone.to_geojson()` for zones (§7.7) |
 | **Pakistan border** | | |
 | 9 | `in_pakistan(lat, lon)` | `True` if the point is inside Pakistan's border |
 | 10 | `pakistan_flags(items, level="cell")` | `{id: "inside" \| "border" \| "outside"}` for many cells or sub-cells at once |
@@ -862,6 +864,7 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 | `pakgrid locate LAT LON [--accuracy M]` | Look up a point; prints JSON |
 | `pakgrid within LAT LON METRES [--level sub] [--pakistan-only] [--touching]` | Radius search, nearest first (§7.5) |
 | `pakgrid distance FROM TO` | Distance and direction between two cells or sub-cells, by code (§7.5) |
+| `pakgrid geojson (--cells CODE... [--merge] \| --place KEY \| --zone FILE \| --circle LAT LON M \| --polygon FILE) [-o FILE]` | Write GeoJSON for any map (§7.7) |
 | `pakgrid zone make (--polygon FILE \| --circle LAT LON M \| --cells CODE... \| --place KEY) [--pakistan-only] [-o FILE]` / `zone check FILE LAT LON` / `zone show FILE [--codes]` | Make a custom zone, check a pin, summarise one (§7.6) |
 | `pakgrid show CODE` | Print a cell's or sub-cell's details as JSON |
 | `pakgrid info` | Print grid and database information |
@@ -900,6 +903,7 @@ for checking the grid visually before it is used in an app:
   the distance and direction between their centres (§7.5)
 - **Zone:** draw a custom zone, check pins against it, copy its stored data,
   or paste a stored zone to see it (§7.6)
+- **Download GeoJSON** of a place, a zone, a block or radius search results (§7.7)
 - **Draw:** preview a user locality (§5.8)
 
 It needs no database. It recomputes the grid and the border flags from
@@ -1042,6 +1046,61 @@ million sub-cells.
 viewer, **Zone** draws a zone, checks tapped pins (green inside, red outside),
 gives its JSON, and shows a pasted stored zone; its JavaScript (`grid.zoneFromPolygon`,
 `PakGrid.Zone`) gives the same data, tested against the library.
+
+
+### 7.7 GeoJSON
+
+Anything the grid knows can be drawn on any map as **GeoJSON** (RFC 7946),
+the format read by Google Maps, Mapbox, Leaflet, `flutter_map`, QGIS and
+PostGIS: a cell, a sub-cell, a set of blocks, a zone, or the exact outline of
+a province, district, tehsil or locality (`pakgrid/geojson.py`).
+
+```python
+with Grid.open("pakgrid_v1_pakistan.sqlite") as grid:
+    grid.geojson("11-0140-0471-00")                  # a sub-cell: Feature with its box and details
+    grid.cells_geojson(["11-0140-0471", "11-0140-0472"])          # FeatureCollection, a box each
+    grid.cells_geojson(codes, merge=True)            # one outline around them all
+    grid.place_geojson("punjab/lahore")              # Lahore district's exact outline (~24 KB)
+    grid.zone(circle=(31.5204, 74.3587, 3000)).to_geojson()       # a zone, e.g. a delivery area
+```
+
+| Function | GeoJSON | Properties |
+|---|---|---|
+| `geojson(item, level="sub")` | `Feature`: the block's box | `id`, `code`, `level`, `centroid` `[lon, lat]`, `pakistan`, and `place` (its label) with the places layer |
+| `cells_geojson(items, level="cell", merge=False)` | `FeatureCollection` of boxes (no database access), or one merged `Feature` | `id`, `code`, `level` (or `sub_cells`, `area_km2` merged) |
+| `zone.to_geojson(properties=None)` | `Feature`: the zone's outline | `sub_cells`, `area_km2`, and your own |
+| `place_geojson(place)` | `Feature`: the place's exact outline | `id`, `key`, `name`, `level`, `parent_id`, `sub_cells`, `area_km2`; a locality's `kind`, `local_name`, `point`, `user` |
+
+**Outlines.** A set of sub-cells becomes one shape, not thousands of
+squares: neighbouring sub-cells are merged into polygons (a `Polygon`, or a
+`MultiPolygon` when the set is in pieces), with **holes** where it has
+gaps. The outline is exact: its corners are the sub-cells' own corners, and
+it encloses exactly the sub-cells of the set. Where pieces touch only at a
+corner, or a hole touches the outer edge at a point, the rings are kept
+apart there, so the geometry is valid (checked with GEOS/Shapely on whole
+provinces and on random sets). Coordinates are `[longitude, latitude]` with
+up to 7 decimals; outer rings run anticlockwise and holes clockwise, as
+RFC 7946 asks. The output is canonical: every ring starts at its
+south-westernmost corner and polygons are in order of that corner, so the
+same set gives the same GeoJSON every time, in Python and in
+`viewer/pakgrid.js`, which is tested to match it coordinate for coordinate.
+
+**Size and speed.** A delivery zone of ~20 km²: ~0.2 KB, ~2 ms. A locality:
+~2 KB. Lahore district: ~24 KB, 0.15 s. Punjab: ~270 KB, 1.5 s (cache what
+does not change, such as places). A block: under 1 ms.
+
+**From the command line:** `pakgrid geojson --cells CODE... [--merge]`,
+`--place KEY`, `--zone zone.json`, `--circle LAT LON M` or `--polygon FILE`,
+with `-o FILE`. **In the viewer:** *Download GeoJSON* on a place, a zone, a
+block's details and radius search results.
+
+**In a Flutter app.** The backend sends GeoJSON (see
+[docs/django.md](docs/django.md)) and the app draws it with its map library:
+`flutter_map` with a GeoJSON parser (for example the `flutter_map_geojson`
+package) turns it into polygon layers directly; with `google_maps_flutter`,
+each ring becomes a `Polygon` (`points` from the outer ring, `holes` from the
+others), remembering that GeoJSON puts longitude first. No grid maths is
+needed in the app for drawing.
 
 ## 8. How a lookup works
 
@@ -1409,6 +1468,7 @@ the same data centre.
 | `cells_within(...)` 10 km, cells, `pakistan_only=True` (315) | 5.3 ms | — |
 | `distance(a, b)` | 15 µs | ~65,000 |
 | `zone.contains(lat, lon)` / `ZoneIndex.at` (100 zones) | ~3 µs / ~4 µs | — |
+| `place_geojson` Lahore district / Punjab; `zone.to_geojson()` 20 km² | 0.15 s / 1.5 s; 2 ms | — |
 | `zone(polygon=...)` ~80,000 sub-cells / `zone(place="punjab")` 5.1 million | 16 ms / 0.6 s | — |
 
 **Build and verify:**
@@ -1494,6 +1554,7 @@ rider guidance on the phone. Step-by-step setup, with tested code:
 | Determinism | Two builds produce byte-identical files and the same checksum; test builds match recorded checksums on Linux, macOS and Windows; no centroid latitude is near enough to a rounding tie for platform differences in `sin`/`cos` to change it |
 | Official checksums | Both complete editions, built from scratch on Linux, macOS and Windows, match `pakgrid/checksums.py` (`.github/workflows/checksums.yml`) |
 | Shared use | One `Grid` shared by many threads, and used after a fork, gives the same answers as a single thread |
+| GeoJSON | Outlines cover exactly their sub-cells (every centroid around them tested) and enclose exactly their area; rings are closed, simple, axis-aligned, without straight-run points, anticlockwise outside and clockwise for holes, starting at their south-west corner; corners touching, holes, checkerboards, random sets, and sets across both quadrant lines; deterministic; valid in GEOS/Shapely (whole provinces, 200 random sets); place, zone and block features; the CLI; the viewer's JavaScript gives identical GeoJSON |
 | Custom zones | The row-by-row polygon scan equals testing every sub-cell centroid (random and concave polygons, holes, across a quadrant midline, corners and edges exactly on centroids); circle and place zones equal `cells_within` and `cells_in_place`; `contains` equals the pin's sub-cell; area equals the sum of sub-cell areas; `pakistan_only`; set operations; stored form round trip, determinism and bad data; `ZoneIndex`; the CLI; the viewer's JavaScript gives the same data, area and pin answers |
 | Radius search and distances | `cells_within` equals a brute-force measure of every block in a generous box (cells and sub-cells, centroid and touching, radius 0 to 20 km, near the south edge and a quadrant line); counts near π r²; `pakistan_only` equals the border flags; bad radii and levels are refused; `distance` equals `direction()` between centroids, both ways, mixed levels, outside the build; the CLI; the viewer's JavaScript gives the same IDs, distances and bearings |
 | User places | Sub-cells chosen by a polygon equal an independent ray-casting check (holes, GeoJSON, exact edges); tehsil, key and centre rules; references (named, nearest, by ID, user-to-user) match `direction()`, with errors for unknown, non-locality, duplicate and too-distant ones; bad input is refused and leaves nothing; lookups show the user locality with the OpenStreetMap one kept; smallest overlap wins; update, remove, history, export/import, reopen and refresh; ten threads adding at once; the CLI; the viewer's Draw preview equals the library |
@@ -1521,6 +1582,7 @@ Windows, on every push to `main` and every pull request. The workflow also runs 
 | **Ports** ✅ | Navigation rules and conformance test file for apps that port navigation to their own language (`conformance/`) |
 | **Places layer** ✅ | Province, district, tehsil and locality tags on every cell and sub-cell (§5.7, places version 2) |
 | **User places** ✅ | Localities drawn by an app's users, located from known localities by distance and direction, with author history (§5.8) |
+| **GeoJSON** ✅ | Blocks, zones and places' exact outlines as valid, canonical GeoJSON for any map, in Python, the CLI and the viewer (§7.7) |
 | **Custom zones** ✅ | Delivery areas as sets of sub-cells from polygons, circles, cells and places, with fast pin checks and a compact stored form (§7.6) |
 | **Radius search and distances** ✅ | Blocks within a radius of a point and cell-to-cell distances, in Python, the CLI and the viewer, plus a Grid show/hide toggle (§7.5) |
 | **Next — Documentation guides** | A guide for every feature, for app developers |

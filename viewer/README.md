@@ -44,6 +44,11 @@ their centres, and the east/north metres.
 3. The panel gives the zone's data (`Zone.to_dict()`) to store. You can also
    paste a stored zone's data to see it on the map.
 
+**Download GeoJSON** (project.md §7.7) saves what is shown as a GeoJSON file
+for any map or GIS tool: a place's exact outline (in its panel), a zone, a
+block and its cell (in a block's details), or the blocks of a radius
+search. The files are the same as the library makes.
+
 **Draw** previews a new user locality (project.md §5.8). Tap the corners of
 a polygon and press **Done** to see:
 

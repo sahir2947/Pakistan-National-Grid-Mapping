@@ -32,6 +32,7 @@ Features asked for by the project owner. Add new requests here.
 | R2 | **User data feeding: localities drawn by users** | ✅ | An authorised user draws a polygon around cells and sub-cells (or lists them) and names a locality. The library stores it in a separate user places file, located from one or more known localities as distance and direction vectors (`500 m SW of Askari 2`). Lookups show it inside the polygon. Every change is kept with its author. The viewer's **Draw** tool previews it (project.md §5.8) |
 | R3 | **Radius search, cell-to-cell distance, show/hide grid** | ✅ | `grid.cells_within(lat, lon, radius_m)`: the cells or sub-cells within a radius, nearest first (centre or any part; optionally only in Pakistan). `grid.distance(a, b)`: distance, bearing, compass and east/north metres between two blocks' centres. Both are also CLI commands (`within`, `distance`) and in the viewer (**Around this point**, **Measure**), which also gets a **Grid** toggle to show or hide the grid (project.md §7.5) |
 | R4 | **Custom zones** | ✅ | `grid.zone(polygon= / circle= / cells= / place=)`: a delivery area or other region as a set of sub-cells. `zone.contains(lat, lon)` checks a pin in ~3 µs, and `ZoneIndex` finds which of many zones hold a pin. Zones combine with union, intersection and difference, and store as compact JSON (`to_dict` / `from_dict`). Also `pakgrid zone`, and a **Zone** tool in the viewer (project.md §7.6) |
+| R5 | **GeoJSON for backend and frontend** | ✅ | Blocks, sets of blocks, zones and places as GeoJSON for any map (Google Maps, Mapbox, Leaflet, flutter_map). Sets become exact merged outlines with holes, valid and canonical. Available as `grid.geojson`, `cells_geojson`, `place_geojson` and `zone.to_geojson`, as `pakgrid geojson`, and as viewer downloads; the viewer's JavaScript makes identical output (project.md §7.7) |
 
 ## Proposed
 
@@ -44,7 +45,7 @@ already has. Move one to **Requested** to start it.
 | P2 | **Custom zones** | A delivery area drawn as a polygon → the exact cells inside it, and a fast "is this pin in my zone?" check | ✅ done as R4 |
 | P3 | **Province / district / city per cell** | Each cell tagged with its administrative area, for reports, pricing and zone setup | ✅ done as R1 |
 | P4 | **Larger blocks** | Groups of cells, e.g. 5 km or 10 km squares, for heat maps and order counts | ⬜ |
-| P5 | **GeoJSON export** | Any cell, sub-cell or zone as GeoJSON, so apps can draw it on Google Maps, Mapbox or Leaflet | ⬜ |
+| P5 | **GeoJSON export** | Any cell, sub-cell or zone as GeoJSON, so apps can draw it on Google Maps, Mapbox or Leaflet | ✅ done as R5 |
 | P6 | **Cell-to-cell distances** | Distance and direction between any two cells' centres, for batching and fee estimates | ✅ done as R3 |
 | P7 | **Nearest point lookup** | Given a list of shops or riders stored by cell, find the nearest ones to a pin quickly | ⬜ |
 
@@ -66,3 +67,4 @@ Features already in the library, for reference.
 | User places: localities drawn by users, with references and history (R2) | `pakgrid/userplaces.py`, project.md §5.8 |
 | Radius search, cell-to-cell distances, show/hide grid (R3) | `Grid.cells_within`, `Grid.distance`, project.md §7.5 |
 | Custom zones (R4) | `Grid.zone`, `pakgrid/zones.py`, project.md §7.6 |
+| GeoJSON (R5) | `pakgrid/geojson.py`, project.md §7.7 |
