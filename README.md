@@ -176,6 +176,8 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
     grid.distance("11-0140-0471", "11-0150-0480").text     # '13.8 km NE'  (centre to centre)
     zone = grid.zone(polygon=[(31.50, 74.33), (31.50, 74.38), (31.54, 74.38), (31.54, 74.33)])
     zone.contains(31.5204, 74.3587)        # True: the pin is in this delivery zone
+    zone.to_geojson()                      # its outline as GeoJSON, for any map (Google Maps, Mapbox, Flutter)
+    grid.place_geojson("punjab/lahore")    # Lahore district's exact outline
 
 direction(31.5215, 74.3570, 31.5204, 74.3587, heading=90).turn   # 'bear right'
 ```

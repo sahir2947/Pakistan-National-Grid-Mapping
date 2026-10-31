@@ -362,10 +362,13 @@
     }
     html += "<p class='sub'>The outline is the place's exact area in the grid: every sub-cell tagged with it. " +
             "Blocks are coloured by tehsil while <b>Places</b> is ticked.</p>" +
-            "<p><button type='button' id='clear'>Clear</button></p>";
+            "<p><button type='button' id='p-geo'>Download GeoJSON</button> <button type='button' id='clear'>Clear</button></p>";
     panel.innerHTML = html;
     document.getElementById("clear").onclick = function () {
       selLayer.clearLayers(); showSummary(); history.replaceState(null, "", location.pathname);
+    };
+    document.getElementById("p-geo").onclick = function () {
+      downloadGeoJSON(places.geojson(grid, p), p.key.replace(/\//g, "_") + ".geojson");
     };
     document.getElementById("placeson").checked = true;
     if (x) {
@@ -543,8 +546,14 @@
             "<button type='button' id='a-go'>Find</button></div><div id='a-out'></div>";
     html += "<p><button type='button' class='go' id='navigate'>Navigate here</button> " +
             "<button type='button' id='measure-from'>Measure from here</button> " +
+            "<button type='button' id='b-geo'>GeoJSON</button> " +
             "<button type='button' id='clear'>Clear</button></p>";
     panel.innerHTML = html;
+    document.getElementById("b-geo").onclick = function () {
+      var feats = [grid.blockGeoJSON(r.q, r.row, r.col, null, border)];
+      if (sub) feats.push(grid.blockGeoJSON(r.q, r.row, r.col, sub.sub, border));
+      downloadGeoJSON({ type: "FeatureCollection", features: feats }, (sub || cell).code + ".geojson");
+    };
     var centre = opts.point || (sub || cell).centroid;
     document.getElementById("a-go").onclick = function () {
       aroundRadius = +document.getElementById("a-radius").value;
@@ -591,7 +600,16 @@
         return ["<a class='place' data-code='" + c.code + "'>" + c.code + "</a>",
                 PakGrid.formatDistance(c.distance_m) + " " + PakGrid.compass(c.bearing_deg).short];
       })) + "<div class='sub'>Distances run from the point to each block's centre" +
-      (aroundTouching ? " (to its nearest edge for “touching”)" : "") + ". Same as <code>grid.cells_within(...)</code>.</div>";
+      (aroundTouching ? " (to its nearest edge for “touching”)" : "") + ". Same as <code>grid.cells_within(...)</code>.</div>" +
+      "<p><button type='button' id='a-geo'>Download GeoJSON</button></p>";
+    document.getElementById("a-geo").onclick = function () {
+      downloadGeoJSON({ type: "FeatureCollection", features: found.map(function (c) {
+        var f = grid.blockGeoJSON(c.q, c.row, c.col, c.sub);
+        f.properties.distance_m = Math.round(c.distance_m * 10) / 10;
+        f.properties.bearing_deg = Math.round(c.bearing_deg * 10) / 10;
+        return f;
+      }) }, "within-" + aroundRadius + "m.geojson");
+    };
     var view = viewPadding(); view.maxZoom = 16;
     map.fitBounds(L.latLng(lat, lon).toBounds(2 * Math.max(aroundRadius, 200) * 1.1), view);
   }
@@ -662,6 +680,15 @@
     html += "<p><button type='button' id='m-done'>Done</button></p>";
     panel.innerHTML = html;
     document.getElementById("m-done").onclick = stopMeasure;
+  }
+
+  // Save GeoJSON as a file (RFC 7946: application/geo+json).
+  function downloadGeoJSON(obj, name) {
+    var url = URL.createObjectURL(new Blob([JSON.stringify(obj)], { type: "application/geo+json" }));
+    var a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
 
   function selectPoint(lat, lon, fly, accuracy, instant) {
@@ -777,7 +804,8 @@
               "<div class='sub'>Store this (for example in a JSONField) and load it with " +
               "<code>Zone.from_dict(data, grid)</code>; it is the same as <code>grid.zone(polygon=...).to_dict()</code>" +
               (z.pts.length ? " for <code>polygon=" + esc(JSON.stringify(z.pts)) + "</code>" : "") + ".</div>" +
-              "<p><button type='button' id='z-new'>New zone</button> <button type='button' id='z-cancel'>Done</button></p>";
+              "<p><button type='button' id='z-geo'>Download GeoJSON</button> <button type='button' id='z-new'>New zone</button> " +
+              "<button type='button' id='z-cancel'>Done</button></p>";
     }
     panel.innerHTML = html;
     var q = function (id) { return document.getElementById(id); };
@@ -794,6 +822,7 @@
       };
     } else {
       q("z-json").value = JSON.stringify(z.zone.toDict());
+      q("z-geo").onclick = function () { downloadGeoJSON(z.zone.toGeoJSON(), "zone.geojson"); };
       q("z-new").onclick = function () { z.zone = null; z.pts = []; z.pins = []; showZone(); };
       if (fit) {
         var ids = z.zone.cellIds(), s = 90, w = 180, nn = -90, e = -180;

@@ -477,6 +477,48 @@ class Grid:
         flags = self._flags(found, level)
         return [i for i in found if flags.get(i, OUTSIDE) != OUTSIDE]
 
+    # -- GeoJSON ------------------------------------------------------------
+
+    def geojson(self, item, level="sub"):
+        """A cell or sub-cell as a GeoJSON Feature: its box, with id, code, level, centroid
+        ([lon, lat]) and border flag as properties, and its place where there is a places layer."""
+        from .geojson import box_geometry, feature
+        level, item_id = self._resolve_any(item, level)
+        block = self.cell(item_id) if level == "cell" else self.sub_cell(item_id)
+        b = block.bounds
+        props = {"id": block.id, "code": block.code, "level": level,
+                 "centroid": [block.centroid[1], block.centroid[0]], "pakistan": block.pakistan}
+        if self.has_places:
+            tags = self.place(item_id, level)
+            props["place"] = tags.label if tags else None
+        return feature(box_geometry(b.south, b.west, b.north, b.east), props, block.code)
+
+    def cells_geojson(self, items, level="cell", merge=False, properties=None):
+        """Many cells or sub-cells as GeoJSON: a FeatureCollection with one box Feature each
+        (no database access), or with merge=True one Feature outlining them all."""
+        from .geojson import box_geometry, feature, feature_collection
+        resolved = [self._resolve_any(i, level) for i in items]
+        if merge:
+            return self.zone(cells=[i if isinstance(i, str) else (ids.cell_code(v) if lv == "cell" else v)
+                                    for i, (lv, v) in zip(items, resolved)]).to_geojson(properties)
+        out = []
+        for lv, v in resolved:
+            q, i, j = self.layout.item_from_id(v, lv)
+            s, w, n, e = (x / SCALE for x in self.layout.quadrants[q].item_bounds_e7(i, j, lv))
+            code = ids.cell_code(v) if lv == "cell" else ids.sub_cell_code(v)
+            out.append(feature(box_geometry(s, w, n, e), {"id": v, "code": code, "level": lv, **(properties or {})}, code))
+        return feature_collection(out)
+
+    def place_geojson(self, place, properties=None):
+        """A place (province, district, tehsil, locality or user locality) as a GeoJSON Feature:
+        the exact outline of its sub-cells, with its id, key, name, level and parent as properties."""
+        p = self.get_place(place)
+        props = {"id": p.id, "key": p.key, "name": p.name, "level": p.level, "parent_id": p.parent_id}
+        if p.level == "locality":
+            props.update(kind=p.kind, local_name=p.local_name, point=[p.lon, p.lat], user=p.user)
+        props.update(properties or {})
+        return self.zone(place=p).to_geojson(props)
+
     def cells_within(self, lat, lon, radius_m, level="cell", pakistan_only=False, touching=False):
         """The cells (or sub-cells) within `radius_m` of a point, nearest first: [Nearby].
 

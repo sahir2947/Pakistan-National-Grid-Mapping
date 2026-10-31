@@ -73,7 +73,7 @@ def test_javascript_matches_python(layout):
         for j in (2590, 2592, 3000):
             pts.append((ql.lat_e7[i], ql.fine_lon_e7(i // 5, j)))
     got = json.loads(subprocess.run([NODE, "-e", _JS, str(VIEWER)], input=json.dumps(pts),
-                                    capture_output=True, text=True, check=True).stdout)
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
     for (lat, lon), js in zip(pts, got):
         py = _python_answer(layout, lat, lon)
         assert js["code"] == py["code"], (lat / SCALE, lon / SCALE)
@@ -91,7 +91,7 @@ def test_javascript_rejects_points_outside():
     console.log(JSON.stringify([g.locate(23.0, 70), g.locate(30, 79), g.parseCode('11-0800-0000'),
                                 g.parseCode('11-0140-0518-01')]));
     """
-    out = json.loads(subprocess.run([NODE, "-e", js], capture_output=True, text=True, check=True).stdout)
+    out = json.loads(subprocess.run([NODE, "-e", js], capture_output=True, encoding="utf-8", check=True).stdout)
     assert out == [None, None, None, {"q": 3, "row": 140, "col": 518, "sub": 1}]
 
 
@@ -119,7 +119,7 @@ def test_javascript_border_flags_match_python(layout):
     points += [(y / SCALE + 1e-6, x / SCALE) for x, y in rng.sample(vertices, 500)]
     got = json.loads(subprocess.run([NODE, "-e", _JS_FLAGS, str(VIEWER)],
                                     input=json.dumps({"rows": rows, "points": points}),
-                                    capture_output=True, text=True, check=True).stdout)
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
     for (q, row), js in zip(rows, got["rows"]):
         ql = layout.quadrants[q]
         lons = [ql.fine_lon(row, j) for j in range(5 * ql.ncols[row] + 1)]
@@ -138,7 +138,7 @@ def test_javascript_compass_matches_python():
     const P = require('{VIEWER_JS}/pakgrid.js');
     console.log(JSON.stringify({json.dumps(bearings)}.map((b) => P.compass(b))));
     """
-    got = json.loads(subprocess.run([NODE, "-e", js], capture_output=True, text=True, check=True).stdout)
+    got = json.loads(subprocess.run([NODE, "-e", js], capture_output=True, encoding="utf-8", check=True).stdout)
     for b, c in zip(bearings, got):
         assert (c["name"], c["short"]) == (_COMPASS_8[round(b / 45) % 8], _COMPASS_16[round(b / 22.5) % 16]), b
 
@@ -160,7 +160,7 @@ def test_javascript_direction_matches_python():
     console.log(JSON.stringify(cases.map((c) => P.direction(c[0], c[1], c[2], c[3], c[4]))));
     """
     got = json.loads(subprocess.run([NODE, "-e", js], input=json.dumps(cases),
-                                    capture_output=True, text=True, check=True).stdout)
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
     for case, j in zip(cases, got):
         d = direction(*case)
         assert j["distance_m"] == pytest.approx(d.distance_m, rel=1e-12, abs=1e-9)
@@ -196,7 +196,7 @@ def test_javascript_addresses_match_python(layout):
     }}));
     """
     got = json.loads(subprocess.run([NODE, "-e", js], input=json.dumps({"pts": points, "texts": texts}),
-                                    capture_output=True, text=True, check=True).stdout)
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
     assert got["made"] == [address_from_point(lat, lon).text for lat, lon in points]
     for text, js_text, js_point in zip(texts, got["parsed"], got["resolved"]):
         try:
@@ -256,7 +256,7 @@ def test_javascript_navigation_engine_matches_python():
     console.log(JSON.stringify({{ states, text }}));
     """
     got = json.loads(subprocess.run([NODE, "-e", js], input=json.dumps({"scripts": scripts, "dists": dists}),
-                                    capture_output=True, text=True, check=True).stdout)
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
     assert got["text"] == [[format_distance(d, "m"), format_distance(d, "ft")] for d in dists]
     sources = set()
     for events, js_states in zip(scripts, got["states"]):
@@ -338,7 +338,7 @@ def test_javascript_places_match_python(db, request):
                                           tags.province and tags.province.id, tags.locality and tags.locality.id,
                                           tags.near, tags.label])
     got = json.loads(subprocess.run([NODE, "-e", _JS_PLACES, str(VIEWER)], input=json.dumps(items),
-                                    capture_output=True, text=True, check=True).stdout)
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
     assert len(got) == len(expected) and got == expected
 
 
@@ -387,7 +387,7 @@ def test_javascript_place_shapes_are_exact(lahore_db):
             else:
                 expected[key] = [bool((t := grid.place(s)) and grid._within(t.tehsil, p)) for s in sids]
     got = json.loads(subprocess.run([NODE, "-e", _JS_SHAPES, str(VIEWER)], input=json.dumps({"keys": keys, "points": points}),
-                                    capture_output=True, text=True, check=True).stdout)
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
     for key in keys:
         assert any(expected[key]) and not all(expected[key]), key       # the sample has points in and out
         assert got[key]["hits"] == expected[key], key                    # the drawn rings
@@ -438,7 +438,7 @@ def test_javascript_user_locality_preview_matches_python(lahore_db, tmp_path):
             tehsil, (lat, lon) = user._tehsil_and_centre(subs)
             expected.append((sorted(subs), tehsil.id, [lat / 1e7, lon / 1e7], user._references(lat, lon, [], 3)))
     got = json.loads(subprocess.run([NODE, "-e", _JS_USER, str(VIEWER)], input=json.dumps(polys),
-                                    capture_output=True, text=True, check=True).stdout)
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
     assert len(got) == len(expected)
     for g, e in zip(got, expected):
         if e == "error":
@@ -480,7 +480,7 @@ def test_javascript_radius_and_distance_match_python(lahore_db):
     distance = [[a, b] for a in codes for b in codes]
     got = json.loads(subprocess.run([NODE, "-e", _JS_RADIUS, str(VIEWER)],
                                     input=json.dumps({"within": within, "distance": distance}),
-                                    capture_output=True, text=True, check=True).stdout)
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
     with Grid.open(lahore_db) as grid:
         for (lat, lon, r, level, touching), js in zip(within, got["within"]):
             py = grid.cells_within(lat, lon, r, level=level, touching=touching)
@@ -526,7 +526,7 @@ def test_javascript_zones_match_python():
     pins = [(round(31.47 + rng.random() * 0.1, 7), round(74.28 + rng.random() * 0.14, 7)) for _ in range(300)]
     got = json.loads(subprocess.run([NODE, "-e", _JS_ZONES, str(VIEWER)],
                                     input=json.dumps({"polygons": polygons, "pins": pins}),
-                                    capture_output=True, text=True, check=True).stdout)
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
     for poly, js in zip(polygons, got):
         zone = make_zone(polygon_masks(layout, rings_e7(poly)), layout)
         assert js["data"] == zone.to_dict()
@@ -558,6 +558,78 @@ process.stdout.write(JSON.stringify(out));
 
 @pytest.mark.skipif(NODE is None, reason="node is not installed")
 def test_javascript_ignores_bad_sensor_readings_like_python():
-    got = json.loads(subprocess.run([NODE, "-e", _JS_BAD_SENSORS, str(VIEWER)], capture_output=True, text=True,
+    got = json.loads(subprocess.run([NODE, "-e", _JS_BAD_SENSORS, str(VIEWER)], capture_output=True, encoding="utf-8",
                                     check=True).stdout)
     assert got and all(got), got
+
+
+_JS_GEOJSON = """
+const P = require(process.argv[1] + '/pakgrid.js');
+const grid = new P.Grid(require(process.argv[1] + '/layout.js'));
+const places = new P.Places(require(process.argv[1] + '/places.js'));
+const req = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const inBuild = (masks) => {                  // only the cells of the Lahore test build: quadrant 11, rows 135-145
+  const out = {};
+  for (const c in masks) { const q = Math.floor(c / 1048576), row = Math.floor(c / 1024) % 1024;
+    if (q === 3 && row >= 135 && row <= 145) out[c] = masks[c]; }
+  return out;
+};
+process.stdout.write(JSON.stringify({
+  masks: req.masks.map((m) => P.geojsonGeometry(grid, m)),
+  zones: req.polygons.map((poly) => grid.zoneFromPolygon(poly).toGeoJSON({ shop: 'x' })),
+  places: req.places.map((key) => {
+    const p = places.list.find((x) => x.key === key), f = places.geojson(grid, p);
+    return { props: f.properties, geometry: P.geojsonGeometry(grid, inBuild(places.masks(grid, p))) };
+  }),
+  block: grid.blockGeoJSON(3, 140, 471, 0),
+}));
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_geojson_matches_python(lahore_db):
+    """The viewer makes the same GeoJSON as the library, coordinate for coordinate."""
+    from pakgrid import Grid
+    from pakgrid.geojson import geometry
+    from pakgrid.layout import GridLayout
+    from pakgrid.zones import make_zone, polygon_masks, rings_e7
+    layout = GridLayout.from_spec()
+    rng = random.Random(101)
+    masks = []
+    for _ in range(25):                        # random sets of sub-cells, some across quadrant lines
+        q = rng.choice([0, 1, 2, 3])
+        ql = layout.quadrants[q]
+        row = rng.randint(0, ql.nrows - 8)
+        col = rng.choice([0, ql.ncols[row] - 6, rng.randint(0, ql.ncols[row] - 6)])
+        m = {}
+        for _ in range(rng.randint(1, 20)):
+            r = row + rng.randint(0, 5)
+            c = min(col + rng.randint(0, 5), ql.ncols[r] - 1)
+            m[str(ids.cell_id(q, r, c))] = rng.getrandbits(25) or 1
+        masks.append(m)
+    polygons = [[(31.50, 74.33), (31.50, 74.38), (31.54, 74.38), (31.54, 74.33)],
+                [[(31.48, 74.30), (31.48, 74.40), (31.56, 74.40), (31.56, 74.30)],
+                 [(31.50, 74.33), (31.50, 74.37), (31.54, 74.37), (31.54, 74.33)]],
+                [(30.0, 69.30), (30.0, 69.50), (30.05, 69.45), (30.08, 69.30)],
+                [(30.2, 69.0), (30.3, 69.0), (30.3, 69.1)]]
+    keys = ["punjab/lahore", "punjab/lahore/lahore-cantt", "punjab/lahore/lahore-cantt/lahore-cant"]
+    got = json.loads(subprocess.run([NODE, "-e", _JS_GEOJSON, str(VIEWER)],
+                                    input=json.dumps({"masks": masks, "polygons": polygons, "places": keys}),
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
+    for m, js in zip(masks, got["masks"]):
+        assert js == geometry(layout, {int(k): v for k, v in m.items()})
+    for poly, js in zip(polygons, got["zones"]):
+        py = make_zone(polygon_masks(layout, rings_e7(poly)), layout).to_geojson({"shop": "x"})
+        assert js["geometry"] == py["geometry"]
+        assert js["properties"]["sub_cells"] == py["properties"]["sub_cells"]
+        assert js["properties"]["area_km2"] == pytest.approx(py["properties"]["area_km2"], abs=2e-6)
+    with Grid.open(lahore_db) as grid:
+        for key, js in zip(keys, got["places"]):
+            py = grid.place_geojson(key)
+            assert js["geometry"] == py["geometry"], key
+            for k in ("id", "key", "name", "level", "parent_id"):
+                assert js["props"][k] == py["properties"][k]
+        block = grid.geojson("11-0140-0471-00")
+        assert got["block"]["geometry"] == block["geometry"]
+        assert {k: got["block"]["properties"][k] for k in ("id", "code", "level", "centroid")} == \
+            {k: block["properties"][k] for k in ("id", "code", "level", "centroid")}

@@ -370,6 +370,15 @@ class Zone:
         object.__setattr__(z, "_layout", layout)
         return z
 
+    def to_geojson(self, properties=None):
+        """The zone as a GeoJSON Feature: one outline (Polygon or MultiPolygon, with holes) of its
+        sub-cells, with sub_cells and area_km2 among the properties (see pakgrid.geojson)."""
+        from .geojson import feature, geometry
+        from .layout import GridLayout
+        props = {"sub_cells": self.sub_cell_count, "area_km2": round(self.area_km2, 6)}
+        props.update(properties or {})
+        return feature(geometry(self._layout or GridLayout.from_spec(), self.masks), props)
+
     def codes(self, full_cells=True):
         """Readable codes: whole cells as cell codes (with full_cells) and the rest as sub-cell codes."""
         out = []
