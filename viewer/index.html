@@ -100,6 +100,7 @@
   <label class="toggle" title="Colour each block by its tehsil"><input type="checkbox" id="placeson"> Places</label>
   <label class="toggle" title="Show or hide the rectangle, quadrants, cells and sub-cells"><input type="checkbox" id="gridon" checked> Grid</label>
   <button type="button" id="measure" title="Distance and direction between two blocks: tap one, then the other">Measure</button>
+  <button type="button" id="blocksbtn" title="Make your own blocks: click cells or draw a shape, give it a code and name">Blocks</button>
   <button type="button" id="zonebtn" title="Draw a delivery zone, check pins against it, and copy its data">Zone</button>
   <button type="button" id="draw" title="Draw a new locality and see the sub-cells it would tag">Draw</button>
 </form>
@@ -632,6 +633,7 @@
   }
   function startMeasure(from) {
     if (nav.target) nav.close(true);
+    if (blocking) stopBlocks();
     if (drawing) stopDrawing();
     if (zoning) stopZone();
     selLayer.clearLayers(); arrow = arrowMarker = null;
@@ -716,9 +718,208 @@
     if (nav.target) return;   // while navigating, taps don't change the selection
     if (drawing) { addVertex(e.latlng.lat, e.latlng.lng); return; }
     if (zoning) { zoneTap(e.latlng.lat, e.latlng.lng); return; }
+    if (blocking) { blockTap(e.latlng.lat, e.latlng.lng); return; }
     if (measuring) { measureTap(e.latlng.lat, e.latlng.lng); return; }
     selectPoint(e.latlng.lat, e.latlng.lng, false);
   });
+
+  // -- Custom blocks (pakgrid.blocks) -------------------------------------------------
+  // Make named, coded blocks by clicking cells (or sub-cells, from zoom 14) or drawing a shape.
+  // The panel describes the chosen block: its cells, size, province/district/tehsil, localities,
+  // city and directions. The set is kept in this browser and can be saved as JSON (the same
+  // format as BlockSet.to_dict) to store anywhere, or loaded back.
+  var blocking = null, blocksBtn = document.getElementById("blocksbtn"), BLOCK_KEY = "pakgrid.blocks";
+  function loadBlockSet() {
+    try {
+      var saved = localStorage.getItem(BLOCK_KEY);
+      if (saved) return PakGrid.BlockSet.fromDict(grid, JSON.parse(saved));
+    } catch (e) {}
+    return new PakGrid.BlockSet(grid, "my blocks");
+  }
+  function saveBlockSet() { try { localStorage.setItem(BLOCK_KEY, JSON.stringify(blocking.set.toDict())); } catch (e) {} }
+  function startBlocks() {
+    if (nav.target) nav.close(true);
+    if (drawing) stopDrawing();
+    if (zoning) stopZone();
+    if (measuring) stopMeasure();
+    selLayer.clearLayers(); arrow = arrowMarker = null;
+    var set = loadBlockSet();
+    blocking = { set: set, current: set.blocks.length ? set.blocks[set.blocks.length - 1].code : null, mode: "click",
+                 pts: [], take: false, whole: false, refs: [], message: null };
+    blocksBtn.classList.add("on");
+    map.doubleClickZoom.disable();
+    showBlocks();
+  }
+  function stopBlocks() {
+    blocking = null;
+    blocksBtn.classList.remove("on");
+    map.doubleClickZoom.enable();
+    selLayer.clearLayers();
+    showSummary();
+  }
+  blocksBtn.addEventListener("click", function () { if (blocking) stopBlocks(); else startBlocks(); });
+  function blockColour(k) { return "hsl(" + Math.round((k * 137.508 + 200) % 360) + ", 75%, 45%)"; }
+  // Add masks to the block being edited, creating it if it is new.
+  function blockAdd(masks) {
+    var b = blocking, set = b.set;
+    try {
+      if (b.pending) { set.add(b.pending.code, b.pending.name, masks, b.take); b.current = b.pending.code; b.pending = null; }
+      else set.addMasks(b.current, masks, b.take);
+      b.message = null;
+    } catch (err) { b.message = err.message; }
+  }
+  function blockTap(lat, lon) {
+    var b = blocking;
+    if (!b.current && !b.pending) { b.message = "Create a block first: give it a code below."; showBlocks(); return; }
+    if (b.mode === "draw") { b.pts.push([+lat.toFixed(7), +lon.toFixed(7)]); showBlocks(); return; }
+    var r = grid.locate(lat, lon);
+    if (!r) return;
+    var sub = !b.whole && map.getZoom() >= SUB_ZOOM;
+    var code = sub ? PakGrid.subCellCode(r.q, r.row, r.col, r.subRow * 5 + r.subCol) : PakGrid.cellCode(r.q, r.row, r.col);
+    if (b.pending) blockAdd(PakGrid.codeMasks(grid, code));
+    else {
+      try { b.set.toggle(b.current, code, b.take); b.message = null; } catch (err) { b.message = err.message; }
+    }
+    saveBlockSet();
+    showBlocks();
+  }
+  function showBlocks(fit) {
+    var b = blocking, set = b.set;
+    selLayer.clearLayers();
+    set.blocks.forEach(function (blk, k) {
+      var boxes = blk.zone.boxes(), colour = blockColour(k), mine = blk.code === b.current;
+      boxes.slice(0, 20000).forEach(function (x) {
+        L.rectangle([[x[0], x[1]], [x[2], x[3]]], { renderer: canvas, stroke: mine && boxes.length < 4000, color: colour,
+          weight: 0.6, fillColor: colour, fillOpacity: mine ? 0.45 : 0.25, interactive: false }).addTo(selLayer);
+      });
+    });
+    if (b.pts.length) {
+      (b.pts.length >= 3 ? L.polygon(b.pts, { fill: false }) : L.polyline(b.pts))
+        .setStyle({ color: "#111827", weight: 2, interactive: false }).addTo(selLayer);
+      b.pts.forEach(function (p) {
+        L.circleMarker(p, { radius: 4, color: "#111827", fillColor: "#fff", fillOpacity: 1, weight: 2, interactive: false }).addTo(selLayer);
+      });
+    }
+    var html = "<h2>Blocks</h2><div class='sub'>Set: <input class='name' id='bk-set' style='width:60%' value='" + esc(set.name) + "'></div>";
+    if (set.blocks.length) {
+      html += "<ul class='place-list'>" + set.blocks.map(function (blk, k) {
+        return "<li><a class='place' data-block='" + esc(blk.code) + "'><span style='display:inline-block;width:10px;height:10px;" +
+               "background:" + blockColour(k) + ";margin-right:6px'></span>" + esc(blk.code) + "</a> " +
+               (blk.name ? esc(blk.name) + " " : "") + "<span class='sub'>" + blk.zone.subCellCount().toLocaleString() +
+               " sub-cells</span>" + (blk.code === b.current ? " ◀" : "") + "</li>";
+      }).join("") + "</ul>";
+    }
+    html += "<h3>New block</h3><div class='around'><input id='bk-code' placeholder='Code, e.g. LHR-01' style='width:40%'>" +
+            "<input id='bk-name' placeholder='Name (optional)' style='width:45%'><button type='button' id='bk-new'>Create</button></div>";
+    if (b.pending) html += "<p class='sub'>New block <b>" + esc(b.pending.code) + "</b>: now click cells or draw its shape.</p>";
+    html += "<h3>Edit " + (b.current ? esc(b.current) : b.pending ? esc(b.pending.code) : "–") + "</h3><div class='around'>" +
+            "<label><input type='radio' name='bk-mode' value='click'" + (b.mode === "click" ? " checked" : "") + "> click cells</label>" +
+            "<label><input type='radio' name='bk-mode' value='draw'" + (b.mode === "draw" ? " checked" : "") + "> draw a shape</label>" +
+            "<label><input type='checkbox' id='bk-whole'" + (b.whole ? " checked" : "") + "> whole cells only</label>" +
+            "<label><input type='checkbox' id='bk-take'" + (b.take ? " checked" : "") + "> take from other blocks</label></div>" +
+            "<div class='sub'>" + (b.mode === "click" ? "Click to add a cell, click again to remove it (sub-cells from zoom " + SUB_ZOOM + ")." :
+            "Tap the corners, then <b>Add shape</b>: the sub-cells whose centre is inside join the block.") + "</div>";
+    if (b.mode === "draw") html += "<p><button type='button' id='bk-undo'" + (b.pts.length ? "" : " disabled") + ">Undo</button> " +
+            "<button type='button' id='bk-shape' class='on'" + (b.pts.length >= 3 ? "" : " disabled") + ">Add shape</button></p>";
+    if (b.message) html += "<p class='error'>" + esc(b.message) + "</p>";
+    var cur = b.current && set.has(b.current) ? set.get(b.current) : null;
+    if (cur && !cur.zone.empty) {
+      var d = places.describe(grid, cur.zone.masks, b.refs), sz = d.size, pl = d.places, codes = cur.zone.toDict();
+      html += "<h3>" + esc(cur.code) + (cur.name ? " · " + esc(cur.name) : "") + "</h3>" +
+              (d.label ? "<div class='sub'>" + esc(d.label) + "</div>" : "") + rowsHtml([
+                ["Size", sz.sub_cells.toLocaleString() + " sub-cells in " + sz.cells.toLocaleString() + " cells (" +
+                         sz.whole_cells.toLocaleString() + " whole)"],
+                ["Area", sz.area_km2.toFixed(3) + " km²"],
+                ["Province", pl.province.map(function (x) { return esc(x.name); }).join(", ") || "–"],
+                ["District", pl.district.map(function (x) { return esc(x.name); }).join(", ") || "–"],
+                ["Tehsil", pl.tehsil.map(function (x) { return esc(x.name) + (pl.tehsil.length > 1 ? " (" + x.sub_cells + ")" : ""); }).join(", ") || "–"],
+                ["Localities", pl.locality.slice(0, 6).map(function (x) { return esc(x.name); }).join(", ") +
+                               (pl.locality.length > 6 ? " +" + (pl.locality.length - 6) : "") || "none"],
+                ["City", d.city ? (d.city.relation === "in" ? "in " + esc(d.city.name) : esc(d.city.text)) : "–"]]
+                .concat(d.nearest_locality ? [["Nearest place", esc(d.nearest_locality.text)]] : [])
+                .concat(d.outside_pakistan_sub_cells ? [["Outside Pakistan", d.outside_pakistan_sub_cells + " sub-cells"]] : [])
+                .concat(d.references.map(function (r) { return ["From " + esc(r.name), esc(r.text)]; }))) +
+              "<div class='around'><input id='bk-ref' placeholder='Distance from a place (e.g. Lahore)' style='width:65%'>" +
+              "<button type='button' id='bk-ref-go'>Add</button></div>" +
+              "<h3>Cell codes (" + (codes.full.length + codes.partial.length) + " cells)</h3><textarea readonly id='bk-codes'></textarea>" +
+              "<p><button type='button' id='bk-rename'>Rename</button> <button type='button' id='bk-del'>Delete block</button></p>";
+    }
+    html += "<h3>Save or load</h3><p><button type='button' id='bk-json'>Download JSON</button> " +
+            "<button type='button' id='bk-geo'>Download GeoJSON</button> <label class='toggle' style='display:inline-flex'>" +
+            "Load JSON<input type='file' id='bk-load' accept='.json,application/json' style='display:none'></label></p>" +
+            "<div class='sub'>The set is kept in this browser. The JSON is the same as <code>BlockSet.to_dict()</code>: " +
+            "store it in your database or anywhere, and load it with <code>BlockSet.from_dict(data, grid)</code>.</div>" +
+            "<p><button type='button' id='bk-done'>Done</button></p>";
+    panel.innerHTML = html;
+    var q = function (id) { return document.getElementById(id); };
+    q("bk-set").onchange = function () { set.name = this.value.trim() || "blocks"; saveBlockSet(); };
+    panel.querySelectorAll("a[data-block]").forEach(function (a) {
+      a.onclick = function () { b.current = a.getAttribute("data-block"); b.pending = null; b.pts = []; b.refs = []; showBlocks(true); };
+    });
+    q("bk-new").onclick = function () {
+      var code = q("bk-code").value.trim();
+      if (!code) { b.message = "Give the new block a code."; }
+      else if (set.has(code)) { b.message = "There is already a block " + code + "."; }
+      else { b.pending = { code: code, name: q("bk-name").value.trim() || null }; b.current = null; b.message = null; b.refs = []; }
+      showBlocks();
+    };
+    panel.querySelectorAll("input[name='bk-mode']").forEach(function (r) { r.onchange = function () { b.mode = this.value; b.pts = []; showBlocks(); }; });
+    q("bk-whole").onchange = function () { b.whole = this.checked; };
+    q("bk-take").onchange = function () { b.take = this.checked; };
+    if (q("bk-undo")) q("bk-undo").onclick = function () { b.pts.pop(); showBlocks(); };
+    if (q("bk-shape")) q("bk-shape").onclick = function () {
+      try { blockAdd(grid.zoneFromPolygon(b.pts).masks); } catch (err) { b.message = err.message; }
+      b.pts = []; saveBlockSet(); showBlocks();
+    };
+    if (cur && !cur.zone.empty) {
+      q("bk-codes").value = cur.zone.cellIds().map(function (c) {
+        var p = { q: Math.floor(c / 1048576), row: Math.floor(c / 1024) % 1024, col: c % 1024 }, m = cur.zone.masks[c];
+        if (m === 33554431) return PakGrid.cellCode(p.q, p.row, p.col);
+        var out = [];
+        for (var k = 0; k < 25; k++) if (Math.floor(m / Math.pow(2, k)) % 2) out.push(PakGrid.subCellCode(p.q, p.row, p.col, k));
+        return out.join("\n");
+      }).join("\n");
+      q("bk-ref-go").onclick = function () {
+        var t = q("bk-ref").value.trim().toLowerCase(), hit = places.find(t).filter(function (x) { return x.level === "locality"; });
+        var exact = hit.filter(function (x) { return x.name.toLowerCase() === t; });
+        var pick = (exact.length ? exact : hit).sort(function (a, c) {
+          return (CITYISH[c.kind] || 0) - (CITYISH[a.kind] || 0) || a.id - c.id; })[0];
+        if (!pick) b.message = "No locality matches “" + q("bk-ref").value + "”.";
+        else { b.refs.push(pick); b.message = null; }
+        showBlocks();
+      };
+      q("bk-rename").onclick = function () {
+        var name = prompt("New name for " + cur.code, cur.name || "");
+        if (name !== null) { cur.name = name.trim() || null; saveBlockSet(); showBlocks(); }
+      };
+      q("bk-del").onclick = function () {
+        if (!confirm("Delete block " + cur.code + "?")) return;
+        set.remove(cur.code); b.current = set.blocks.length ? set.blocks[set.blocks.length - 1].code : null; saveBlockSet(); showBlocks();
+      };
+    }
+    q("bk-json").onclick = function () {
+      var url = URL.createObjectURL(new Blob([JSON.stringify(set.toDict())], { type: "application/json" }));
+      var a = document.createElement("a"); a.href = url; a.download = (set.name || "blocks").replace(/[^\w-]+/g, "_") + ".json";
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    };
+    q("bk-geo").onclick = function () { downloadGeoJSON(set.toGeoJSON(), (set.name || "blocks").replace(/[^\w-]+/g, "_") + ".geojson"); };
+    q("bk-load").onchange = function () {
+      var file = this.files[0];
+      if (!file) return;
+      file.text().then(function (text) {
+        try { b.set = PakGrid.BlockSet.fromDict(grid, JSON.parse(text)); b.current = b.set.blocks.length ? b.set.blocks[0].code : null;
+              b.message = null; saveBlockSet(); } catch (err) { b.message = "Could not load it: " + err.message; }
+        showBlocks(true);
+      });
+    };
+    q("bk-done").onclick = stopBlocks;
+    if (fit && cur && !cur.zone.empty) {
+      var bb = places.describe(grid, cur.zone.masks).size.bounds, view = viewPadding();
+      view.maxZoom = 16;
+      map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], view);
+    }
+  }
+  var CITYISH = { city: 3, town: 2, village: 1 };
 
   // -- Custom zones (pakgrid.zones) ------------------------------------------------
   // Tap corners to draw a zone, press Done: the sub-cells whose centre is inside it are shaded.
@@ -727,6 +928,7 @@
   var zoning = null, zoneBtn = document.getElementById("zonebtn");
   function startZone() {
     if (nav.target) nav.close(true);
+    if (blocking) stopBlocks();
     if (drawing) stopDrawing();
     if (measuring) stopMeasure();
     selLayer.clearLayers(); arrow = arrowMarker = null;
@@ -849,6 +1051,7 @@
   var drawing = null, drawBtn = document.getElementById("draw");
   function startDrawing() {
     if (nav.target) nav.close(true);
+    if (blocking) stopBlocks();
     if (measuring) stopMeasure();
     if (zoning) stopZone();
     selLayer.clearLayers();
@@ -987,6 +1190,7 @@
     e.preventDefault();
     if (drawing) stopDrawing();
     if (zoning) stopZone();
+    if (blocking) stopBlocks();
     var two = /^\s*(\S+)\s+(?:to|-|→)\s+(\S+)\s*$/i.exec(document.getElementById("q").value);
     if (two && grid.parseCode(two[1]) && grid.parseCode(two[2])) {     // '11-0140-0471 to 11-0150-0480'
       startMeasure(grid.parseCode(two[1]));

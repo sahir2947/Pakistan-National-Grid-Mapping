@@ -459,6 +459,37 @@ With several worker processes, each has its own index; send location updates
 to all of them, or keep riders in a shared store (Redis, the database) and use
 `grid.nearest` with a `fetch` that reads it.
 
+**Your users' own blocks.** Let staff divide a city into territories in the
+app: they click cells or draw a shape, and name the block. Keep the block set's
+JSON in your database, and describe a block for the screen that shows it
+([project.md §7.9](../project.md#79-custom-blocks)):
+
+```python
+from pakgrid import BlockError, BlockSet
+
+class Territory(models.Model):                       # one row per block set (e.g. per city)
+    name = models.CharField(max_length=100)
+    blocks = models.JSONField(default=dict)          # BlockSet.to_dict()
+
+def add_block(request, territory_id):                 # POST {"code", "name", "cells": [...]} or {"polygon": [...]}
+    t = Territory.objects.select_for_update().get(pk=territory_id)
+    blocks = BlockSet.from_dict(t.blocks, get_grid()) if t.blocks else get_grid().block_set(t.name)
+    d = request.data
+    try:
+        blocks.add(d["code"], name=d.get("name"), cells=d.get("cells"), polygon=d.get("polygon"))
+    except BlockError as exc:
+        return Response({"error": str(exc)}, status=400)
+    t.blocks = blocks.to_dict()
+    t.save()
+    return Response(blocks.describe(d["code"]), status=201)
+```
+
+`describe` returns the block's cell codes, size, province, district, tehsils,
+localities, city and directions; `blocks.block_at(lat, lon)` tells which
+block an order's pin is in. Wrap the read-change-save in a transaction
+(`select_for_update`) so two people editing the same set at once do not lose
+each other's changes.
+
 **Shapes for the app's map (GeoJSON).** Send GeoJSON and the Flutter app
 draws it with its map library, with no grid maths on the phone
 ([project.md §7.7](../project.md#77-geojson)):
