@@ -181,6 +181,9 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
     riders = grid.point_index([("r1", 31.5210, 74.3570), ("r2", 31.5300, 74.3600)])
     riders.nearest(31.5204, 74.3587, k=1)[0].text            # '170 m WNW': the nearest rider
     grid.nearest_places(31.5204, 74.3587, k=5)               # the 5 nearest localities
+    blocks = grid.block_set("territories")                   # your own named blocks
+    blocks.add("LHR-01", name="Gulberg North", cells=["11-0140-0471", "11-0140-0472"])
+    blocks.describe("LHR-01")["label"]     # 'Lahore Cant, Lahore Cantt, Lahore, Punjab' (+ cells, size, city ...)
 
 direction(31.5215, 74.3570, 31.5204, 74.3587, heading=90).turn   # 'bear right'
 ```

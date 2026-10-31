@@ -1333,6 +1333,201 @@
       .map(function (n) { n.place = self.byId[n.id]; return n; });
   };
 
+  // -- Custom blocks and area descriptions (as pakgrid.blocks and pakgrid.describe) --
+
+  var CITY_KINDS = { city: true, town: true };
+
+  function maskHas(m, k) { return Math.floor(m / Math.pow(2, k)) % 2 === 1; }
+  function maskAnd(a, b) { var r = 0; for (var k = 0; k < 25; k++) if (maskHas(a, k) && maskHas(b, k)) r += Math.pow(2, k); return r; }
+  function maskMinus(a, b) { var r = 0; for (var k = 0; k < 25; k++) if (maskHas(a, k) && !maskHas(b, k)) r += Math.pow(2, k); return r; }
+  function maskOr(a, b) { var r = 0; for (var k = 0; k < 25; k++) if (maskHas(a, k) || maskHas(b, k)) r += Math.pow(2, k); return r; }
+
+  // The masks of a cell code (all 25 sub-cells) or sub-cell code: {cell ID: mask}.
+  function codeMasks(grid, code) {
+    var p = grid.parseCode(code);
+    if (!p) throw new Error("not a cell or sub-cell code: " + code);
+    var out = {};
+    out[cellId(p.q, p.row, p.col)] = p.sub == null ? FULL_MASK : Math.pow(2, p.sub);
+    return out;
+  }
+
+  // A set of non-overlapping blocks; stored form identical to pakgrid.blocks.BlockSet.to_dict().
+  function BlockSet(grid, name) { this.grid = grid; this.name = name || "blocks"; this.blocks = []; }
+  BlockSet.prototype.get = function (code) {
+    for (var k = 0; k < this.blocks.length; k++) if (this.blocks[k].code === code) return this.blocks[k];
+    throw new Error("no block " + JSON.stringify(code) + " in this set");
+  };
+  BlockSet.prototype.has = function (code) { return this.blocks.some(function (b) { return b.code === code; }); };
+  BlockSet.prototype.clashes = function (code, masks) {
+    var out = {};
+    this.blocks.forEach(function (b) {
+      if (b.code === code) return;
+      for (var c in masks) {
+        var both = maskAnd(b.zone.masks[c] || 0, masks[c]);
+        if (both) out[b.code] = (out[b.code] || 0) + bitCount(both);
+      }
+    });
+    return out;
+  };
+  BlockSet.prototype._claim = function (code, masks, take) {
+    var clashes = this.clashes(code, masks), names = Object.keys(clashes);
+    if (names.length && !take) {
+      throw new Error("those cells are already in block " + names.sort().map(function (n) {
+        return JSON.stringify(n) + " (" + clashes[n] + " sub-cell" + (clashes[n] === 1 ? "" : "s") + ")"; }).join(", ") +
+        "; tick “take from other blocks” to move them");
+    }
+    var self = this;
+    names.forEach(function (n) {
+      var b = self.get(n), m2 = {};
+      for (var c in b.zone.masks) { var r = maskMinus(b.zone.masks[c], masks[c] || 0); if (r) m2[c] = r; }
+      b.zone = new Zone(self.grid, m2);
+    });
+  };
+  BlockSet.prototype.add = function (code, name, masks, take, properties) {
+    code = String(code || "").replace(/\s+/g, " ").trim();
+    if (!code) throw new Error("a block needs a code");
+    if (this.has(code)) throw new Error("there is already a block " + JSON.stringify(code) + " in this set");
+    this._claim(code, masks, take);
+    var b = { code: code, name: name ? String(name).trim() || null : null, properties: properties || {}, zone: new Zone(this.grid, masks) };
+    this.blocks.push(b);
+    return b;
+  };
+  BlockSet.prototype.addMasks = function (code, masks, take) {
+    var b = this.get(code), fresh = {};
+    for (var c in masks) { var r = maskMinus(masks[c], b.zone.masks[c] || 0); if (r) fresh[c] = r; }
+    this._claim(code, fresh, take);
+    var all = {};
+    for (c in b.zone.masks) all[c] = b.zone.masks[c];
+    for (c in fresh) all[c] = maskOr(all[c] || 0, fresh[c]);
+    b.zone = new Zone(this.grid, all);
+    return b;
+  };
+  BlockSet.prototype.removeMasks = function (code, masks) {
+    var b = this.get(code), rest = {};
+    for (var c in b.zone.masks) { var r = maskMinus(b.zone.masks[c], masks[c] || 0); if (r) rest[c] = r; }
+    if (!Object.keys(rest).length) throw new Error("that would leave block " + JSON.stringify(code) + " empty; remove the block instead");
+    b.zone = new Zone(this.grid, rest);
+    return b;
+  };
+  // A click on the map: add the cell or sub-cell (by code) to the block, or take it away. True if added.
+  BlockSet.prototype.toggle = function (code, cellCode, take) {
+    var b = this.get(code), masks = codeMasks(this.grid, cellCode), inside = true;
+    for (var c in masks) if (maskAnd(b.zone.masks[c] || 0, masks[c]) !== masks[c]) inside = false;
+    if (inside) { this.removeMasks(code, masks); return false; }
+    this.addMasks(code, masks, take);
+    return true;
+  };
+  BlockSet.prototype.remove = function (code) { var b = this.get(code); this.blocks.splice(this.blocks.indexOf(b), 1); };
+  BlockSet.prototype.blockAt = function (lat, lon) {
+    for (var k = 0; k < this.blocks.length; k++) if (this.blocks[k].zone.contains(lat, lon)) return this.blocks[k].code;
+    return null;
+  };
+  BlockSet.prototype.toDict = function () {
+    return { blockset_version: 1, grid_version: 1, name: this.name, blocks: this.blocks.map(function (b) {
+      return { code: b.code, name: b.name, properties: b.properties, zone: b.zone.toDict() }; }) };
+  };
+  BlockSet.fromDict = function (grid, data) {
+    if (!data || data.blockset_version !== 1 || data.grid_version !== 1) throw new Error("not block set version 1 data for grid version 1");
+    var set = new BlockSet(grid, data.name);
+    (data.blocks || []).forEach(function (b) { set.add(b.code, b.name, Zone.fromDict(grid, b.zone).masks, false, b.properties); });
+    return set;
+  };
+  BlockSet.prototype.toGeoJSON = function () {
+    return { type: "FeatureCollection", features: this.blocks.map(function (b) {
+      var props = { code: b.code, name: b.name };
+      for (var k in b.properties) props[k] = b.properties[k];
+      var f = b.zone.toGeoJSON(props); f.id = b.code; return f;
+    }) };
+  };
+
+  // Describe an area {cell ID: mask} (as Grid.describe_zone): size, places, city, nearest locality, label.
+  Places.prototype.describe = function (grid, masks, references) {
+    var self = this, zone = new Zone(grid, masks), cents = [], teh = {}, loc = {}, outside = 0;
+    zone.cellIds().forEach(function (c) {
+      var p = splitCellId(c), ql = grid.quadrants[p.q], m = zone.masks[c];
+      for (var k = 0; k < 25; k++) {
+        if (!maskHas(m, k)) continue;
+        var i = p.row * SUB + Math.floor(k / SUB), j = p.col * SUB + k % SUB;
+        cents.push([toE7(bandCentroidLat(fineLat(ql, i), fineLat(ql, i + 1))), toE7((fineLon(ql, p.row, j) + fineLon(ql, p.row, j + 1)) / 2)]);
+        var t = self.tagAt(p.q, i, j);
+        if (!t) { outside++; continue; }
+        teh[t] = (teh[t] || 0) + 1;
+        var l = self.tagAt(p.q, i, j, "locality");
+        if (l) loc[l] = (loc[l] || 0) + 1;
+      }
+    });
+    var my = 0, mx = 0;
+    cents.forEach(function (c) { my += c[0]; mx += c[1]; });
+    my /= cents.length; mx /= cents.length;
+    var best = null, bk = null;
+    cents.forEach(function (c) {
+      var dy = c[0] - my, dx = 0.85 * (c[1] - mx), key = [dy * dy + dx * dx, c[0], c[1]];
+      if (!bk || key[0] < bk[0] || (key[0] === bk[0] && (key[1] < bk[1] || (key[1] === bk[1] && key[2] < bk[2])))) { best = c; bk = key; }
+    });
+    var clat = best[0] / SCALE, clon = best[1] / SCALE, s = 90, w = 180, n = -90, e = -180;
+    zone.cellIds().forEach(function (c) {
+      var p = splitCellId(c), b = grid.describe(p.q, p.row, p.col, null).bounds;
+      s = Math.min(s, b.south); w = Math.min(w, b.west); n = Math.max(n, b.north); e = Math.max(e, b.east);
+    });
+    var where = function (pl) {
+      var way = direction(pl.lat, pl.lon, clat, clon);
+      return { id: pl.id, key: pl.key, name: pl.name, kind: pl.kind, distance_m: Math.round(way.distance_m * 10) / 10,
+               bearing_deg: Math.round(way.bearing_deg * 10) / 10, direction: way.compass_short,
+               text: formatDistance(way.distance_m) + " " + way.compass_short + " of " + pl.name };
+    };
+    var ranked = function (counts) {
+      return Object.keys(counts).map(Number).sort(function (a, b) { return counts[b] - counts[a] || a - b; }).map(function (id) {
+        var pl = self.byId[id], r = { id: id, key: pl.key, name: pl.name, sub_cells: counts[id] };
+        if (pl.level === "locality") { r.kind = pl.kind; r.user = false; }
+        return r;
+      });
+    };
+    var dis = {}, pro = {};
+    Object.keys(teh).forEach(function (t) {
+      var d = self.byId[t].parentId; dis[d] = (dis[d] || 0) + teh[t];
+      var p = self.byId[d].parentId; pro[p] = (pro[p] || 0) + teh[t];
+    });
+    var out = { size: { sub_cells: zone.subCellCount(), cells: zone.cellIds().length, whole_cells: zone.cellIds(true).length,
+                        area_km2: Math.round(zone.areaKm2() * 1e6) / 1e6, centre: [clat, clon], bounds: [s, w, n, e] },
+                places: { province: ranked(pro), district: ranked(dis), tehsil: ranked(teh), locality: ranked(loc) },
+                city: null, nearest_locality: null, references: [], outside_pakistan_sub_cells: outside, label: null };
+    var towns = Object.keys(loc).map(Number).filter(function (id) { return CITY_KINDS[self.byId[id].kind]; });
+    if (towns.length) {
+      towns.sort(function (a, b) { return loc[b] - loc[a] || a - b; });
+      out.city = where(self.byId[towns[0]]); out.city.relation = "in"; out.city.sub_cells = loc[towns[0]];
+    } else {
+      var c1 = this.nearestAny(grid, clat, clon, CITY_KINDS);
+      if (c1) { out.city = where(c1); out.city.relation = "near"; }
+    }
+    if (!Object.keys(loc).length) {
+      var l1 = this.nearestAny(grid, clat, clon, null);
+      if (l1) out.nearest_locality = where(l1);
+    }
+    (references || []).forEach(function (pl) { out.references.push(where(pl)); });
+    var names = [];
+    if (out.places.locality.length) names.push(out.places.locality[0].name);
+    else if (out.nearest_locality && out.places.tehsil.length) names.push("near " + out.nearest_locality.name);
+    if (out.places.tehsil.length) {
+      var t0 = self.byId[out.places.tehsil[0].id], d0 = self.byId[t0.parentId];
+      names.push(t0.name, d0.name, self.byId[d0.parentId].name);
+    }
+    names = names.filter(function (x, k) { return !k || x.toLowerCase() !== names[k - 1].toLowerCase(); });
+    out.label = names.length ? names.join(", ") : null;
+    return out;
+  };
+  // The nearest locality (of these kinds) at any distance (as pakgrid.describe.nearest_place).
+  Places.prototype.nearestAny = function (grid, lat, lon, kinds) {
+    var near = this.nearest(grid, lat, lon, 1, kinds);
+    if (near.length) return near[0].place;
+    var best = null, bd = null;
+    this.list.forEach(function (p) {
+      if (p.level !== "locality" || (kinds && !kinds[p.kind])) return;
+      var d = direction(lat, lon, p.lat, p.lon).distance_m;
+      if (bd === null || d < bd || (d === bd && p.id < best.id)) { best = p; bd = d; }
+    });
+    return best;
+  };
+
   Places.prototype.path = function (place) {
     var out = [];
     for (var p = place; p; p = this.byId[p.parentId]) out.push(p);
@@ -1345,6 +1540,7 @@
     localOffset: localOffset, applyOffset: applyOffset, addressText: addressText, bearing: bearing, compass: compass, direction: direction, turnWords: turnWords,
     formatDistance: formatDistance, NavigationSession: NavigationSession, cellId: cellId, subCellId: subCellId,
     pointInRings: pointInRings, Zone: Zone, geojsonGeometry: geojsonGeometry, PointIndex: PointIndex,
+    BlockSet: BlockSet, codeMasks: codeMasks,
     cellCode: cellCode, subCellCode: subCellCode
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

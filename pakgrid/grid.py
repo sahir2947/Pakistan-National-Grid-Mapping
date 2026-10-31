@@ -478,6 +478,22 @@ class Grid:
         flags = self._flags(found, level)
         return [i for i in found if flags.get(i, OUTSIDE) != OUTSIDE]
 
+    # -- Blocks and describing areas ---------------------------------------------
+
+    def block_set(self, name="blocks"):
+        """A new, empty set of custom blocks (pakgrid.blocks.BlockSet); load a stored one with
+        BlockSet.from_dict(data, grid)."""
+        from .blocks import BlockSet
+        return BlockSet(self, name)
+
+    def describe_zone(self, zone, references=()):
+        """An area's size, places and where it is (see pakgrid.describe): for a Zone or {cell ID: mask}.
+
+        references: place keys or IDs of localities to give the distance and direction from.
+        """
+        from .describe import describe
+        return describe(self, zone.masks if hasattr(zone, "masks") else zone, references)
+
     # -- Nearest lookup (pakgrid.nearest) --------------------------------------
 
     def point_index(self, points=()):

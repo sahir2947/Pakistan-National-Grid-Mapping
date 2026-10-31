@@ -723,6 +723,8 @@ pakgrid/
 ├── zones.py      Custom zones: sets of sub-cells, pin checks, stored form (§7.6)
 ├── geojson.py    GeoJSON: blocks, zones and places' exact outlines (§7.7)
 ├── nearest.py    Nearest lookup: PointIndex and the ring search (§7.8)
+├── blocks.py     Custom blocks: named groups of cells (§7.9)
+├── describe.py   An area's size, places and where it is (§7.9)
 ├── data/         Pakistan's border and the places sources (places-v2.json.gz)
 └── cli.py        Command-line tools
 scripts/          make_places_data.py: makes data/places-v2.json.gz from the source downloads
@@ -777,6 +779,7 @@ level by itself.
 | 8c | `zone(polygon= / circle= / cells= / place=, pakistan_only=False)` | A custom zone (`Zone`): a set of sub-cells with `contains(lat, lon)`, counts, area, `cells()`, `sub_cells()`, `\|` `&` `-`, `to_dict()` / `Zone.from_dict()`; `ZoneIndex` finds which of many zones hold a pin (§7.6) |
 | 8d | `geojson(item)`, `cells_geojson(items, merge=False)`, `place_geojson(place)` | GeoJSON Features of blocks, sets of blocks and places' exact outlines; `zone.to_geojson()` for zones (§7.7) |
 | 8e | `point_index(points=())`, `nearest(lat, lon, fetch, k=5)`, `nearest_places(lat, lon, k=5, kind=None)` | Nearest lookup: the k nearest points (in memory, or in your database by cell ID) or localities to a pin, exact, as `Neighbour` (`id`, `distance_m`, `bearing_deg`, `direction`, `text`) (§7.8) |
+| 8f | `block_set(name)`, `describe_zone(zone, references=())` | Custom blocks: named, coded, non-overlapping groups of cells built by clicks or polygons, described with cell codes, size, places, city and directions; JSON to store anywhere (§7.9) |
 | **Pakistan border** | | |
 | 9 | `in_pakistan(lat, lon)` | `True` if the point is inside Pakistan's border |
 | 10 | `pakistan_flags(items, level="cell")` | `{id: "inside" \| "border" \| "outside"}` for many cells or sub-cells at once |
@@ -866,6 +869,7 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 | `pakgrid locate LAT LON [--accuracy M]` | Look up a point; prints JSON |
 | `pakgrid within LAT LON METRES [--level sub] [--pakistan-only] [--touching]` | Radius search, nearest first (§7.5) |
 | `pakgrid distance FROM TO` | Distance and direction between two cells or sub-cells, by code (§7.5) |
+| `pakgrid blocks --file FILE (add CODE \| add-cells \| remove-cells \| update \| remove \| list \| describe CODE [--ref KEY] \| at LAT LON \| geojson)` | Custom blocks in a JSON file (§7.9) |
 | `pakgrid nearest LAT LON [-k N] [--max-m M] [--points FILE] [--kind KIND]` | The nearest points of a JSON/CSV file, or the nearest localities (§7.8) |
 | `pakgrid geojson (--cells CODE... [--merge] \| --place KEY \| --zone FILE \| --circle LAT LON M \| --polygon FILE) [-o FILE]` | Write GeoJSON for any map (§7.7) |
 | `pakgrid zone make (--polygon FILE \| --circle LAT LON M \| --cells CODE... \| --place KEY) [--pakistan-only] [-o FILE]` / `zone check FILE LAT LON` / `zone show FILE [--codes]` | Make a custom zone, check a pin, summarise one (§7.6) |
@@ -908,6 +912,8 @@ for checking the grid visually before it is used in an app:
   or paste a stored zone to see it (§7.6)
 - **Download GeoJSON** of a place, a zone, a block or radius search results (§7.7)
 - **Nearest places** to a tapped point, with distance and direction (§7.8)
+- **Blocks:** make named blocks by clicking cells or drawing a shape, with
+  each block's report (cells, size, places, city, directions), saved as JSON (§7.9)
 - **Draw:** preview a user locality (§5.8)
 
 It needs no database. It recomputes the grid and the border flags from
@@ -1162,6 +1168,78 @@ first use, ~0.15 s). A `PointIndex` is safe to share between threads.
 JSON or CSV file (`id,lat,lon`), or without `--points` the nearest localities
 (`--kind town`). The viewer shows the **nearest places** in a point's details,
 and `viewer/pakgrid.js` has the same `PointIndex` (tested against the library).
+
+
+### 7.9 Custom blocks
+
+An app's users divide an area their own way (delivery territories, pricing
+bands, rider teams, sales areas) by making **blocks**: named, coded groups of
+cells and sub-cells. They build each block by **clicking cells on the map**
+or by **drawing a polygon**, and the library describes every block: its cell
+codes, its size, its province, district and tehsils, the localities in it, its
+city, and where it is from the nearest places (`pakgrid/blocks.py`,
+`pakgrid/describe.py`). The library keeps a block set in memory and turns it
+into JSON; the app stores that wherever it likes.
+
+```python
+from pakgrid import BlockSet
+
+with Grid.open("pakgrid_v1_pakistan.sqlite") as grid:
+    blocks = grid.block_set("lahore-territories")
+    blocks.add("LHR-01", name="Gulberg North", cells=["11-0140-0471", "11-0140-0472"])
+    blocks.add("LHR-02", name="DHA Phase 6", polygon=[(31.455, 74.44), (31.455, 74.48), (31.49, 74.48)])
+    blocks.toggle("LHR-01", "11-0140-0473-12")       # a click on the map: add, or take away if already in
+    blocks.add_cells("LHR-01", circle=(31.53, 74.37, 400))
+    blocks.describe("LHR-01", references=["punjab/lahore/lahore-cantt/lahore"])
+    blocks.block_at(31.5204, 74.3587)                # 'LHR-01': which block holds this pin?
+    data = blocks.to_dict()                          # store anywhere (database, file, cloud)
+    blocks = BlockSet.from_dict(data, grid)          # and load it back
+    blocks.to_geojson()                              # every block's outline, for the app's map
+```
+
+**Building.** A block is a set of sub-cells, like a zone (§7.6): from cell
+codes (a cell is its 25 sub-cells), sub-cell codes, a polygon (sub-cells whose
+centre is inside), a circle, a place, or any mix, added (`add_cells`), taken
+away (`remove_cells`) or toggled one click at a time (`toggle`). Codes are
+unique in a set; names and extra `properties` (price band, team) are free.
+Blocks in one set **never overlap**: adding sub-cells another block has is
+refused, naming that block and how many sub-cells, unless `take=True` moves
+them. `block_at(lat, lon)` and `block_of(code)` say which block holds a pin or
+a cell.
+
+**What `describe()` returns:**
+
+| Field | Contents |
+|---|---|
+| `code`, `name`, `properties` | As given |
+| `cell_codes` | Whole cells as cell codes, the rest as sub-cell codes |
+| `whole_cells`, `partial_cells` | Whole cells' codes; `{cell code: [sub-cells 0-24]}` for the others |
+| `size` | `sub_cells`, `cells` (touched), `whole_cells`, `area_km2`, `centre` (a sub-cell centroid inside the block, nearest the average), `bounds` |
+| `places` | Every `province`, `district`, `tehsil` and `locality` with sub-cells in the block, with how many, largest first (user localities too, with a user places file) |
+| `city` | The city or town with most sub-cells in the block (`relation: "in"`), else the nearest one at any distance (`"near"`), with distance, bearing, direction and `text` such as `6.6 km SE of Lahore` |
+| `nearest_locality` | When no locality is in the block (open country): the nearest one at any distance, with distance and direction from it |
+| `references` | For each locality you name: the distance and direction from it to the block's centre |
+| `outside_pakistan_sub_cells` | Sub-cells outside Pakistan (they have no places) |
+| `label` | e.g. `Lahore Cant, Lahore Cantt, Lahore, Punjab`, or `near Kalianwala, Mankera, Bhakkar, Punjab` in open country |
+
+`grid.describe_zone(zone)` gives the same description for any zone.
+
+**Stored form** (`to_dict()`): `{"blockset_version": 1, "grid_version": 1,
+"name": ..., "blocks": [{"code", "name", "properties", "zone": Zone.to_dict()}]}`.
+It is small (a block is ~0.1-20 KB) and the same in Python and the viewer.
+
+**In the map viewer**, **Blocks** opens the tool: create a block (code and
+name), then click cells to add or remove them (cells when zoomed out,
+sub-cells from zoom 14, or whole cells only) or draw a shape; the panel shows
+the block's report, takes distances from any place, and saves or loads the
+set as JSON or GeoJSON (it is also kept in the browser). Its JavaScript
+(`PakGrid.BlockSet`, `places.describe`) gives the same JSON and descriptions
+as the library. `pakgrid blocks --file blocks.json add | add-cells |
+remove-cells | update | remove | list | describe | at | geojson` does the
+same from the command line, on a JSON file.
+
+Blocks replace the fixed 5 km / 10 km blocks first planned (P4): they fit each
+app's own areas, and nothing new is frozen into the grid.
 
 ## 8. How a lookup works
 
@@ -1616,6 +1694,7 @@ rider guidance on the phone. Step-by-step setup, with tested code:
 | Determinism | Two builds produce byte-identical files and the same checksum; test builds match recorded checksums on Linux, macOS and Windows; no centroid latitude is near enough to a rounding tie for platform differences in `sin`/`cos` to change it |
 | Official checksums | Both complete editions, built from scratch on Linux, macOS and Windows, match `pakgrid/checksums.py` (`.github/workflows/checksums.yml`) |
 | Shared use | One `Grid` shared by many threads, and used after a fork, gives the same answers as a single thread |
+| Custom blocks | Building by clicks (toggle), polygons, circles and mixes; no overlap unless taken, with the clash named; pin and cell lookups; rename, recode, remove; stored form round trip and bad data; GeoJSON; descriptions: size, centre inside, cell codes, places with counts across a tehsil line, city in/near, nearest locality in open country, references, outside Pakistan, user localities; the CLI; the viewer's JavaScript stores the same JSON and describes blocks the same way |
 | Nearest lookup | Results equal measuring every point (dense, sparse, clustered, k from 1 to 25, many pins), with `max_m` and `where`; ties in insertion order; add, move and remove; across the quadrant midline; `Grid.nearest` asks each cell once and only around the pin; `nearest_places`; bad arguments; threads; the CLI; the viewer's JavaScript gives the same answers |
 | GeoJSON | Outlines cover exactly their sub-cells (every centroid around them tested) and enclose exactly their area; rings are closed, simple, axis-aligned, without straight-run points, anticlockwise outside and clockwise for holes, starting at their south-west corner; corners touching, holes, checkerboards, random sets, and sets across both quadrant lines; deterministic; valid in GEOS/Shapely (whole provinces, 200 random sets); place, zone and block features; the CLI; the viewer's JavaScript gives identical GeoJSON |
 | Custom zones | The row-by-row polygon scan equals testing every sub-cell centroid (random and concave polygons, holes, across a quadrant midline, corners and edges exactly on centroids); circle and place zones equal `cells_within` and `cells_in_place`; `contains` equals the pin's sub-cell; area equals the sum of sub-cell areas; `pakistan_only`; set operations; stored form round trip, determinism and bad data; `ZoneIndex`; the CLI; the viewer's JavaScript gives the same data, area and pin answers |
@@ -1645,6 +1724,7 @@ Windows, on every push to `main` and every pull request. The workflow also runs 
 | **Ports** ✅ | Navigation rules and conformance test file for apps that port navigation to their own language (`conformance/`) |
 | **Places layer** ✅ | Province, district, tehsil and locality tags on every cell and sub-cell (§5.7, places version 2) |
 | **User places** ✅ | Localities drawn by an app's users, located from known localities by distance and direction, with author history (§5.8) |
+| **Custom blocks** ✅ | Users' own named blocks from clicked cells or drawn shapes, described (cells, size, places, city, directions) and stored anywhere as JSON (§7.9) |
 | **Nearest lookup** ✅ | The k nearest riders, shops (in memory or in the app's database) or localities to a pin, exact (§7.8) |
 | **GeoJSON** ✅ | Blocks, zones and places' exact outlines as valid, canonical GeoJSON for any map, in Python, the CLI and the viewer (§7.7) |
 | **Custom zones** ✅ | Delivery areas as sets of sub-cells from polygons, circles, cells and places, with fast pin checks and a compact stored form (§7.6) |

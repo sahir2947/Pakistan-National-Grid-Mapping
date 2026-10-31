@@ -34,6 +34,7 @@ Features asked for by the project owner. Add new requests here.
 | R4 | **Custom zones** | ✅ | `grid.zone(polygon= / circle= / cells= / place=)`: a delivery area or other region as a set of sub-cells. `zone.contains(lat, lon)` checks a pin in ~3 µs, and `ZoneIndex` finds which of many zones hold a pin. Zones combine with union, intersection and difference, and store as compact JSON (`to_dict` / `from_dict`). Also `pakgrid zone`, and a **Zone** tool in the viewer (project.md §7.6) |
 | R5 | **GeoJSON for backend and frontend** | ✅ | Blocks, sets of blocks, zones and places as GeoJSON for any map (Google Maps, Mapbox, Leaflet, flutter_map). Sets become exact merged outlines with holes, valid and canonical. Available as `grid.geojson`, `cells_geojson`, `place_geojson` and `zone.to_geojson`, as `pakgrid geojson`, and as viewer downloads; the viewer's JavaScript makes identical output (project.md §7.7) |
 | R6 | **Nearest lookup** | ✅ | The k nearest points to a pin, exact and nearest first. Three sources: points in memory (`PointIndex`: riders that move, shop lists), points in the app's own database by cell ID (`grid.nearest(lat, lon, fetch)`, reading only the cells around the pin), or localities (`grid.nearest_places`). Also `pakgrid nearest`, and "Nearest places" in the viewer (project.md §7.8) |
+| R7 | **Custom blocks** | ✅ | Users make their own named, coded blocks by clicking cells (or sub-cells) on the map or drawing a polygon; blocks in a set never overlap. Each block is described: cell codes, size (sub-cells, cells, area), province, district, tehsils, localities, city (in or near), and the distance and direction from the nearest place when it is in open country, or from any place you name. Stored anywhere as JSON or GeoJSON. Available as `grid.block_set`, `describe_zone`, `pakgrid blocks`, and a **Blocks** tool in the viewer (project.md §7.9) |
 
 ## Proposed
 
@@ -45,7 +46,7 @@ already has. Move one to **Requested** to start it.
 | P1 | **Radius search** | All cells or sub-cells within X km of a point: "shops that deliver here", "riders near this order" | ✅ done as R3 |
 | P2 | **Custom zones** | A delivery area drawn as a polygon → the exact cells inside it, and a fast "is this pin in my zone?" check | ✅ done as R4 |
 | P3 | **Province / district / city per cell** | Each cell tagged with its administrative area, for reports, pricing and zone setup | ✅ done as R1 |
-| P4 | **Larger blocks** | Groups of cells, e.g. 5 km or 10 km squares, for heat maps and order counts | ⬜ |
+| P4 | **Larger blocks** | Groups of cells, e.g. 5 km or 10 km squares, for heat maps and order counts | ✅ done as R7 (custom blocks, chosen instead of fixed squares) |
 | P5 | **GeoJSON export** | Any cell, sub-cell or zone as GeoJSON, so apps can draw it on Google Maps, Mapbox or Leaflet | ✅ done as R5 |
 | P6 | **Cell-to-cell distances** | Distance and direction between any two cells' centres, for batching and fee estimates | ✅ done as R3 |
 | P7 | **Nearest point lookup** | Given a list of shops or riders stored by cell, find the nearest ones to a pin quickly | ✅ done as R6 |
@@ -70,3 +71,4 @@ Features already in the library, for reference.
 | Custom zones (R4) | `Grid.zone`, `pakgrid/zones.py`, project.md §7.6 |
 | GeoJSON (R5) | `pakgrid/geojson.py`, project.md §7.7 |
 | Nearest lookup (R6) | `pakgrid/nearest.py`, project.md §7.8 |
+| Custom blocks (R7) | `pakgrid/blocks.py`, `pakgrid/describe.py`, project.md §7.9 |

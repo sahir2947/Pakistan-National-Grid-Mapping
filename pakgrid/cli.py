@@ -1,5 +1,5 @@
 """Command-line tools: pakgrid build | build-places | verify | locate | show | within | distance | nearest |
-zone | geojson | places | user-places | info | export-layout | export-conformance."""
+zone | blocks | geojson | places | user-places | info | export-layout | export-conformance."""
 
 import argparse
 import json
@@ -98,6 +98,42 @@ def main(argv=None):
     z.add_argument("zone", metavar="ZONE.json")
     z.add_argument("lat", type=float)
     z.add_argument("lon", type=float)
+
+    p = sub.add_parser("blocks", help="custom blocks: named groups of cells kept in a JSON file you store anywhere")
+    p.add_argument("--db", default=DEFAULT_DB)
+    p.add_argument("--file", required=True, help="the block set's JSON file (created by the first add)")
+    p.add_argument("--user-places", default=DEFAULT_USER_PLACES, metavar="FILE",
+                   help="count user localities too when describing")
+    bact = p.add_subparsers(dest="action", required=True)
+    for name, helptext in (("add", "add a block"), ("add-cells", "add cells to a block"),
+                           ("remove-cells", "take cells away from a block")):
+        a = bact.add_parser(name, help=helptext)
+        a.add_argument("code")
+        if name == "add":
+            a.add_argument("--name")
+            a.add_argument("--set-name", help="the block set's name, for a new file")
+        a.add_argument("--cells", nargs="+", metavar="CODE", help="cell and sub-cell codes")
+        a.add_argument("--polygon", metavar="FILE", help="JSON polygon file (as `zone make`)")
+        a.add_argument("--circle", nargs=3, type=float, metavar=("LAT", "LON", "METRES"))
+        a.add_argument("--place", metavar="KEY")
+        if name != "remove-cells":
+            a.add_argument("--take", action="store_true", help="move sub-cells that another block has")
+            a.add_argument("--pakistan-only", action="store_true")
+    a = bact.add_parser("update", help="rename a block, or change its code")
+    a.add_argument("code")
+    a.add_argument("--name")
+    a.add_argument("--new-code")
+    a = bact.add_parser("remove", help="remove a block")
+    a.add_argument("code")
+    bact.add_parser("list", help="list the blocks with their sizes")
+    a = bact.add_parser("describe", help="a block's cell codes, size, places and where it is")
+    a.add_argument("code")
+    a.add_argument("--ref", action="append", metavar="KEY", help="also the distance from this locality; repeatable")
+    a = bact.add_parser("at", help="which block holds a pin?")
+    a.add_argument("lat", type=float)
+    a.add_argument("lon", type=float)
+    a = bact.add_parser("geojson", help="every block's outline as GeoJSON")
+    a.add_argument("-o", "--output", metavar="FILE")
 
     p = sub.add_parser("geojson", help="write cells, a zone or a place as GeoJSON (for Google Maps, Mapbox, Leaflet ...)")
     p.add_argument("--db", default=DEFAULT_DB)
@@ -347,6 +383,64 @@ def _geojson(args):
     return 0
 
 
+def _blocks(args):
+    from .blocks import BlockSet
+    from .grid import Grid
+    with Grid.open(args.db, user_places=args.user_places) as grid:
+        try:
+            with open(args.file, encoding="utf-8") as f:
+                blocks = BlockSet.from_dict(json.load(f), grid)
+        except FileNotFoundError:
+            if args.action != "add":
+                raise
+            blocks = grid.block_set(getattr(args, "set_name", None) or "blocks")
+        a, changed, out = args.action, True, None
+        if a in ("add", "add-cells", "remove-cells"):
+            polygon = None
+            if args.polygon:
+                with open(args.polygon, encoding="utf-8") as f:
+                    polygon = json.load(f)
+            src = dict(cells=args.cells, polygon=polygon, circle=tuple(args.circle) if args.circle else None,
+                       place=args.place)
+            if a == "add":
+                blocks.add(args.code, name=args.name, take=args.take, pakistan_only=args.pakistan_only, **src)
+            elif a == "add-cells":
+                blocks.add_cells(args.code, take=args.take, pakistan_only=args.pakistan_only, **src)
+            else:
+                blocks.remove_cells(args.code, **src)
+            b = blocks.get(args.code)
+            out = {"code": b.code, "name": b.name, "sub_cells": b.sub_cell_count, "cells": b.zone.cell_count}
+        elif a == "update":
+            b = blocks.update(args.code, name=args.name, new_code=args.new_code)
+            out = {"code": b.code, "name": b.name}
+        elif a == "remove":
+            blocks.remove(args.code)
+            out = {"removed": args.code}
+        else:
+            changed = False
+            if a == "list":
+                out = [{"code": b.code, "name": b.name, "sub_cells": b.sub_cell_count, "cells": b.zone.cell_count,
+                        "area_km2": round(b.zone.area_km2, 3)} for b in blocks.blocks()]
+            elif a == "describe":
+                out = blocks.describe(args.code, args.ref or ())
+            elif a == "at":
+                out = {"block": blocks.block_at(args.lat, args.lon)}
+            else:
+                text = json.dumps(blocks.to_geojson(), ensure_ascii=False, separators=(",", ":"))
+                if args.output:
+                    with open(args.output, "w", encoding="utf-8") as f:
+                        f.write(text)
+                    out = {"written": args.output}
+                else:
+                    print(text)
+                    return 0
+        if changed:
+            with open(args.file, "w", encoding="utf-8") as f:
+                json.dump(blocks.to_dict(), f, ensure_ascii=False, separators=(",", ":"))
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+    return 0
+
+
 def _user_places(args):
     from .grid import Grid
     with Grid.open(args.db) as grid:
@@ -406,6 +500,7 @@ _COMMANDS = {
     "zone": _with_grid(_zone),
     "nearest": _with_grid(_nearest),
     "geojson": _geojson,
+    "blocks": _blocks,
     "info": _with_grid(lambda grid, a: grid.info()),
     "export-layout": _export_layout,
     "export-conformance": _export_conformance,

@@ -35,6 +35,24 @@ from zoom 14), or use **Measure from here** in a block's details, or search
 `11-0140-0471 to 11-0150-0480`. It shows the distance and direction between
 their centres, and the east/north metres.
 
+**Blocks** makes your own named blocks (project.md §7.9):
+
+1. Give a new block a code (and a name) and press **Create**.
+2. Build it either way:
+   - **click cells**: each click adds a cell, or removes it if it is already
+     in. Zoomed out you click cells; from zoom 14, sub-cells. Tick *whole
+     cells only* to always click whole cells.
+   - **draw a shape**: tap the corners, then **Add shape**. The sub-cells
+     whose centre is inside join the block.
+3. The panel shows the block's report: size, cell codes, province, district,
+   tehsils, localities, city, and, in open country, the distance and
+   direction from the nearest place. Add distances from any place, e.g.
+   *Lahore*.
+
+Blocks in a set never overlap: tick *take from other blocks* to move cells
+between them. The set is kept in this browser. **Download JSON** saves it in
+the same format as `BlockSet.to_dict()`; **Load JSON** reads one back.
+
 **Zone** makes a custom zone, such as a delivery area (project.md §7.6):
 
 1. Tap its corners and press **Done**. The sub-cells whose centre is inside

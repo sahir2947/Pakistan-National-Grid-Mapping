@@ -666,3 +666,57 @@ def test_javascript_nearest_matches_python(lahore_db):
             for (_, d, b, text), n in zip(js, py):
                 assert abs(d - n.distance_m) < 1e-6 and abs(b - n.bearing_deg) < 1e-6 and text == n.text
             assert [x[0] for x in js_places] == [n.id.key for n in grid.nearest_places(lat, lon, 5)]
+
+
+_JS_BLOCKS = """
+const P = require(process.argv[1] + '/pakgrid.js');
+const grid = new P.Grid(require(process.argv[1] + '/layout.js'));
+const places = new P.Places(require(process.argv[1] + '/places.js'));
+const req = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const set = new P.BlockSet(grid, 'lahore');
+const masksOf = (codes) => Object.assign({}, ...codes.map((c) => P.codeMasks(grid, c)));   // codes of different cells
+set.add('A', 'North', masksOf(req.a), false, {});
+set.add('B', null, grid.zoneFromPolygon(req.poly).masks, false, {});
+set.toggle('A', req.toggle, false);
+let clash = null;
+try { set.add('C', null, masksOf([req.a[0]]), false, {}); } catch (e) { clash = e.message; }
+const ref = places.list.find((p) => p.key === req.ref);
+process.stdout.write(JSON.stringify({
+  data: set.toDict(), clash,
+  describe: set.blocks.map((b) => places.describe(grid, b.zone.masks, [ref])),
+  at: req.pins.map(([lat, lon]) => set.blockAt(lat, lon)),
+}));
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_blocks_match_python(lahore_db):
+    """The viewer's Blocks tool stores the same JSON and describes blocks the same way as the library."""
+    from pakgrid import BlockSet, Grid
+    req = {"a": ["11-0140-0471", "11-0140-0472", "11-0136-0200"], "toggle": "11-0140-0473-12",
+           "poly": [[31.49, 74.30], [31.49, 74.33], [31.51, 74.33], [31.51, 74.30]],
+           "ref": "punjab/lahore/lahore-cantt/lahore", "pins": [[31.5204, 74.3587], [31.50, 74.315], [31.56, 74.50]]}
+    got = json.loads(subprocess.run([NODE, "-e", _JS_BLOCKS, str(VIEWER)], input=json.dumps(req),
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
+    with Grid.open(lahore_db) as grid:
+        blocks = grid.block_set("lahore")
+        blocks.add("A", name="North", cells=req["a"])
+        blocks.add("B", polygon=req["poly"])
+        blocks.toggle("A", req["toggle"])
+        assert got["data"] == blocks.to_dict()                                 # the same stored JSON
+        assert BlockSet.from_dict(got["data"], grid).to_dict() == blocks.to_dict()
+        assert 'already in block "A" (25 sub-cells)' in got["clash"]
+        assert got["at"] == [blocks.block_at(*p) for p in req["pins"]]
+        for b, js in zip(blocks.blocks(), got["describe"]):
+            py = grid.describe_zone(b.zone, [req["ref"]])
+            assert js["size"]["sub_cells"] == py["size"]["sub_cells"] and js["size"]["whole_cells"] == py["size"]["whole_cells"]
+            assert js["size"]["cells"] == py["size"]["cells"] and js["size"]["centre"] == py["size"]["centre"]
+            assert js["size"]["area_km2"] == pytest.approx(py["size"]["area_km2"], abs=2e-6)
+            for level in ("province", "district", "tehsil", "locality"):
+                assert [(x["key"], x["sub_cells"]) for x in js["places"][level]] == \
+                    [(x["key"], x["sub_cells"]) for x in py["places"][level]], level
+            for k in ("city", "nearest_locality"):
+                assert (js[k] or {}).get("key") == (py[k] or {}).get("key") and (js[k] or {}).get("text") == (py[k] or {}).get("text")
+            assert (js["city"] or {}).get("relation") == (py["city"] or {}).get("relation")
+            assert js["references"][0]["text"] == py["references"][0]["text"]
+            assert js["label"] == py["label"] and js["outside_pakistan_sub_cells"] == py["outside_pakistan_sub_cells"]
