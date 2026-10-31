@@ -256,6 +256,64 @@
              text: formatDistance(way.distance_m) + " " + way.compass_short };
   };
 
+  // -- Nearest lookup (same as pakgrid.nearest) ------------------------------------
+
+  var MAX_NEAREST_M = 49000, NEAREST_MARGIN = 1.01;
+
+  // Cell IDs with any part within r metres of the point (as Grid.cells_within(..., touching=True)).
+  Grid.prototype.cellsNear = function (lat, lon, r) {
+    lat = toE7(lat) / SCALE; lon = toE7(lon) / SCALE;
+    var m = metresPerDegree(lat), pad = 1.02 * r + 1500, out = [];
+    var items = this.itemsInBox(lat - pad / m.lat, lon - pad / (m.lon * 0.98), lat + pad / m.lat, lon + pad / (m.lon * 0.98),
+                                "cell", Infinity) || [];
+    items.forEach(function (it) {
+      var s = toE7(it[0]) / SCALE, w = toE7(it[1]) / SCALE, n = toE7(it[2]) / SCALE, e = toE7(it[3]) / SCALE;
+      if (Math.hypot(Math.max(w - lon, 0, lon - e) * m.lon, Math.max(s - lat, 0, lat - n) * m.lat) <= r) {
+        out.push(cellId(it[4], it[5], it[6]));
+      }
+    });
+    return out;
+  };
+
+  // Points bucketed by cell for nearest searches (as pakgrid.nearest.PointIndex).
+  function PointIndex(grid) { this.grid = grid; this._points = {}; this._cells = {}; this._seq = 0; this.size = 0; }
+  PointIndex.prototype.add = function (id, lat, lon) {
+    var r = this.grid.locate(lat, lon);
+    if (!r) throw new Error("(" + lat + ", " + lon + ") is outside the grid");
+    var c = cellId(r.q, r.row, r.col), old = this._points[id], seq;
+    if (old) { delete this._cells[old[3]][id]; seq = old[0]; } else { seq = ++this._seq; this.size++; }
+    this._points[id] = [seq, lat, lon, c];
+    (this._cells[c] || (this._cells[c] = {}))[id] = true;
+  };
+  PointIndex.prototype.remove = function (id) {
+    var old = this._points[id];
+    if (!old) return;
+    delete this._cells[old[3]][id]; delete this._points[id]; this.size--;
+  };
+  // The k nearest points, nearest first: [{id, lat, lon, distance_m, bearing_deg, direction, text}].
+  PointIndex.prototype.nearest = function (lat, lon, k, maxM, where) {
+    k = k || 5; maxM = maxM == null ? MAX_NEAREST_M : maxM;
+    var self = this, seen = {}, found = [], r = Math.min(1000, maxM * NEAREST_MARGIN);
+    while (true) {
+      this.grid.cellsNear(lat, lon, r).forEach(function (c) {
+        if (seen[c]) return;
+        seen[c] = true;
+        for (var id in self._cells[c] || {}) {
+          var p = self._points[id], way = direction(lat, lon, p[1], p[2]);
+          if (way.distance_m <= maxM && (!where || where(id))) {
+            found.push({ seq: p[0], id: id, lat: p[1], lon: p[2], distance_m: way.distance_m, bearing_deg: way.bearing_deg,
+                         direction: way.compass_short, text: formatDistance(way.distance_m) + " " + way.compass_short });
+          }
+        }
+      });
+      found.sort(function (a, b) { return a.distance_m - b.distance_m || a.seq - b.seq; });
+      found = found.slice(0, k);
+      var sure = r / NEAREST_MARGIN;
+      if ((found.length === k && found[k - 1].distance_m <= sure) || sure >= maxM) return found;
+      r = Math.min(r * 2, maxM * NEAREST_MARGIN);
+    }
+  };
+
   // -- Border flags (same as pakgrid.boundary) ------------------------------
 
   var OUTSIDE = 0, BORDER = 1, INSIDE = 2, BAND = 100000;
@@ -1264,6 +1322,17 @@
     return new Zone(grid, this.masks(grid, place)).toGeoJSON(props);
   };
 
+  // The k nearest localities to a point (as Grid.nearest_places): [{place, distance_m, bearing_deg, direction, text}].
+  Places.prototype.nearest = function (grid, lat, lon, k, kinds) {
+    if (!this._index) {
+      var idx = this._index = new PointIndex(grid);
+      this.list.forEach(function (p) { if (p.level === "locality") idx.add(p.id, p.lat, p.lon); });
+    }
+    var self = this;
+    return this._index.nearest(lat, lon, k || 5, null, kinds ? function (id) { return kinds[self.byId[id].kind]; } : null)
+      .map(function (n) { n.place = self.byId[n.id]; return n; });
+  };
+
   Places.prototype.path = function (place) {
     var out = [];
     for (var p = place; p; p = this.byId[p.parentId]) out.push(p);
@@ -1275,7 +1344,7 @@
     toE7: toE7, bandCentroidLat: bandCentroidLat, metresPerDegree: metresPerDegree,
     localOffset: localOffset, applyOffset: applyOffset, addressText: addressText, bearing: bearing, compass: compass, direction: direction, turnWords: turnWords,
     formatDistance: formatDistance, NavigationSession: NavigationSession, cellId: cellId, subCellId: subCellId,
-    pointInRings: pointInRings, Zone: Zone, geojsonGeometry: geojsonGeometry,
+    pointInRings: pointInRings, Zone: Zone, geojsonGeometry: geojsonGeometry, PointIndex: PointIndex,
     cellCode: cellCode, subCellCode: subCellCode
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

@@ -722,6 +722,7 @@ pakgrid/
 ├── userplaces.py Localities drawn by users, kept in a separate file (§5.8)
 ├── zones.py      Custom zones: sets of sub-cells, pin checks, stored form (§7.6)
 ├── geojson.py    GeoJSON: blocks, zones and places' exact outlines (§7.7)
+├── nearest.py    Nearest lookup: PointIndex and the ring search (§7.8)
 ├── data/         Pakistan's border and the places sources (places-v2.json.gz)
 └── cli.py        Command-line tools
 scripts/          make_places_data.py: makes data/places-v2.json.gz from the source downloads
@@ -775,6 +776,7 @@ level by itself.
 | 8b | `distance(a, b, level="cell")` | Cell-to-cell distance: `Separation` between two blocks' centroids (`distance_m`, `bearing_deg`, `compass`, `compass_short`, `east_m`, `north_m`, `text` such as `13.8 km NE`); codes may mix cells and sub-cells; no database access (§7.5) |
 | 8c | `zone(polygon= / circle= / cells= / place=, pakistan_only=False)` | A custom zone (`Zone`): a set of sub-cells with `contains(lat, lon)`, counts, area, `cells()`, `sub_cells()`, `\|` `&` `-`, `to_dict()` / `Zone.from_dict()`; `ZoneIndex` finds which of many zones hold a pin (§7.6) |
 | 8d | `geojson(item)`, `cells_geojson(items, merge=False)`, `place_geojson(place)` | GeoJSON Features of blocks, sets of blocks and places' exact outlines; `zone.to_geojson()` for zones (§7.7) |
+| 8e | `point_index(points=())`, `nearest(lat, lon, fetch, k=5)`, `nearest_places(lat, lon, k=5, kind=None)` | Nearest lookup: the k nearest points (in memory, or in your database by cell ID) or localities to a pin, exact, as `Neighbour` (`id`, `distance_m`, `bearing_deg`, `direction`, `text`) (§7.8) |
 | **Pakistan border** | | |
 | 9 | `in_pakistan(lat, lon)` | `True` if the point is inside Pakistan's border |
 | 10 | `pakistan_flags(items, level="cell")` | `{id: "inside" \| "border" \| "outside"}` for many cells or sub-cells at once |
@@ -864,6 +866,7 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 | `pakgrid locate LAT LON [--accuracy M]` | Look up a point; prints JSON |
 | `pakgrid within LAT LON METRES [--level sub] [--pakistan-only] [--touching]` | Radius search, nearest first (§7.5) |
 | `pakgrid distance FROM TO` | Distance and direction between two cells or sub-cells, by code (§7.5) |
+| `pakgrid nearest LAT LON [-k N] [--max-m M] [--points FILE] [--kind KIND]` | The nearest points of a JSON/CSV file, or the nearest localities (§7.8) |
 | `pakgrid geojson (--cells CODE... [--merge] \| --place KEY \| --zone FILE \| --circle LAT LON M \| --polygon FILE) [-o FILE]` | Write GeoJSON for any map (§7.7) |
 | `pakgrid zone make (--polygon FILE \| --circle LAT LON M \| --cells CODE... \| --place KEY) [--pakistan-only] [-o FILE]` / `zone check FILE LAT LON` / `zone show FILE [--codes]` | Make a custom zone, check a pin, summarise one (§7.6) |
 | `pakgrid show CODE` | Print a cell's or sub-cell's details as JSON |
@@ -904,6 +907,7 @@ for checking the grid visually before it is used in an app:
 - **Zone:** draw a custom zone, check pins against it, copy its stored data,
   or paste a stored zone to see it (§7.6)
 - **Download GeoJSON** of a place, a zone, a block or radius search results (§7.7)
+- **Nearest places** to a tapped point, with distance and direction (§7.8)
 - **Draw:** preview a user locality (§5.8)
 
 It needs no database. It recomputes the grid and the border flags from
@@ -1101,6 +1105,63 @@ package) turns it into polygon layers directly; with `google_maps_flutter`,
 each ring becomes a `Polygon` (`points` from the outer ring, `holes` from the
 others), remembering that GeoJSON puts longitude first. No grid maths is
 needed in the app for drawing.
+
+
+### 7.8 Nearest lookup
+
+"Which riders are nearest this order?", "the 5 nearest shops", "the nearest
+town": the k nearest points to a pin, nearest first (`pakgrid/nearest.py`).
+
+**Points in memory** (`PointIndex`): riders whose positions change every few
+seconds, or a shop list loaded once. Points are kept in buckets by cell, so a
+search only measures the points in the cells around the pin.
+
+```python
+riders = grid.point_index()                       # or grid.point_index([(id, lat, lon), ...])
+riders.add("rider-7", 31.5210, 74.3570)           # add, or move when the ID is already there
+riders.remove("rider-3")
+riders.nearest(31.5204, 74.3587, k=3)             # [Neighbour(id='rider-7', distance_m=174.6, ...)]
+riders.nearest(lat, lon, k=5, max_m=3000, where=lambda rid: rid in available)
+riders.within(lat, lon, 2000)                     # everyone within 2 km, nearest first
+```
+
+**Points in your own database** (`Grid.nearest`): shops stored with their
+indexed `cell_id`. The grid calls `fetch` with a few cell IDs at a time,
+nearest cells first, and never the same cell twice, so the database only
+reads the cells around the pin (about 10-60 cells, not the whole table):
+
+```python
+def fetch(cell_ids):
+    return [(s, s.lat, s.lon) for s in Shop.objects.filter(cell_id__in=cell_ids, open=True)]
+
+grid.nearest(31.5204, 74.3587, fetch, k=5)        # Neighbour.id is the Shop
+```
+
+**Places:** `grid.nearest_places(lat, lon, k=5, kind=None)` gives the nearest
+localities (Neighbour.id is the `Place`), optionally of some kinds only
+(`kind={"town", "city"}`).
+
+Each `Neighbour` has `id`, `lat`, `lon`, `distance_m`, `bearing_deg`,
+`direction` (16-point, e.g. `NE`) and `text` (`170 m WNW`).
+
+**Exact.** The search looks in the cells within a radius of the pin,
+starting at 1 km and doubling, until the k-th nearest point found is nearer
+than any point in a cell not yet searched could be. The answer is the true k
+nearest by straight-line distance (as `direction()` measures it), the same as
+measuring every point (tested), with ties in the order the points were added
+or fetched. `where` keeps only the points it accepts, and `max_m` limits how
+far to look (at most 49 km); with too few points within it, fewer than k
+come back.
+
+**Speed.** With 20,000 riders across Lahore, a search takes ~0.3 ms; with
+only 20 spread over 50 km, ~5 ms. Adding 20,000 points takes ~0.13 s.
+`nearest_places` takes ~1 ms (its index of 32,512 localities is built on
+first use, ~0.15 s). A `PointIndex` is safe to share between threads.
+
+`pakgrid nearest LAT LON [-k 5] [--points FILE]` lists the nearest points of a
+JSON or CSV file (`id,lat,lon`), or without `--points` the nearest localities
+(`--kind town`). The viewer shows the **nearest places** in a point's details,
+and `viewer/pakgrid.js` has the same `PointIndex` (tested against the library).
 
 ## 8. How a lookup works
 
@@ -1469,6 +1530,7 @@ the same data centre.
 | `distance(a, b)` | 15 µs | ~65,000 |
 | `zone.contains(lat, lon)` / `ZoneIndex.at` (100 zones) | ~3 µs / ~4 µs | — |
 | `place_geojson` Lahore district / Punjab; `zone.to_geojson()` 20 km² | 0.15 s / 1.5 s; 2 ms | — |
+| `PointIndex.nearest` 20,000 points / 20 sparse points; `nearest_places` | 0.3 ms / 5 ms; 1 ms | — |
 | `zone(polygon=...)` ~80,000 sub-cells / `zone(place="punjab")` 5.1 million | 16 ms / 0.6 s | — |
 
 **Build and verify:**
@@ -1554,6 +1616,7 @@ rider guidance on the phone. Step-by-step setup, with tested code:
 | Determinism | Two builds produce byte-identical files and the same checksum; test builds match recorded checksums on Linux, macOS and Windows; no centroid latitude is near enough to a rounding tie for platform differences in `sin`/`cos` to change it |
 | Official checksums | Both complete editions, built from scratch on Linux, macOS and Windows, match `pakgrid/checksums.py` (`.github/workflows/checksums.yml`) |
 | Shared use | One `Grid` shared by many threads, and used after a fork, gives the same answers as a single thread |
+| Nearest lookup | Results equal measuring every point (dense, sparse, clustered, k from 1 to 25, many pins), with `max_m` and `where`; ties in insertion order; add, move and remove; across the quadrant midline; `Grid.nearest` asks each cell once and only around the pin; `nearest_places`; bad arguments; threads; the CLI; the viewer's JavaScript gives the same answers |
 | GeoJSON | Outlines cover exactly their sub-cells (every centroid around them tested) and enclose exactly their area; rings are closed, simple, axis-aligned, without straight-run points, anticlockwise outside and clockwise for holes, starting at their south-west corner; corners touching, holes, checkerboards, random sets, and sets across both quadrant lines; deterministic; valid in GEOS/Shapely (whole provinces, 200 random sets); place, zone and block features; the CLI; the viewer's JavaScript gives identical GeoJSON |
 | Custom zones | The row-by-row polygon scan equals testing every sub-cell centroid (random and concave polygons, holes, across a quadrant midline, corners and edges exactly on centroids); circle and place zones equal `cells_within` and `cells_in_place`; `contains` equals the pin's sub-cell; area equals the sum of sub-cell areas; `pakistan_only`; set operations; stored form round trip, determinism and bad data; `ZoneIndex`; the CLI; the viewer's JavaScript gives the same data, area and pin answers |
 | Radius search and distances | `cells_within` equals a brute-force measure of every block in a generous box (cells and sub-cells, centroid and touching, radius 0 to 20 km, near the south edge and a quadrant line); counts near π r²; `pakistan_only` equals the border flags; bad radii and levels are refused; `distance` equals `direction()` between centroids, both ways, mixed levels, outside the build; the CLI; the viewer's JavaScript gives the same IDs, distances and bearings |
@@ -1582,6 +1645,7 @@ Windows, on every push to `main` and every pull request. The workflow also runs 
 | **Ports** ✅ | Navigation rules and conformance test file for apps that port navigation to their own language (`conformance/`) |
 | **Places layer** ✅ | Province, district, tehsil and locality tags on every cell and sub-cell (§5.7, places version 2) |
 | **User places** ✅ | Localities drawn by an app's users, located from known localities by distance and direction, with author history (§5.8) |
+| **Nearest lookup** ✅ | The k nearest riders, shops (in memory or in the app's database) or localities to a pin, exact (§7.8) |
 | **GeoJSON** ✅ | Blocks, zones and places' exact outlines as valid, canonical GeoJSON for any map, in Python, the CLI and the viewer (§7.7) |
 | **Custom zones** ✅ | Delivery areas as sets of sub-cells from polygons, circles, cells and places, with fast pin checks and a compact stored form (§7.6) |
 | **Radius search and distances** ✅ | Blocks within a radius of a point and cell-to-cell distances, in Python, the CLI and the viewer, plus a Grid show/hide toggle (§7.5) |

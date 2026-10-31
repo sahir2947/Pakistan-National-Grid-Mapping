@@ -435,6 +435,30 @@ index = ZoneIndex({s.id: Zone.from_dict(s.delivery_zone, get_grid())
 shop_ids = index.at(lat, lon)
 ```
 
+**Nearest shops and riders.** Shops live in your database with an indexed
+`cell_id`; `grid.nearest` asks for them a few cells at a time around the pin.
+Riders move, so keep their latest positions in a `PointIndex` in memory, one
+per worker process (or rebuild it from your rider table when a worker starts)
+([project.md §7.8](../project.md#78-nearest-lookup)):
+
+```python
+def nearest_shops(lat, lon, k=5):
+    def fetch(cell_ids):
+        return [(s, s.lat, s.lon) for s in Shop.objects.filter(cell_id__in=cell_ids, is_open=True)]
+    return [{"shop": n.id.id, "distance_m": round(n.distance_m), "direction": n.direction}
+            for n in get_grid().nearest(lat, lon, fetch, k=k)]
+
+RIDERS = get_grid().point_index()                     # module level: one per worker process
+def rider_moved(rider_id, lat, lon):                   # from the rider app's location updates
+    RIDERS.add(rider_id, lat, lon)
+def nearest_free_riders(lat, lon, free_ids, k=3):
+    return RIDERS.nearest(lat, lon, k, max_m=10_000, where=lambda rid: rid in free_ids)
+```
+
+With several worker processes, each has its own index; send location updates
+to all of them, or keep riders in a shared store (Redis, the database) and use
+`grid.nearest` with a `fetch` that reads it.
+
 **Shapes for the app's map (GeoJSON).** Send GeoJSON and the Flutter app
 draws it with its map library, with no grid maths on the phone
 ([project.md §7.7](../project.md#77-geojson)):

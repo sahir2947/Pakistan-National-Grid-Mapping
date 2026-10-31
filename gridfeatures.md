@@ -33,6 +33,7 @@ Features asked for by the project owner. Add new requests here.
 | R3 | **Radius search, cell-to-cell distance, show/hide grid** | ✅ | `grid.cells_within(lat, lon, radius_m)`: the cells or sub-cells within a radius, nearest first (centre or any part; optionally only in Pakistan). `grid.distance(a, b)`: distance, bearing, compass and east/north metres between two blocks' centres. Both are also CLI commands (`within`, `distance`) and in the viewer (**Around this point**, **Measure**), which also gets a **Grid** toggle to show or hide the grid (project.md §7.5) |
 | R4 | **Custom zones** | ✅ | `grid.zone(polygon= / circle= / cells= / place=)`: a delivery area or other region as a set of sub-cells. `zone.contains(lat, lon)` checks a pin in ~3 µs, and `ZoneIndex` finds which of many zones hold a pin. Zones combine with union, intersection and difference, and store as compact JSON (`to_dict` / `from_dict`). Also `pakgrid zone`, and a **Zone** tool in the viewer (project.md §7.6) |
 | R5 | **GeoJSON for backend and frontend** | ✅ | Blocks, sets of blocks, zones and places as GeoJSON for any map (Google Maps, Mapbox, Leaflet, flutter_map). Sets become exact merged outlines with holes, valid and canonical. Available as `grid.geojson`, `cells_geojson`, `place_geojson` and `zone.to_geojson`, as `pakgrid geojson`, and as viewer downloads; the viewer's JavaScript makes identical output (project.md §7.7) |
+| R6 | **Nearest lookup** | ✅ | The k nearest points to a pin, exact and nearest first. Three sources: points in memory (`PointIndex`: riders that move, shop lists), points in the app's own database by cell ID (`grid.nearest(lat, lon, fetch)`, reading only the cells around the pin), or localities (`grid.nearest_places`). Also `pakgrid nearest`, and "Nearest places" in the viewer (project.md §7.8) |
 
 ## Proposed
 
@@ -47,7 +48,7 @@ already has. Move one to **Requested** to start it.
 | P4 | **Larger blocks** | Groups of cells, e.g. 5 km or 10 km squares, for heat maps and order counts | ⬜ |
 | P5 | **GeoJSON export** | Any cell, sub-cell or zone as GeoJSON, so apps can draw it on Google Maps, Mapbox or Leaflet | ✅ done as R5 |
 | P6 | **Cell-to-cell distances** | Distance and direction between any two cells' centres, for batching and fee estimates | ✅ done as R3 |
-| P7 | **Nearest point lookup** | Given a list of shops or riders stored by cell, find the nearest ones to a pin quickly | ⬜ |
+| P7 | **Nearest point lookup** | Given a list of shops or riders stored by cell, find the nearest ones to a pin quickly | ✅ done as R6 |
 
 ## Done
 
@@ -68,3 +69,4 @@ Features already in the library, for reference.
 | Radius search, cell-to-cell distances, show/hide grid (R3) | `Grid.cells_within`, `Grid.distance`, project.md §7.5 |
 | Custom zones (R4) | `Grid.zone`, `pakgrid/zones.py`, project.md §7.6 |
 | GeoJSON (R5) | `pakgrid/geojson.py`, project.md §7.7 |
+| Nearest lookup (R6) | `pakgrid/nearest.py`, project.md §7.8 |
