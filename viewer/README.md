@@ -44,6 +44,9 @@ their centres, and the east/north metres.
 3. The panel gives the zone's data (`Zone.to_dict()`) to store. You can also
    paste a stored zone's data to see it on the map.
 
+**Nearest places:** a point's details list the 5 nearest localities, with
+their straight-line distance and direction (project.md §7.8).
+
 **Download GeoJSON** (project.md §7.7) saves what is shown as a GeoJSON file
 for any map or GIS tool: a place's exact outline (in its panel), a zone, a
 block and its cell (in a block's details), or the blocks of a radius

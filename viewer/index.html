@@ -538,6 +538,13 @@
     }
     html += "<h3>Cell · " + sizeText(cb) + "</h3>" +
             rowsHtml([["Centroid", fmt(cell.centroid[0]) + ", " + fmt(cell.centroid[1])]].concat(boundsRows(cb)));
+    var near = places.nearest(grid, (opts.point || (sub || cell).centroid)[0], (opts.point || (sub || cell).centroid)[1], 5);
+    if (near.length) {
+      html += "<h3>Nearest places</h3>" + rowsHtml(near.map(function (n) {
+        return [placeLink(n.place) + " <span class='sub'>" + esc(n.place.kind.replace(/_/g, " ")) + "</span>", esc(n.text)];
+      })) + "<div class='sub'>Straight-line distance and direction from " + (opts.point ? "the point" : "the block's centre") +
+        ". Same as <code>grid.nearest_places(...)</code>.</div>";
+    }
     html += "<h3>Around " + (opts.point ? "this point" : "this block") + "</h3>" +
             "<div class='around'><input id='a-radius' type='number' min='0' max='50000' step='100' value='" + aroundRadius +
             "' aria-label='Radius in metres'> m <select id='a-level'><option value='cell'>cells</option>" +

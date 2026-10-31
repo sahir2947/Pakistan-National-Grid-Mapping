@@ -633,3 +633,36 @@ def test_javascript_geojson_matches_python(lahore_db):
         assert got["block"]["geometry"] == block["geometry"]
         assert {k: got["block"]["properties"][k] for k in ("id", "code", "level", "centroid")} == \
             {k: block["properties"][k] for k in ("id", "code", "level", "centroid")}
+
+
+_JS_NEAREST = """
+const P = require(process.argv[1] + '/pakgrid.js');
+const grid = new P.Grid(require(process.argv[1] + '/layout.js'));
+const places = new P.Places(require(process.argv[1] + '/places.js'));
+const req = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const idx = new P.PointIndex(grid);
+req.points.forEach(([id, lat, lon]) => idx.add(id, lat, lon));
+process.stdout.write(JSON.stringify({
+  points: req.pins.map(([lat, lon]) => idx.nearest(lat, lon, 7).map((n) => [n.id, n.distance_m, n.bearing_deg, n.text])),
+  places: req.pins.map(([lat, lon]) => places.nearest(grid, lat, lon, 5).map((n) => [n.place.key, n.distance_m])),
+}));
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_nearest_matches_python(lahore_db):
+    from pakgrid import Grid
+    rng = random.Random(121)
+    points = [[f"p{i}", round(31.52 + (rng.random() - 0.5) * 0.3, 7), round(74.36 + (rng.random() - 0.5) * 0.35, 7)]
+              for i in range(1500)]
+    pins = [[round(31.52 + (rng.random() - 0.5) * 0.08, 7), round(74.36 + (rng.random() - 0.5) * 0.3, 7)] for _ in range(30)]
+    got = json.loads(subprocess.run([NODE, "-e", _JS_NEAREST, str(VIEWER)], input=json.dumps({"points": points, "pins": pins}),
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
+    with Grid.open(lahore_db) as grid:
+        index = grid.point_index(points)
+        for (lat, lon), js, js_places in zip(pins, got["points"], got["places"]):
+            py = index.nearest(lat, lon, 7)
+            assert [x[0] for x in js] == [n.id for n in py]
+            for (_, d, b, text), n in zip(js, py):
+                assert abs(d - n.distance_m) < 1e-6 and abs(b - n.bearing_deg) < 1e-6 and text == n.text
+            assert [x[0] for x in js_places] == [n.id.key for n in grid.nearest_places(lat, lon, 5)]

@@ -1,5 +1,5 @@
-"""Command-line tools: pakgrid build | build-places | verify | locate | show | within | distance | zone |
-geojson | places | user-places | info | export-layout | export-conformance."""
+"""Command-line tools: pakgrid build | build-places | verify | locate | show | within | distance | nearest |
+zone | geojson | places | user-places | info | export-layout | export-conformance."""
 
 import argparse
 import json
@@ -66,6 +66,16 @@ def main(argv=None):
     p = sub.add_parser("distance", help="distance and direction between two cells or sub-cells (by code)")
     p.add_argument("a", metavar="FROM")
     p.add_argument("b", metavar="TO")
+    p.add_argument("--db", default=DEFAULT_DB)
+
+    p = sub.add_parser("nearest", help="the nearest points (from a file) or localities to a pin")
+    p.add_argument("lat", type=float)
+    p.add_argument("lon", type=float)
+    p.add_argument("-k", type=int, default=5, help="how many (default 5)")
+    p.add_argument("--max-m", type=float, metavar="METRES", help="look no further than this (at most 49,000)")
+    p.add_argument("--points", metavar="FILE",
+                   help="JSON [[id, lat, lon], ...] or CSV lines id,lat,lon; without it, the nearest localities")
+    p.add_argument("--kind", action="append", help="localities of this kind only (town, village, ...); repeatable")
     p.add_argument("--db", default=DEFAULT_DB)
 
     p = sub.add_parser("zone", help="make a custom zone (delivery area) and check pins against it")
@@ -256,6 +266,22 @@ def _show(grid, args):
     return out
 
 
+def _nearest(grid, args):
+    if args.points:
+        with open(args.points, encoding="utf-8") as f:
+            text = f.read()
+        if text.lstrip().startswith("["):
+            points = [tuple(p) for p in json.loads(text)]
+        else:
+            import csv
+            points = [(r[0], float(r[1]), float(r[2])) for r in csv.reader(text.splitlines()) if r and
+                      not r[0].startswith("#") and r[0].strip().lower() != "id"]
+        found = grid.point_index(points).nearest(args.lat, args.lon, args.k, args.max_m)
+        return [n.to_dict() for n in found]
+    found = grid.nearest_places(args.lat, args.lon, args.k, args.max_m, kind=args.kind)
+    return [dict(n.to_dict(), id=n.id.id, key=n.id.key, name=n.id.name, kind=n.id.kind) for n in found]
+
+
 def _zone_summary(zone):
     b = zone.bounds()
     return {"sub_cells": zone.sub_cell_count, "cells": zone.cell_count, "full_cells": len(zone.cells(full_only=True)),
@@ -378,6 +404,7 @@ _COMMANDS = {
         a.lat, a.lon, a.radius, level=a.level, pakistan_only=a.pakistan_only, touching=a.touching)]),
     "distance": _with_grid(lambda grid, a: grid.distance(a.a, a.b).to_dict()),
     "zone": _with_grid(_zone),
+    "nearest": _with_grid(_nearest),
     "geojson": _geojson,
     "info": _with_grid(lambda grid, a: grid.info()),
     "export-layout": _export_layout,

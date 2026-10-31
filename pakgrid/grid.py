@@ -292,6 +292,7 @@ class Grid:
         self._boundary = None
         self._places = None
         self._keys = None
+        self._place_index = None
         self._load_lock = threading.Lock()
         self._user = None
         self._has_places = None
@@ -476,6 +477,50 @@ class Grid:
             return found
         flags = self._flags(found, level)
         return [i for i in found if flags.get(i, OUTSIDE) != OUTSIDE]
+
+    # -- Nearest lookup (pakgrid.nearest) --------------------------------------
+
+    def point_index(self, points=()):
+        """A PointIndex for nearest searches over points kept in memory (riders, a shop list);
+        `points` is an optional iterable of (id, lat, lon) to start with."""
+        from .nearest import PointIndex
+        index = PointIndex(self)
+        index.add_many(points)
+        return index
+
+    def nearest(self, lat, lon, fetch, k=5, max_m=None, where=None):
+        """The k nearest points stored outside the library (e.g. shops in your database, with
+        their cell ID), nearest first: [Neighbour] whose `id` is the item fetch returned.
+
+        fetch(cell_ids) returns (item, lat, lon) rows for the points in those cells; it is called
+        a few times with cells further and further from the pin, never twice for a cell.
+        """
+        from .nearest import search
+        counter = [0]
+
+        def points_in(cell_ids):
+            out = []
+            for item, plat, plon in fetch(cell_ids):
+                counter[0] += 1
+                out.append((counter[0], item, plat, plon))
+            return out
+        return search(self, lat, lon, k, max_m, points_in, where)
+
+    def nearest_places(self, lat, lon, k=5, max_m=None, kind=None):
+        """The k nearest localities (official ones, by their point) to the pin, nearest first:
+        [Neighbour] whose `id` is the Place. kind: only those of this kind ('town', 'village', ...)
+        or kinds (a set)."""
+        if self._place_index is None:
+            table = self._place_table()
+            with self._load_lock:
+                if self._place_index is None:
+                    self._place_index = self.point_index(
+                        (p.id, p.lat, p.lon) for p in table.values() if p.level == "locality")
+        kinds = {kind} if isinstance(kind, str) else set(kind) if kind else None
+        table = self._place_table()
+        found = self._place_index.nearest(lat, lon, k, max_m,
+                                          where=(lambda pid: table[pid].kind in kinds) if kinds else None)
+        return [type(n)(table[n.id], n.lat, n.lon, n.distance_m, n.bearing_deg) for n in found]
 
     # -- GeoJSON ------------------------------------------------------------
 
