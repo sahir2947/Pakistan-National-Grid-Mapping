@@ -178,6 +178,38 @@ def main(argv=None):
         a.add_argument("--local-name", help="the name in Urdu or another local script")
         a.add_argument("--ref", action="append", metavar="KEY", help="a known locality to locate it from; repeatable")
         a.add_argument("--nearest", type=int, metavar="N", help="also locate it from the N nearest localities")
+    for name, helptext in (("add-road", "add a road or street"), ("update-road", "change a road")):
+        a = act.add_parser(name, help=helptext)
+        if name == "add-road":
+            a.add_argument("name")
+        else:
+            a.add_argument("key")
+            a.add_argument("--name")
+        a.add_argument("--author", required=True)
+        a.add_argument("--line", metavar="FILE", required=name == "add-road",
+                       help="JSON file: [[lat, lon], ...] or a GeoJSON LineString")
+        a.add_argument("--kind", default="street" if name == "add-road" else None,
+                       help="street, gali, road, main road, highway, track, path (default street)")
+        a.add_argument("--local-name", help="the name in Urdu or another local script")
+        a.add_argument("--oneway", action="store_true", default=None, help="one-way, in the direction drawn")
+        a.add_argument("--surface", help="paved, unpaved, ...")
+        a.add_argument("--vehicles", nargs="+", choices=("car", "motorbike", "bicycle", "foot"),
+                       help="the vehicles allowed")
+        a.add_argument("--width-m", type=float)
+        a.add_argument("--speed-kmh", type=float)
+    a = act.add_parser("remove-road", help="remove a road (its history is kept)")
+    a.add_argument("key")
+    a.add_argument("--author", required=True)
+    a = act.add_parser("roads", help="list the roads")
+    a.add_argument("text", nargs="?", help="only those whose name contains this text")
+    a = act.add_parser("road", help="describe a road: length, cells, places, junctions")
+    a.add_argument("key")
+    a = act.add_parser("near-road", help="the road nearest a pin (within 100 m, or --max-m)")
+    a.add_argument("lat", type=float)
+    a.add_argument("lon", type=float)
+    a.add_argument("--max-m", type=float, default=100.0)
+    a = act.add_parser("roads-geojson", help="every road as GeoJSON lines")
+    a.add_argument("-o", "--output", metavar="FILE")
     a = act.add_parser("remove", help="remove a locality (its history is kept)")
     a.add_argument("key")
     a.add_argument("--author", required=True)
@@ -463,6 +495,39 @@ def _user_action(grid, user, args):
         if a == "add":
             return user.add(args.name, references=args.ref or (), **common).to_dict()
         return user.update(args.key, name=args.name, references=args.ref, **common).to_dict()
+    if a in ("add-road", "update-road"):
+        line = None
+        if args.line:
+            with open(args.line, encoding="utf-8") as f:
+                line = json.load(f)
+        details = {k: v for k, v in (("oneway", args.oneway), ("surface", args.surface), ("vehicles", args.vehicles),
+                                     ("width_m", args.width_m), ("speed_kmh", args.speed_kmh)) if v is not None}
+        if a == "add-road":
+            return user.add_road(args.name, author=args.author, line=line, kind=args.kind,
+                                 local_name=args.local_name, details=details).to_dict()
+        old = user.get_road(args.key)
+        return user.update_road(args.key, author=args.author, name=args.name, line=line, kind=args.kind,
+                                local_name=args.local_name,
+                                details={**old.details, **details} if details else None).to_dict()
+    if a == "remove-road":
+        return user.remove_road(args.key, author=args.author).to_dict()
+    if a == "roads":
+        found = user.find_roads(args.text) if args.text else user.roads()
+        return [{"key": r.key, "name": r.name, "kind": r.kind, "length_m": r.length_m, "sub_cells": r.sub_cell_count}
+                for r in found]
+    if a == "road":
+        return user.describe_road(args.key)
+    if a == "near-road":
+        m = user.nearest_road(args.lat, args.lon, args.max_m)
+        return m.to_dict() if m else None
+    if a == "roads-geojson":
+        text = json.dumps(user.roads_geojson(), ensure_ascii=False, separators=(",", ":"))
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(text)
+            return {"written": args.output}
+        print(text)
+        return None
     if a == "remove":
         return user.remove(args.key, author=args.author).to_dict()
     if a == "list":

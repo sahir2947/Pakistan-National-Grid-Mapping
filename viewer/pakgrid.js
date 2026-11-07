@@ -1528,6 +1528,59 @@
     return best;
   };
 
+  // -- User roads (same rules as pakgrid.roads) -----------------------------------
+
+  // {cell ID: mask} of every sub-cell whose closed box the line [[lat, lon], ...] touches.
+  Grid.prototype.lineMasks = function (line) {
+    var pts = [], masks = {}, self = this;
+    line.forEach(function (p) {
+      var q = [toE7(p[0]), toE7(p[1])];
+      if (!pts.length || pts[pts.length - 1][0] !== q[0] || pts[pts.length - 1][1] !== q[1]) pts.push(q);
+    });
+    for (var k = 0; k + 1 < pts.length; k++) {
+      var y1 = pts[k][0], x1 = pts[k][1], y2 = pts[k + 1][0], x2 = pts[k + 1][1];
+      var ymin = Math.min(y1, y2), ymax = Math.max(y1, y2), xmin = Math.min(x1, x2), xmax = Math.max(x1, x2);
+      this.quadrants.forEach(function (ql) {
+        var lats = ql.latE7, n5 = lats.length - 1;
+        if (ql.westE7 > xmax || ql.eastE7 < xmin || lats[0] > ymax || lats[n5] < ymin) return;
+        var i0 = Math.max(bisectLeft(lats, ymin) - 1, 0), i1 = Math.min(bisectRight(lats, ymax) - 1, n5 - 1);
+        for (var i = i0; i <= i1; i++) {
+          var lo = Math.max(lats[i], ymin), hi = Math.min(lats[i + 1], ymax), a, b;
+          if (lo > hi) continue;
+          if (y1 === y2) { a = xmin; b = xmax; }
+          else {
+            var xa = x1 + (lo - y1) * (x2 - x1) / (y2 - y1), xb = x1 + (hi - y1) * (x2 - x1) / (y2 - y1);
+            a = Math.min(xa, xb); b = Math.max(xa, xb);
+          }
+          a = Math.max(a, ql.westE7); b = Math.min(b, ql.eastE7);
+          if (a > b) continue;
+          var row = Math.floor(i / SUB), sr = i % SUB, m5 = SUB * ql.ncols[row];
+          var edge = function (j) { return toE7(fineLon(ql, row, j)); };
+          var j0 = Math.min(Math.max(Math.floor((a - ql.westE7) * m5 / (ql.eastE7 - ql.westE7)), 0), m5 - 1);
+          while (j0 > 0 && edge(j0) >= a) j0--;
+          while (j0 < m5 - 1 && edge(j0 + 1) < a) j0++;
+          var j1 = Math.min(Math.max(Math.floor((b - ql.westE7) * m5 / (ql.eastE7 - ql.westE7)), 0), m5 - 1);
+          while (j1 < m5 - 1 && edge(j1 + 1) <= b) j1++;
+          while (j1 > 0 && edge(j1) > b) j1--;
+          for (var j = j0; j <= j1; j++) {
+            var c = cellId(ql.q, row, Math.floor(j / SUB)), bit = sr * SUB + j % SUB;
+            if (!maskHas(masks[c] || 0, bit)) masks[c] = (masks[c] || 0) + Math.pow(2, bit);
+          }
+        }
+      });
+    }
+    return masks;
+  };
+  // A line's length in metres, as pakgrid.roads.line_length_m (points rounded to 1e-7 degree).
+  function lineLength(line) {
+    var total = 0;
+    for (var k = 0; k + 1 < line.length; k++) {
+      total += direction(toE7(line[k][0]) / SCALE, toE7(line[k][1]) / SCALE,
+                         toE7(line[k + 1][0]) / SCALE, toE7(line[k + 1][1]) / SCALE).distance_m;
+    }
+    return total;
+  }
+
   Places.prototype.path = function (place) {
     var out = [];
     for (var p = place; p; p = this.byId[p.parentId]) out.push(p);
@@ -1540,7 +1593,7 @@
     localOffset: localOffset, applyOffset: applyOffset, addressText: addressText, bearing: bearing, compass: compass, direction: direction, turnWords: turnWords,
     formatDistance: formatDistance, NavigationSession: NavigationSession, cellId: cellId, subCellId: subCellId,
     pointInRings: pointInRings, Zone: Zone, geojsonGeometry: geojsonGeometry, PointIndex: PointIndex,
-    BlockSet: BlockSet, codeMasks: codeMasks,
+    BlockSet: BlockSet, codeMasks: codeMasks, lineLength: lineLength,
     cellCode: cellCode, subCellCode: subCellCode
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
