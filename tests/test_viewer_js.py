@@ -720,3 +720,40 @@ def test_javascript_blocks_match_python(lahore_db):
             assert (js["city"] or {}).get("relation") == (py["city"] or {}).get("relation")
             assert js["references"][0]["text"] == py["references"][0]["text"]
             assert js["label"] == py["label"] and js["outside_pakistan_sub_cells"] == py["outside_pakistan_sub_cells"]
+
+
+_JS_ROADS = """
+const P = require(process.argv[1] + '/pakgrid.js');
+const grid = new P.Grid(require(process.argv[1] + '/layout.js'));
+const lines = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify(lines.map((l) => ({ masks: grid.lineMasks(l), length: P.lineLength(l) }))));
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_road_preview_matches_python():
+    """The viewer's Roads tool finds the same sub-cells and length as UserPlaces.add_road."""
+    from pakgrid.layout import GridLayout, to_e7
+    from pakgrid.roads import line_length_m, line_masks
+    layout = GridLayout.from_spec()
+    rng = random.Random(131)
+    lines = [[[31.5201, 74.3571], [31.5203, 74.3590], [31.5210, 74.3602]], [[30.0, 69.30], [30.2, 69.55]],
+             [[30.20, 69.3], [30.32, 69.32]], [[31.52, 74.30], [31.52, 74.40]], [[31.50, 74.35], [31.56, 74.35]]]
+    for _ in range(25):
+        lat, lon = 24.5 + rng.random() * 12, 61.5 + rng.random() * 15
+        line = [[lat, lon]]
+        for _ in range(rng.randint(1, 6)):
+            lat += (rng.random() - 0.5) * 0.05
+            lon += (rng.random() - 0.5) * 0.05
+            line.append([round(lat, 7), round(lon, 7)])
+        lines.append(line)
+    got = json.loads(subprocess.run([NODE, "-e", _JS_ROADS, str(VIEWER)], input=json.dumps(lines),
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
+    for line, js in zip(lines, got):
+        pts = []
+        for a, b in line:
+            q = (to_e7(a), to_e7(b))
+            if not pts or pts[-1] != q:
+                pts.append(q)
+        assert {int(k): v for k, v in js["masks"].items()} == line_masks(layout, pts), line
+        assert js["length"] == pytest.approx(line_length_m(pts), abs=1e-6)

@@ -54,6 +54,7 @@ from . import ids, navigate
 from .errors import InvalidIdError, NotInDatabaseError, PakgridError
 from .layout import SCALE, SUB, to_e7
 from . import zones as _zones
+from .roads import RoadsMixin
 from .zones import ZoneError, polygon_masks, rings_e7
 
 USER_PLACES_VERSION = 1
@@ -187,7 +188,7 @@ def _check_text(value, what, required=True):
     return re.sub(r"\s+", " ", value).strip()
 
 
-class UserPlaces:
+class UserPlaces(RoadsMixin):
     """The user localities file. Get one with `Grid.attach_user_places(path)`, which creates it if
     needed; it then answers `Grid.place` and `Grid.locate` together with the official layer."""
 
@@ -214,6 +215,7 @@ class UserPlaces:
                                   f"not {USER_PLACES_VERSION}")
         if meta.get("grid_version") != grid.meta["grid_version"]:
             raise UserPlacesError(f"{self.path.name} was made for grid version {meta.get('grid_version')}")
+        self._ensure_road_tables(db)            # user roads (pakgrid.roads), added to older files too
 
     @property
     def _db(self):
@@ -425,8 +427,11 @@ class UserPlaces:
     # -- Backup ----------------------------------------------------------------------
 
     def export_data(self, include_removed=False):
-        """Every locality as JSON-ready data, to back up or move to another server (see import_data)."""
+        """Every locality and road as JSON-ready data, to back up or move to another server (see import_data)."""
         return {"user_places_version": USER_PLACES_VERSION, "exported_at": _now(),
+                "roads": [{"key": r.key, "name": r.name, "local_name": r.local_name, "kind": r.kind,
+                           "line": [list(p) for p in r.line], "details": r.details, "created_by": r.created_by,
+                           "created_at": r.created_at, "removed": r.removed} for r in self.roads(include_removed)],
                 "localities": [{"key": loc.key, "name": loc.name, "local_name": loc.local_name, "kind": loc.kind,
                                 "shape": loc.shape, "references": [r.place_key for r in loc.references],
                                 "created_by": loc.created_by, "created_at": loc.created_at,
@@ -434,8 +439,8 @@ class UserPlaces:
                                for loc in self.localities(include_removed)]}
 
     def import_data(self, data, *, author):
-        """Add the localities of export_data() output (skipping removed ones and keys already
-        here). Returns the localities added."""
+        """Add the localities and roads of export_data() output (skipping removed ones and keys
+        already here). Returns the localities and roads added."""
         if data.get("user_places_version") != USER_PLACES_VERSION:
             raise UserPlacesError(f"not user places version {USER_PLACES_VERSION} data")
         added = []
@@ -446,6 +451,11 @@ class UserPlaces:
             added.append(self.add(item["name"], author=author, kind=item["kind"], local_name=item.get("local_name"),
                                   polygon=shape.get("polygon"), cells=shape.get("sub_cells"),
                                   references=item["references"], nearest=0 if item["references"] else None))
+        for item in data.get("roads", []):
+            if item.get("removed") or self._one("SELECT 1 FROM roads WHERE key = ?", (item["key"],)):
+                continue
+            added.append(self.add_road(item["name"], author=author, line=item["line"], kind=item["kind"],
+                                       local_name=item.get("local_name"), details=item.get("details")))
         return added
 
     # -- Internals ------------------------------------------------------------------

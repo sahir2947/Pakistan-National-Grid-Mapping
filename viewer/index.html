@@ -100,6 +100,7 @@
   <label class="toggle" title="Colour each block by its tehsil"><input type="checkbox" id="placeson"> Places</label>
   <label class="toggle" title="Show or hide the rectangle, quadrants, cells and sub-cells"><input type="checkbox" id="gridon" checked> Grid</label>
   <button type="button" id="measure" title="Distance and direction between two blocks: tap one, then the other">Measure</button>
+  <button type="button" id="roadsbtn" title="Draw a road or street and name it; see the sub-cells and places it passes">Roads</button>
   <button type="button" id="blocksbtn" title="Make your own blocks: click cells or draw a shape, give it a code and name">Blocks</button>
   <button type="button" id="zonebtn" title="Draw a delivery zone, check pins against it, and copy its data">Zone</button>
   <button type="button" id="draw" title="Draw a new locality and see the sub-cells it would tag">Draw</button>
@@ -633,6 +634,7 @@
   }
   function startMeasure(from) {
     if (nav.target) nav.close(true);
+    if (roading) stopRoad();
     if (blocking) stopBlocks();
     if (drawing) stopDrawing();
     if (zoning) stopZone();
@@ -719,9 +721,122 @@
     if (drawing) { addVertex(e.latlng.lat, e.latlng.lng); return; }
     if (zoning) { zoneTap(e.latlng.lat, e.latlng.lng); return; }
     if (blocking) { blockTap(e.latlng.lat, e.latlng.lng); return; }
+    if (roading) { roading.pts.push([+e.latlng.lat.toFixed(7), +e.latlng.lng.toFixed(7)]); roading.done = false; showRoad(); return; }
     if (measuring) { measureTap(e.latlng.lat, e.latlng.lng); return; }
     selectPoint(e.latlng.lat, e.latlng.lng, false);
   });
+
+  // -- User roads (pakgrid.roads) ---------------------------------------------------------
+  // Tap points along a road, press Done: the panel shows its length, the sub-cells it passes
+  // through (shaded) and the places it runs through, with the user.add_road(...) call that stores
+  // it with the library. Nothing is stored in the viewer.
+  var roading = null, roadsBtn = document.getElementById("roadsbtn");
+  function startRoad() {
+    if (nav.target) nav.close(true);
+    if (drawing) stopDrawing();
+    if (zoning) stopZone();
+    if (measuring) stopMeasure();
+    if (blocking) stopBlocks();
+    selLayer.clearLayers(); arrow = arrowMarker = null;
+    roading = { pts: [], done: false, name: "", local: "", kind: "street", oneway: false, surface: "", vehicles: {} };
+    roadsBtn.classList.add("on");
+    map.doubleClickZoom.disable();
+    showRoad();
+  }
+  function stopRoad() {
+    roading = null;
+    roadsBtn.classList.remove("on");
+    map.doubleClickZoom.enable();
+    selLayer.clearLayers();
+    showSummary();
+  }
+  roadsBtn.addEventListener("click", function () { if (roading) stopRoad(); else startRoad(); });
+  function roadDetails(r) {
+    var d = {}, v = Object.keys(r.vehicles).filter(function (k) { return r.vehicles[k]; });
+    if (r.oneway) d.oneway = true;
+    if (r.surface) d.surface = r.surface;
+    if (v.length) d.vehicles = ["car", "motorbike", "bicycle", "foot"].filter(function (k) { return v.indexOf(k) >= 0; });
+    return d;
+  }
+  function pyValue(v) {                     // a JSON value written as Python
+    return JSON.stringify(v).replace(/\btrue\b/g, "True").replace(/\bfalse\b/g, "False").replace(/\bnull\b/g, "None");
+  }
+  function showRoad() {
+    var r = roading, pts = r.pts, masks = r.done && pts.length >= 2 ? grid.lineMasks(pts) : null;
+    selLayer.clearLayers();
+    if (masks) {
+      new PakGrid.Zone(grid, masks).boxes().slice(0, 20000).forEach(function (x) {
+        L.rectangle([[x[0], x[1]], [x[2], x[3]]], { renderer: canvas, color: "#7c3aed", weight: 0.5, fillColor: "#7c3aed",
+                                                   fillOpacity: 0.22, interactive: false }).addTo(selLayer);
+      });
+    }
+    if (pts.length) {
+      L.polyline(pts, { color: "#111827", weight: 4, opacity: 0.85, interactive: false }).addTo(selLayer);
+      pts.forEach(function (p) {
+        L.circleMarker(p, { radius: 3.5, color: "#111827", fillColor: "#fff", fillOpacity: 1, weight: 2, interactive: false }).addTo(selLayer);
+      });
+      if (r.oneway && pts.length >= 2) {            // the end a one-way road runs towards
+        L.circleMarker(pts[pts.length - 1], { radius: 7, color: "#111827", fillColor: "#facc15", fillOpacity: 1, weight: 2,
+                                              interactive: false }).addTo(selLayer);
+      }
+    }
+    var kinds = ["street", "gali", "road", "main road", "highway", "track", "path"];
+    var html = "<h2>Draw a road</h2><div class='sub'>Tap the map along the road, from one end to the other, then press " +
+               "<b>Done</b>. A one-way road runs in the direction you draw it.</div>" +
+               "<p><button type='button' id='r-undo'" + (pts.length ? "" : " disabled") + ">Undo</button> " +
+               "<button type='button' id='r-done' class='on'" + (pts.length >= 2 ? "" : " disabled") + ">Done</button> " +
+               "<button type='button' id='r-cancel'>Cancel</button></p>" +
+               "<h3>Road</h3><input class='name' id='r-name' placeholder='Name, e.g. Street 7' value='" + esc(r.name) + "'>" +
+               "<input class='name' id='r-local' dir='rtl' placeholder='اردو نام (optional)' value='" + esc(r.local) + "' style='margin-top:4px'>" +
+               "<div class='around' style='margin-top:6px'><select id='r-kind'>" + kinds.map(function (k) {
+                 return "<option" + (k === r.kind ? " selected" : "") + ">" + k + "</option>"; }).join("") + "</select>" +
+               "<select id='r-surface'><option value=''>surface (optional)</option>" + ["paved", "unpaved", "gravel"].map(function (k) {
+                 return "<option" + (k === r.surface ? " selected" : "") + ">" + k + "</option>"; }).join("") + "</select>" +
+               "<label><input type='checkbox' id='r-oneway'" + (r.oneway ? " checked" : "") + "> one-way</label></div>" +
+               "<div class='around'><span class='sub'>Allowed (optional):</span>" + ["car", "motorbike", "bicycle", "foot"].map(function (v) {
+                 return "<label><input type='checkbox' data-vehicle='" + v + "'" + (r.vehicles[v] ? " checked" : "") + "> " + v + "</label>"; }).join("") + "</div>";
+    if (masks) {
+      var d = places.describe(grid, masks), n = d.size.sub_cells, len = PakGrid.lineLength(pts);
+      html += "<h3>What the library will store</h3>" + rowsHtml([
+                ["Length", len >= 1000 ? (len / 1000).toFixed(2) + " km" : Math.round(len) + " m"],
+                ["Sub-cells", n.toLocaleString() + " in " + d.size.cells + " cells"],
+                ["Runs through", d.label ? esc(d.label) : "outside Pakistan"],
+                ["Localities", d.places.locality.slice(0, 5).map(function (x) { return esc(x.name); }).join(", ") || "none"]]) +
+              (d.places.tehsil.length ? "" : "<p class='error'>The road must pass through Pakistan.</p>") +
+              "<h3>Add it with the library</h3><textarea id='r-code' readonly></textarea>" +
+              "<div class='sub'>Run this in your backend (it checks who may add roads; the library keeps the author and " +
+              "a history). The street then shows on lookups near it. See project.md §5.9.</div>" +
+              "<p><button type='button' id='r-geo'>Download GeoJSON</button></p>";
+    }
+    panel.innerHTML = html;
+    var q = function (id) { return document.getElementById(id); };
+    q("r-undo").onclick = function () { pts.pop(); r.done = false; showRoad(); };
+    q("r-done").onclick = function () { r.done = true; showRoad(); };
+    q("r-cancel").onclick = stopRoad;
+    var refresh = function () {
+      r.name = q("r-name").value; r.local = q("r-local").value; r.kind = q("r-kind").value;
+      r.surface = q("r-surface").value; r.oneway = q("r-oneway").checked;
+      panel.querySelectorAll("input[data-vehicle]").forEach(function (c) { r.vehicles[c.getAttribute("data-vehicle")] = c.checked; });
+      if (q("r-code")) {
+        var details = roadDetails(r);
+        q("r-code").value = "user = grid.attach_user_places(\"user_places.sqlite\")\n" +
+          "user.add_road(" + JSON.stringify(r.name || "New road") + ", author=request.user.username, kind=" + JSON.stringify(r.kind) +
+          (r.local ? ", local_name=" + JSON.stringify(r.local) : "") + ",\n              line=" + JSON.stringify(pts) +
+          (Object.keys(details).length ? ",\n              details=" + pyValue(details) : "") + ")";
+      }
+    };
+    ["r-name", "r-local"].forEach(function (id) { q(id).addEventListener("input", refresh); });
+    ["r-kind", "r-surface", "r-oneway"].forEach(function (id) { q(id).addEventListener("change", function () { refresh(); if (id === "r-oneway") showRoad(); }); });
+    panel.querySelectorAll("input[data-vehicle]").forEach(function (c) { c.addEventListener("change", refresh); });
+    refresh();
+    if (q("r-geo")) q("r-geo").onclick = function () {
+      var props = { name: r.name || null, local_name: r.local || null, kind: r.kind, length_m: Math.round(PakGrid.lineLength(pts) * 10) / 10 };
+      var det = roadDetails(r);
+      for (var k in det) props[k] = det[k];
+      downloadGeoJSON({ type: "Feature", geometry: { type: "LineString", coordinates: pts.map(function (p) { return [p[1], p[0]]; }) },
+                        properties: props }, "road.geojson");
+    };
+  }
 
   // -- Custom blocks (pakgrid.blocks) -------------------------------------------------
   // Make named, coded blocks by clicking cells (or sub-cells, from zoom 14) or drawing a shape.
@@ -739,6 +854,7 @@
   function saveBlockSet() { try { localStorage.setItem(BLOCK_KEY, JSON.stringify(blocking.set.toDict())); } catch (e) {} }
   function startBlocks() {
     if (nav.target) nav.close(true);
+    if (roading) stopRoad();
     if (drawing) stopDrawing();
     if (zoning) stopZone();
     if (measuring) stopMeasure();
@@ -928,6 +1044,7 @@
   var zoning = null, zoneBtn = document.getElementById("zonebtn");
   function startZone() {
     if (nav.target) nav.close(true);
+    if (roading) stopRoad();
     if (blocking) stopBlocks();
     if (drawing) stopDrawing();
     if (measuring) stopMeasure();
@@ -1051,6 +1168,7 @@
   var drawing = null, drawBtn = document.getElementById("draw");
   function startDrawing() {
     if (nav.target) nav.close(true);
+    if (roading) stopRoad();
     if (blocking) stopBlocks();
     if (measuring) stopMeasure();
     if (zoning) stopZone();
@@ -1191,6 +1309,7 @@
     if (drawing) stopDrawing();
     if (zoning) stopZone();
     if (blocking) stopBlocks();
+    if (roading) stopRoad();
     var two = /^\s*(\S+)\s+(?:to|-|→)\s+(\S+)\s*$/i.exec(document.getElementById("q").value);
     if (two && grid.parseCode(two[1]) && grid.parseCode(two[2])) {     // '11-0140-0471 to 11-0150-0480'
       startMeasure(grid.parseCode(two[1]));

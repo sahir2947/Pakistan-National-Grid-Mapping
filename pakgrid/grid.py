@@ -1,5 +1,6 @@
 """The public `Grid` class: lookups against the grid database."""
 
+import dataclasses
 import math
 import struct
 import threading
@@ -181,6 +182,12 @@ class PlaceTags:
     locality_direction: str | None = None      # 16-point compass direction of that, e.g. 'SE'
     osm_locality: Place | None = None          # the OpenStreetMap locality, also when a user one is shown
     user_locality: object = None               # the UserLocality shown as `locality`, if any
+    street: object = None                      # the nearest user road (pakgrid.roads.RoadMatch), if any
+
+    @property
+    def street_text(self):
+        """'Street 7' when on it (within 25 m), 'near Street 7, 40 m' within 100 m; None without one."""
+        return self.street.text if self.street is not None else None
 
     @property
     def locality_text(self):
@@ -197,9 +204,11 @@ class PlaceTags:
 
     @property
     def label(self):
-        """'Lahore Cant, Lahore Cantt, Lahore, Punjab': locality (where there is one), tehsil, district,
-        province. A name the same as the one before it is said once ('Taxila, Rawalpindi, Punjab')."""
-        names = ([self.locality_text] if self.locality else []) + [
+        """'Lahore Cant, Lahore Cantt, Lahore, Punjab': street (a user road, where one is near),
+        locality (where there is one), tehsil, district, province. A name the same as the one before
+        it is said once ('Taxila, Rawalpindi, Punjab')."""
+        names = ([self.street_text] if self.street is not None else []) + \
+            ([self.locality_text] if self.locality else []) + [
             p.name for p in (self.tehsil, self.district, self.province) if p]
         return ", ".join(n for k, n in enumerate(names) if not k or n.lower() != names[k - 1].lower())
 
@@ -215,7 +224,8 @@ class PlaceTags:
             if self.user_locality is not None:
                 loc["references"] = [r.to_dict() for r in self.user_locality.references]
                 loc["osm_locality"] = brief(self.osm_locality)
-        return {"label": self.label, "locality": loc, "tehsil": brief(self.tehsil),
+        return {"label": self.label, "street": self.street.to_dict() if self.street is not None else None,
+                "locality": loc, "tehsil": brief(self.tehsil),
                 "district": brief(self.district), "province": brief(self.province)}
 
 
@@ -409,6 +419,8 @@ class Grid:
         in_pk = sub.pakistan == "inside" or (sub.pakistan == "border" and self.boundary.contains(lat, lon))
         place = (self._tags(cid, sub.index, lambda: (to_e7(sub.centroid[0]), to_e7(sub.centroid[1])))
                  if self.has_places else None)
+        if place is not None:
+            place = self._with_street(place, lat, lon)
         return Location(lat, lon, sub, offset, edge, accuracy_m, confident, candidates, in_pk, place)
 
     def _candidates(self, lat, lon, radius_m, own_id):
@@ -774,9 +786,21 @@ class Grid:
         def centroid():
             return self.layout.quadrants[q].item_centroid_e7(i, j, level)
         if level == "cell":
-            return self._tags(item_id, None, centroid)
-        cid, sub = ids.split_sub_cell_id(item_id)
-        return self._tags(cid, sub, centroid)
+            tags = self._tags(item_id, None, centroid)
+        else:
+            cid, sub = ids.split_sub_cell_id(item_id)
+            tags = self._tags(cid, sub, centroid)
+        if tags is None or self._user is None or not self._user.has_roads:
+            return tags
+        lat_e7, lon_e7 = centroid()
+        return self._with_street(tags, lat_e7 / SCALE, lon_e7 / SCALE)
+
+    def _with_street(self, tags, lat, lon):
+        """The tags with the nearest user road within 100 m of (lat, lon), if any."""
+        if self._user is None or not self._user.has_roads:
+            return tags
+        match = self._user.nearest_road(lat, lon)
+        return dataclasses.replace(tags, street=match) if match is not None else tags
 
     def places(self, level=None):
         """All places, or those of one level ("province", "district", "tehsil", "locality"), by ID."""

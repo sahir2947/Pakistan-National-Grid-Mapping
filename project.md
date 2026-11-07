@@ -700,6 +700,77 @@ The map viewer's **Draw** tool previews a polygon: the sub-cells it would
 tag, its tehsil, the nearest localities with distance and direction, and the
 `user.add(...)` call that adds it.
 
+### 5.9 User roads: streets drawn and named by an app's users
+
+OpenStreetMap misses many streets people use every day, above all in new
+housing schemes and villages, and a street name is what a rider looks for.
+An app's authorised users add roads by drawing a line along the road on the
+map and naming it. The library keeps them in the **user places file**
+(§5.8), beside user localities, with the same rules: the app decides who may
+edit, every change needs an `author`, and the full history is kept
+(`pakgrid/roads.py`). Roads already on the map (from OpenStreetMap) are not
+part of this, and cannot be renamed yet.
+
+```python
+user = grid.attach_user_places("user_places.sqlite")
+street = user.add_road("Street 7", author="ali", kind="street", local_name="گلی ۷",
+                       line=[(31.5201, 74.3571), (31.5203, 74.3590), (31.5210, 74.3602)],
+                       details={"oneway": False, "surface": "paved"})        # details are optional
+street.length_m                                    # 319.7
+user.road_sub_cells(street)                        # every sub-cell it passes through
+user.describe_road(street)                         # length, cells, places, junctions, label
+user.junctions(street)                             # [{'name': 'Main Boulevard', 'how': 'crosses', ...}]
+grid.locate(31.52025, 74.3580).place.label         # 'Street 7, Lahore Cant, Lahore Cantt, Lahore, Punjab'
+```
+
+**How a road is made:**
+
+- **Line:** two or more `(lat, lon)` points, or a GeoJSON LineString,
+  rounded to 10⁻⁷ degree, repeated points dropped. At most 5,000 points and
+  300 km.
+- **Sub-cells:** every sub-cell whose box the line touches, edges and
+  corners included. They are found exactly, segment by segment, one row of
+  sub-cells at a time, and checked against exact geometry in the tests. At
+  least one must be in Pakistan.
+- **Key:** the tehsil most of its sub-cells are in, then `roads`, then its
+  name, e.g. `punjab/lahore/lahore-cantt/roads/street-7`. The key never
+  changes, even if the road is renamed or redrawn.
+- **Length:** the sum of its segments, as `direction()` measures them.
+- **Kind:** `street` (default), `gali`, `road`, `main road`, `highway`,
+  `track`, `path`, or any other word.
+- **Details** (all optional):
+  - `oneway`: in the direction drawn;
+  - `surface`: paved, unpaved, …;
+  - `vehicles`: those allowed, from car, motorbike, bicycle, foot;
+  - `width_m`, `speed_kmh`;
+  - any other fields you like.
+
+  These are ready for routing later.
+
+**What the library gives back:**
+
+| | |
+|---|---|
+| `describe_road(road)` | `name`, `local_name`, `kind`, `details`, `length_m`, `start`, `end`, `sub_cells`, `cells`, `sub_cell_codes`, `places` (every province, district, tehsil and locality it passes through, with sub-cell counts, as §7.9), `city`, `nearest_locality`, `junctions`, and a `label` such as `Street 7, Lahore Cant, Lahore Cantt, Lahore, Punjab` |
+| `junctions(road)` | Where it meets other user roads, in order along it: the other road, the point, how far along, and `crosses`, or `meets` when an end of one road is within 12 m of the other (hand-drawn T-junctions rarely touch exactly) |
+| Lookups | With the file attached, `Grid.locate` and `Grid.place` add the **street**: the nearest user road within 100 m. It is *on* the road within 25 m (`Street 7`); beyond that it is `near Street 7, 40 m`. The street leads the label, and `PlaceTags.street` / `to_dict()["street"]` give the road, distance and nearest point. This adds ~0.1 ms to a lookup |
+| `nearest_road(lat, lon, max_m=100)` | The nearest road to a pin (up to 1 km), with its distance and nearest point |
+| `roads_in(sub_cells)`, `road_sub_cells(road)` | Roads through some sub-cells; the sub-cells of a road |
+| `road.to_geojson()`, `roads_geojson()` | GeoJSON LineStrings for the app's map |
+
+`update_road` changes the name, local name, kind, line (sub-cells and length
+are recomputed) or details, and `remove_road` hides a road while keeping its
+history. `road_history` lists every change. Roads are included in
+`export_data` / `import_data`. Older user places files gain the road tables
+when first opened.
+
+In the map viewer, **Roads** draws a road: tap along it and press Done, give
+it a name (and an Urdu name), a kind and optional details. The panel shows
+its length, the sub-cells it passes through, the places it runs through, and
+the `user.add_road(...)` call that stores it; the viewer itself stores
+nothing. Its JavaScript (`grid.lineMasks`, `PakGrid.lineLength`) finds the
+same sub-cells and length as the library.
+
 ---
 
 ## 6. Library architecture
@@ -720,6 +791,7 @@ pakgrid/
 ├── navigate.py   Distance, bearing and turn guidance between two points
 ├── places.py     The places layer: province, district, tehsil and locality tags (§5.7)
 ├── userplaces.py Localities drawn by users, kept in a separate file (§5.8)
+├── roads.py      Roads and streets drawn by users, in the same file (§5.9)
 ├── zones.py      Custom zones: sets of sub-cells, pin checks, stored form (§7.6)
 ├── geojson.py    GeoJSON: blocks, zones and places' exact outlines (§7.7)
 ├── nearest.py    Nearest lookup: PointIndex and the ring search (§7.8)
@@ -820,6 +892,9 @@ Every result object has a `to_dict()` method that returns JSON-ready data.
 | `user.history(key=None)` | Every change: time, author, action and the record after it |
 | `user.export_data()` / `user.import_data(data, author=...)` | Backup and restore as JSON |
 | `user.refresh(author=...)` | Recompute tehsils, centres and reference vectors after a new places version |
+| `user.add_road(name, author=..., line=..., kind="street", local_name=None, details=None)` | Add a road or street (§5.9): a `UserRoad` with `key`, `length_m`, `sub_cell_count`, `details` |
+| `user.update_road` / `remove_road` / `get_road` / `roads()` / `find_roads(text)` / `road_history()` | Change, hide, read and list roads |
+| `user.describe_road(road)`, `junctions(road)`, `nearest_road(lat, lon)`, `roads_geojson()` | A road's length, cells, places and junctions; the road nearest a pin; GeoJSON |
 
 With a user places file attached, `place`, `locate`, `find_places`,
 `get_place` and `cells_in_place` include user localities (`Place.user` is
@@ -880,6 +955,7 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 | `pakgrid build ... --no-places` / `pakgrid build-places [--db FILE]` | Build without the places layer / add or rebuild it in an existing database |
 | `pakgrid places [TEXT] [--level L] [--cells]` | List or search places (province, district, tehsil, locality); `--cells` prints the cells of one place |
 | `pakgrid user-places [--file F] add NAME (--polygon FILE \| --cells CODE...) --author A [--kind K] [--local-name L] [--ref KEY]... [--nearest N]` | Add a user locality (§5.8); also `update KEY`, `remove KEY`, `list`, `show KEY`, `history [KEY]`, `export FILE`, `import FILE`, `refresh` |
+| `pakgrid user-places add-road NAME --line FILE --author A [--kind K] [--local-name L] [--oneway] [--surface S] [--vehicles ...] [--width-m W] [--speed-kmh V]` | Add a user road (§5.9); also `update-road KEY`, `remove-road KEY`, `roads`, `road KEY`, `near-road LAT LON`, `roads-geojson` |
 | `pakgrid locate ... --user-places FILE` / `pakgrid show ... --user-places FILE` | Include user localities in the answer |
 
 The database path defaults to `pakgrid_v1.sqlite`, or the `PAKGRID_DB`
@@ -912,6 +988,8 @@ for checking the grid visually before it is used in an app:
   or paste a stored zone to see it (§7.6)
 - **Download GeoJSON** of a place, a zone, a block or radius search results (§7.7)
 - **Nearest places** to a tapped point, with distance and direction (§7.8)
+- **Roads:** draw a road or street, name it, and preview its length, sub-cells
+  and places, with the call that adds it (§5.9)
 - **Blocks:** make named blocks by clicking cells or drawing a shape, with
   each block's report (cells, size, places, city, directions), saved as JSON (§7.9)
 - **Draw:** preview a user locality (§5.8)
@@ -1694,6 +1772,7 @@ rider guidance on the phone. Step-by-step setup, with tested code:
 | Determinism | Two builds produce byte-identical files and the same checksum; test builds match recorded checksums on Linux, macOS and Windows; no centroid latitude is near enough to a rounding tie for platform differences in `sin`/`cos` to change it |
 | Official checksums | Both complete editions, built from scratch on Linux, macOS and Windows, match `pakgrid/checksums.py` (`.github/workflows/checksums.yml`) |
 | Shared use | One `Grid` shared by many threads, and used after a fork, gives the same answers as a single thread |
+| User roads | Sub-cells crossed equal exact segment-box geometry (random lines, both quadrant lines, lines along grid lines); length; keys; details validation; describe; junctions (crossing and a near miss at an end); the street on lookups (on, near, none) and the nearest point; update, remove, history; bad input refused leaving nothing; GeoJSON lines; export/import; older files gain the tables; the CLI; long roads quick; the viewer's JavaScript gives the same sub-cells and length |
 | Custom blocks | Building by clicks (toggle), polygons, circles and mixes; no overlap unless taken, with the clash named; pin and cell lookups; rename, recode, remove; stored form round trip and bad data; GeoJSON; descriptions: size, centre inside, cell codes, places with counts across a tehsil line, city in/near, nearest locality in open country, references, outside Pakistan, user localities; the CLI; the viewer's JavaScript stores the same JSON and describes blocks the same way |
 | Nearest lookup | Results equal measuring every point (dense, sparse, clustered, k from 1 to 25, many pins), with `max_m` and `where`; ties in insertion order; add, move and remove; across the quadrant midline; `Grid.nearest` asks each cell once and only around the pin; `nearest_places`; bad arguments; threads; the CLI; the viewer's JavaScript gives the same answers |
 | GeoJSON | Outlines cover exactly their sub-cells (every centroid around them tested) and enclose exactly their area; rings are closed, simple, axis-aligned, without straight-run points, anticlockwise outside and clockwise for holes, starting at their south-west corner; corners touching, holes, checkerboards, random sets, and sets across both quadrant lines; deterministic; valid in GEOS/Shapely (whole provinces, 200 random sets); place, zone and block features; the CLI; the viewer's JavaScript gives identical GeoJSON |
@@ -1724,6 +1803,7 @@ Windows, on every push to `main` and every pull request. The workflow also runs 
 | **Ports** ✅ | Navigation rules and conformance test file for apps that port navigation to their own language (`conformance/`) |
 | **Places layer** ✅ | Province, district, tehsil and locality tags on every cell and sub-cell (§5.7, places version 2) |
 | **User places** ✅ | Localities drawn by an app's users, located from known localities by distance and direction, with author history (§5.8) |
+| **User roads** ✅ | Roads and streets drawn and named by authorised users, with optional details, junctions, and the street on lookups (§5.9) |
 | **Custom blocks** ✅ | Users' own named blocks from clicked cells or drawn shapes, described (cells, size, places, city, directions) and stored anywhere as JSON (§7.9) |
 | **Nearest lookup** ✅ | The k nearest riders, shops (in memory or in the app's database) or localities to a pin, exact (§7.8) |
 | **GeoJSON** ✅ | Blocks, zones and places' exact outlines as valid, canonical GeoJSON for any map, in Python, the CLI and the viewer (§7.7) |

@@ -35,6 +35,7 @@ Features asked for by the project owner. Add new requests here.
 | R5 | **GeoJSON for backend and frontend** | ✅ | Blocks, sets of blocks, zones and places as GeoJSON for any map (Google Maps, Mapbox, Leaflet, flutter_map). Sets become exact merged outlines with holes, valid and canonical. Available as `grid.geojson`, `cells_geojson`, `place_geojson` and `zone.to_geojson`, as `pakgrid geojson`, and as viewer downloads; the viewer's JavaScript makes identical output (project.md §7.7) |
 | R6 | **Nearest lookup** | ✅ | The k nearest points to a pin, exact and nearest first. Three sources: points in memory (`PointIndex`: riders that move, shop lists), points in the app's own database by cell ID (`grid.nearest(lat, lon, fetch)`, reading only the cells around the pin), or localities (`grid.nearest_places`). Also `pakgrid nearest`, and "Nearest places" in the viewer (project.md §7.8) |
 | R7 | **Custom blocks** | ✅ | Users make their own named, coded blocks by clicking cells (or sub-cells) on the map or drawing a polygon; blocks in a set never overlap. Each block is described: cell codes, size (sub-cells, cells, area), province, district, tehsils, localities, city (in or near), and the distance and direction from the nearest place when it is in open country, or from any place you name. Stored anywhere as JSON or GeoJSON. Available as `grid.block_set`, `describe_zone`, `pakgrid blocks`, and a **Blocks** tool in the viewer (project.md §7.9) |
+| R8 | **User roads and streets** | ✅ | Authorised users draw roads and streets on the map and name them (also in Urdu), with optional details: one-way, surface, allowed vehicles, width, speed. The library records each road's exact sub-cells, length, places and junctions, keeps a history, and adds the nearest street to location lookups (`Street 7, Lahore Cant, …`). Stored in the user places file; available in the CLI and as a **Roads** tool in the viewer. Existing (OpenStreetMap) roads cannot be renamed yet (project.md §5.9) |
 
 ## Proposed
 
@@ -72,3 +73,4 @@ Features already in the library, for reference.
 | GeoJSON (R5) | `pakgrid/geojson.py`, project.md §7.7 |
 | Nearest lookup (R6) | `pakgrid/nearest.py`, project.md §7.8 |
 | Custom blocks (R7) | `pakgrid/blocks.py`, `pakgrid/describe.py`, project.md §7.9 |
+| User roads (R8) | `pakgrid/roads.py`, project.md §5.9 |

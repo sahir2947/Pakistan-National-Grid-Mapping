@@ -459,6 +459,33 @@ With several worker processes, each has its own index; send location updates
 to all of them, or keep riders in a shared store (Redis, the database) and use
 `grid.nearest` with a `fetch` that reads it.
 
+**Streets your users add.** Riders look for street names, and many streets
+are missing from the map in new schemes and villages. Let trusted staff draw
+a street in the app (a line of points) and name it; your backend checks the
+permission and stores it in the same user places file as user localities
+([project.md §5.9](../project.md#59-user-roads-streets-drawn-and-named-by-an-apps-users)):
+
+```python
+class UserRoadCreate(APIView):
+    permission_classes = [IsAuthenticated, DjangoModelPermissions]
+
+    def post(self, request):              # {"name": "Street 7", "line": [[lat, lon], ...], "oneway": false}
+        d = request.data
+        details = {k: d[k] for k in ("oneway", "surface", "vehicles", "width_m", "speed_kmh") if k in d}
+        try:
+            road = get_grid().user_places.add_road(d["name"], author=request.user.username, line=d["line"],
+                                                   kind=d.get("kind", "street"), local_name=d.get("local_name"),
+                                                   details=details)
+        except UserPlacesError as exc:
+            return Response({"error": str(exc)}, status=400)
+        return Response(get_grid().user_places.describe_road(road), status=201)
+```
+
+From then on, `place` in a `locate` response near the street carries it:
+`"street": {"name": "Street 7", "distance_m": 6.1, "on": true, ...}`, and
+the label leads with it. Send `user_places.roads_geojson()` to the app to draw
+the streets.
+
 **Your users' own blocks.** Let staff divide a city into territories in the
 app: they click cells or draw a shape, and name the block. Keep the block set's
 JSON in your database, and describe a block for the screen that shows it

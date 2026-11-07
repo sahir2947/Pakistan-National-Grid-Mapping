@@ -35,6 +35,15 @@ from zoom 14), or use **Measure from here** in a block's details, or search
 `11-0140-0471 to 11-0150-0480`. It shows the distance and direction between
 their centres, and the east/north metres.
 
+**Roads** previews a new user road (project.md §5.9):
+
+1. Tap along the road from one end to the other, then press **Done**.
+2. Give it a name (and an Urdu name), a kind, and optional details: one-way
+   (in the direction drawn), surface, allowed vehicles.
+3. The panel shows its length, the sub-cells it passes through (shaded) and
+   the places it runs through, with the `user.add_road(...)` call that stores
+   it with the library. **Download GeoJSON** saves the line.
+
 **Blocks** makes your own named blocks (project.md §7.9):
 
 1. Give a new block a code (and a name) and press **Create**.

@@ -233,6 +233,12 @@ separate file, located from known localities by distance and direction
 (`Gali 7, 500 m SW of Askari 2`), and every change is kept with its author
 (project.md §5.8).
 
+**User roads:** authorised users can draw roads and streets and name them, in
+English and Urdu, with optional details (one-way, surface, allowed
+vehicles). The library records the sub-cells each road passes through, its
+length, places and junctions, and adds the nearest street to location
+lookups: `Street 7, Lahore Cant, Lahore Cantt, Lahore, Punjab` (project.md §5.9).
+
 **Border flags:** every cell and sub-cell is flagged `inside`, `border` or
 `outside` Pakistan, using the geoBoundaries / OpenStreetMap border (including
 AJK and Gilgit-Baltistan). Border data © OpenStreetMap contributors, ODbL, via
