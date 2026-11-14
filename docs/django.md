@@ -401,7 +401,7 @@ centre (`null` for a locality mapped as an outline). Show `label` or
 and coverage: [PLACES_SOURCE.md](../pakgrid/data/PLACES_SOURCE.md).
 
 Other library calls that are useful behind an API (see
-[project.md §7.1](../project.md#71-python-library-16-functions)):
+[project.md §7.1](../project.md#71-python-library)):
 `grid.cells_in_area(...)` for a delivery zone, `grid.cells_within(lat, lon, radius_m)`
 for "shops that deliver here" or "riders near this order" (match the IDs against
 your indexed `cell_id` column), `grid.distance(a, b)` for the straight-line
@@ -723,6 +723,11 @@ formulas:
   example port.
 - **Showing a grid address as a point**, e.g. a rider opening
   `11-0140-0471-00 W23 S18`. Or ask your API (`/api/resolve` above).
+- **Showing a walkthrough**, if you use them: the rider rule that picks the
+  photo for the rider's position runs on the phone, from the walkthrough's
+  JSON and its photos downloaded when the job is assigned. Its exact rules are
+  in [conformance/WALKTHROUGH.md](../conformance/WALKTHROUGH.md), checked with
+  [conformance/walkthrough.json](../conformance/walkthrough.json) (610 cases).
 
 ## 8. Errors
 

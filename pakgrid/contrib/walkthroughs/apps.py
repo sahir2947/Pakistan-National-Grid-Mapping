@@ -1,3 +1,5 @@
+"""The app's configuration (label `pakgrid_walkthroughs`)."""
+
 from django.apps import AppConfig
 
 

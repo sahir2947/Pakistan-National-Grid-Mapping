@@ -110,7 +110,7 @@ v0.1 is the **grid itself**: a Python library and a static database.
 | 11 | Own static database as single source of truth | One read-only, versioned SQLite file | §5 |
 | 12 | Python compatible | Pure Python 3.10+, standard library only | §6 |
 | 13 | Efficient links between levels | The parent is encoded in the child's ID, so no link tables are needed | §4 |
-| 14 | No front end for now | Library and command-line tools only | — |
+| 14 | No front end for now | Library and command-line tools; the map viewer is a static page for checking the grid and trying features, not an app | §7.3 |
 
 **Out of scope for v0.1:**
 
@@ -950,10 +950,13 @@ pakgrid/
 ├── geodesy.py    Ellipsoid maths: meridian and parallel lengths, areas, centroids, vectors
 ├── layout.py     Each row's latitude band and column count (~3,000 rows)
 ├── ids.py        Pack/unpack IDs, readable codes, parent/children, validation
+├── address.py    Grid addresses: a sub-cell code plus an offset in metres (§4.4); no database
+├── boundary.py   Pakistan's border, and the inside / border / outside flags (§5.6)
 ├── errors.py     Exception types
 ├── builder.py    Walks the grid and writes the database (build phase only)
 ├── store.py      Read-only database access; unpacks sub-cell records
 ├── verify.py     Checks a database against the grid rules and its checksum
+├── checksums.py  Official checksums of the complete databases and of the places layer
 ├── grid.py       The public Grid class
 ├── navigate.py   Distance, bearing and turn guidance between two points
 ├── places.py     The places layer: province, district, tehsil and locality tags (§5.7)
@@ -968,9 +971,15 @@ pakgrid/
 ├── describe.py   An area's size, places and where it is (§7.9)
 ├── data/         Pakistan's border and the places sources (places-v2.json.gz)
 ├── contrib/walkthroughs/  Optional Django app for walkthroughs (§5.10; needs pakgrid[django])
-└── cli.py        Command-line tools
+├── export.py     Writes the map viewer's data files: layout.js, boundary.js, places.js (§7.3)
+├── conformance.py Writes the conformance files for ports: navigation.json, walkthrough.json
+├── cli.py        Command-line tools (§7.2)
+└── __main__.py   `python -m pakgrid` runs the command-line tools
 scripts/          make_places_data.py: makes data/places-v2.json.gz from the source downloads
-tests/            Gap/overlap, round-trip, uniqueness, determinism and accuracy tests
+viewer/           The map viewer (§7.3) and its JavaScript copy of the library (pakgrid.js)
+conformance/      Exact rules and test files for ports to other languages (navigation, walkthrough)
+docs/             Using pakgrid in a Django REST Framework backend (django.md)
+tests/            Every feature's tests (§14), run on Linux, macOS and Windows
 ```
 
 ### 6.2 Principles
@@ -998,7 +1007,12 @@ tests/            Gap/overlap, round-trip, uniqueness, determinism and accuracy 
 
 ## 7. Public interface
 
-### 7.1 Python library: 16 functions
+### 7.1 Python library
+
+Everything starts from a `Grid`: `Grid.open(path, user_places=None)` opens a
+database (as a `with` block, or call `close()`), and one `Grid` can be shared
+by all the threads of a process. The 16 core functions come first; the
+features built on them follow, each with its own table.
 
 Integer cell IDs and sub-cell IDs can look alike, so functions that accept
 either take a `level` argument (`"cell"` or `"sub"`). A readable code sets the
@@ -1037,6 +1051,9 @@ level by itself.
 | 16 | `info()` | Grid version, corners, counts, database coverage and edition, border flag counts, attribution, checksums |
 
 Every result object has a `to_dict()` method that returns JSON-ready data.
+`Cell` and `SubCell` carry their `bounds` as a `Bounds` (`south`, `west`,
+`north`, `east`, `contains(lat, lon)`), and `pakgrid.GRID_VERSION` is the grid
+version the library implements (1).
 
 **Places** (§5.7; need the places layer, which `pakgrid build` adds):
 
@@ -1066,6 +1083,36 @@ Every result object has a `to_dict()` method that returns JSON-ready data.
 | `user.add_road(name, author=..., line=..., kind="street", local_name=None, details=None)` | Add a road or street (§5.9): a `UserRoad` with `key`, `length_m`, `sub_cell_count`, `details` |
 | `user.update_road` / `remove_road` / `get_road` / `roads()` / `find_roads(text)` / `road_history()` | Change, hide, read and list roads |
 | `user.describe_road(road)`, `junctions(road)`, `nearest_road(lat, lon)`, `roads_geojson()` | A road's length, cells, places and junctions; the road nearest a pin; GeoJSON |
+
+`grid.attach_user_places(path)` attaches (or creates) the file and returns its
+`UserPlaces`; `grid.user_places` is the attached one, or `None`.
+
+**What can drive through a street** (§5.9, `pakgrid/access.py`; on the same `user`):
+
+| Function | Returns |
+|---|---|
+| `user.set_access(vehicles=None, *, author, largest=None, road=None, line=None, source_id=None, name=None)` | Record the answer for a user road (`road=`) or any other street (an access note: `line`, `source_id`, `name`); `largest="rickshaw"` means everything up to a rickshaw. Returns a `StreetAccess` |
+| `user.access_at(lat, lon, max_m=None)` | The answer for the nearest street with one within 25 m (or `max_m`, at most 100 m), as a `StreetAccess` (`vehicles`, `largest`, `nested`, `text` such as `Up to rickshaw size`, `allows(vehicle)`, `source`, `key`, `set_by`, `set_at`, `distance_m`), or `None` |
+| `user.remove_access(street, author=...)` | Take an answer back (a note's history is kept) |
+| `user.get_access_note(note)`, `access_notes()`, `access_history(note=None)`, `access_geojson()` | Read, list and trace access notes (`AccessNote`: `key`, `source_id`, `name`, `line`, `vehicles`, …) |
+| `pakgrid.VEHICLES`, `access.up_to(largest)`, `access.access_text(vehicles)` | The vehicles, smallest first, and the rules for lists and text (the same in the viewer's JavaScript) |
+
+Lookups carry the answer too: `PlaceTags.access` (and `"access"` in its
+`to_dict()`) within 25 m of a street that has one.
+
+**Walkthroughs** (§5.10, `pakgrid/walkthrough.py`):
+
+| Function | Returns |
+|---|---|
+| `grid.walkthrough(track, *, pin, author, start=None, properties=None)` | A `Walkthrough` from the GPS track recorded with a video (readings `(t, lat, lon[, accuracy_m])`, `t` seconds into the video): the cleaned path, `turns`, `frames` (video time, point, heading, distances, sub-cell, step text, image name), length and duration. `walkthrough.build(...)` does the same without a grid (no sub-cells) |
+| `wt.to_dict()` / `Walkthrough.from_dict(data)`, `wt.to_geojson()` | Its stored form (JSON) and a GeoJSON path with a point per photo |
+| `wt.ffmpeg_commands(video, out_dir, width=1280, quality=3)`, `wt.frame_times()` | One ffmpeg command per photo, to take the photos from the video |
+| `walkthrough.read_gpx(text, video_start=None)` | Readings from a GPS logger's GPX file |
+| `wt.guide()` → `WalkthroughGuide` | The rider rule: `update(lat, lon, accuracy_m=None)`, `show(i)`, `next()`, `previous()`, each returning a `GuideState` (`frame`, `progress_m`, `to_go_m`, `off_path_m`, `next_turn`, `next_turn_in_m`, `arrived`, `gps`, `text`) |
+
+The optional Django app (`pakgrid.contrib.walkthroughs`, `pakgrid[django]`)
+wraps these for a backend: upload, photo job, review and riders' access
+([docs/django.md](docs/django.md)).
 
 With a user places file attached, `place`, `locate`, `find_places`,
 `get_place` and `cells_in_place` include user localities (`Place.user` is
@@ -1100,11 +1147,23 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 
 `grid.boundary` gives the stored border itself (`contains(lat, lon)`).
 
-**Errors:** `OutsideGridError` (point outside the rectangle),
-`InvalidIdError` (an ID or code that is not in the grid),
-`NotInDatabaseError` (a valid cell missing from a partial build or the Pakistan edition),
-`GridMismatchError` (database built with different grid rules) and
-`IntegrityError` (database contents do not match the layout).
+**Errors:** every pakgrid error is a `PakgridError`, so one `except` catches
+them all:
+
+- `OutsideGridError`: a point outside the rectangle.
+- `InvalidIdError`: an ID or code that is not in the grid.
+- `NotInDatabaseError`: a valid cell missing from a partial build or the
+  Pakistan edition.
+- `GridMismatchError`: a database built with different grid rules.
+- `IntegrityError`: database contents that do not match the layout.
+- `UserPlacesError`: a user locality, road or access answer that cannot be
+  made as asked (bad shape, unknown reference, …).
+- `ZoneError`: bad zone data.
+- `BlockError`: a block clash, an unknown code or bad block data.
+- `WalkthroughError`: a track that cannot make a walkthrough (too few good
+  readings, too far from the start or pin, too long), or bad walkthrough data.
+
+The last four are also `ValueError`s.
 
 ### 7.2 Command-line tools
 
@@ -1121,8 +1180,8 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 | `pakgrid zone make (--polygon FILE \| --circle LAT LON M \| --cells CODE... \| --place KEY) [--pakistan-only] [-o FILE]` / `zone check FILE LAT LON` / `zone show FILE [--codes]` | Make a custom zone, check a pin, summarise one (§7.6) |
 | `pakgrid show CODE` | Print a cell's or sub-cell's details as JSON |
 | `pakgrid info` | Print grid and database information |
-| `pakgrid export-layout` | Write the map viewer's data: `viewer/layout.js` (row and column counts) and `viewer/boundary.js` (the border) |
-| `pakgrid export-conformance [-o DIR]` | Write the conformance test file for ports, `conformance/navigation.json` |
+| `pakgrid export-layout [-o DIR]` | Write the map viewer's data: `viewer/layout.js` (row and column counts), `viewer/boundary.js` (the border) and `viewer/places.js` (the places layer) |
+| `pakgrid export-conformance [-o DIR]` | Write the conformance test files for ports: `conformance/navigation.json` and `conformance/walkthrough.json` |
 | `pakgrid build ... --no-places` / `pakgrid build-places [--db FILE]` | Build without the places layer / add or rebuild it in an existing database |
 | `pakgrid places [TEXT] [--level L] [--cells]` | List or search places (province, district, tehsil, locality); `--cells` prints the cells of one place |
 | `pakgrid user-places [--file F] add NAME (--polygon FILE \| --cells CODE...) --author A [--kind K] [--local-name L] [--ref KEY]... [--nearest N]` | Add a user locality (§5.8); also `update KEY`, `remove KEY`, `list`, `show KEY`, `history [KEY]`, `export FILE`, `import FILE`, `refresh` |
@@ -1132,7 +1191,8 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 | `pakgrid locate ... --user-places FILE` / `pakgrid show ... --user-places FILE` | Include user localities in the answer |
 
 The database path defaults to `pakgrid_v1.sqlite`, or the `PAKGRID_DB`
-environment variable.
+environment variable. `python -m pakgrid` works the same as `pakgrid`, and
+every command has `--help`.
 
 ### 7.3 Map viewer
 
@@ -1162,7 +1222,11 @@ for checking the grid visually before it is used in an app:
 - **Download GeoJSON** of a place, a zone, a block or radius search results (§7.7)
 - **Nearest places** to a tapped point, with distance and direction (§7.8)
 - **Roads:** draw a road or street, name it, and preview its length, sub-cells
-  and places, with the call that adds it (§5.9)
+  and places, with the call that adds it; answer what can drive through it
+  (one button per vehicle), also for a street already on the map (§5.9)
+- **Walk:** load a walkthrough and its photos (or its video, whose photos are
+  taken in the browser), then tap where a rider is to see the photo, step and
+  distance to the door that the rider rule gives (§5.10)
 - **Blocks:** make named blocks by clicking cells or drawing a shape, with
   each block's report (cells, size, places, city, directions), saved as JSON (§7.9)
 - **Draw:** preview a user locality (§5.8)
@@ -1953,7 +2017,10 @@ rider guidance on the phone. Step-by-step setup, with tested code:
 | Radius search and distances | `cells_within` equals a brute-force measure of every block in a generous box (cells and sub-cells, centroid and touching, radius 0 to 20 km, near the south edge and a quadrant line); counts near π r²; `pakistan_only` equals the border flags; bad radii and levels are refused; `distance` equals `direction()` between centroids, both ways, mixed levels, outside the build; the CLI; the viewer's JavaScript gives the same IDs, distances and bearings |
 | User places | Sub-cells chosen by a polygon equal an independent ray-casting check (holes, GeoJSON, exact edges); tehsil, key and centre rules; references (named, nearest, by ID, user-to-user) match `direction()`, with errors for unknown, non-locality, duplicate and too-distant ones; bad input is refused and leaves nothing; lookups show the user locality with the OpenStreetMap one kept; smallest overlap wins; update, remove, history, export/import, reopen and refresh; ten threads adding at once; the CLI; the viewer's Draw preview equals the library |
 | Places layer | Known places get the right locality, tehsil, district and province (Lahore Cant, Taxila, Kot Addu, New Sukkur…); every sub-cell touching Pakistan has a tehsil in a complete build; the hierarchy is the official one and the same for any part built; split cells keep each sub-cell's tehsil and locality; the in/near rule; searches work both ways (by name, key or Urdu name); the viewer's JavaScript gives the same tags and exact shapes; the places checksum is the same on Linux, macOS and Windows and matches the official value for both editions |
-| Conformance file | `conformance/navigation.json` is up to date; the Python library and the JavaScript copy (through `conformance/runners/javascript.js`) pass all ~2,000 cases; it covers every heading source, status and call |
+| Conformance files | `conformance/navigation.json` and `conformance/walkthrough.json` are up to date (numbers within tolerance on another platform); the Python library and the JavaScript copy (through `conformance/runners/javascript.js` and `walkthrough.js`) pass all ~2,000 navigation and 610 walkthrough cases; they cover every heading source, status, GPS state and call |
+| What can drive through | The vehicle rules (`up_to`, lists, text) and the viewer's JavaScript agree on every combination; answers on user roads (kept in the road's history) and as access notes (updated by source ID, removed, history); bad input refused; the nearest answer wins, then the newest; lookups carry it; older files gain the tables; export/import; the CLI |
+| Walkthroughs | A clean walk gives the right length, turns and photos, each photo within metres of where the walker was at that video time; noise, bad readings, jumps and repeated times are dropped and counted; refusals (start or pin too far, too few readings, too long, too slow); the rider rule (forward, small steps back ignored, big ones taken, weak GPS, off the path, by hand, arrival); stored form, GeoJSON and ffmpeg commands; photos taken from a real video with ffmpeg; GPX; the CLI |
+| Walkthrough Django app | Upload, photo job, review, approval replacing the live one, riders only through the app's rule, refusals with reasons, sync / thread / Celery / cron jobs, a stuck job restarted, a failed job retried with its video, a refusing storage, private storage with expiring links, no grid database, migrations up to date; on Django 4.2, 5.2 and 6.1 |
 | GPS noise | Simulated noise: the true block is always the result or one of its `candidates` |
 | Border flags | Flags along the real border match an independent brute-force check (segment-box intersection plus ray casting); known places (Lahore, Skardu, Astola Island, Amritsar, the sea off Karachi) are classified correctly |
 | Pakistan edition | Same IDs and data as the full database for every stored cell; cells outside are absent; `verify --full` passes |
@@ -1982,7 +2049,9 @@ Windows, on every push to `main` and every pull request. The workflow also runs 
 | **GeoJSON** ✅ | Blocks, zones and places' exact outlines as valid, canonical GeoJSON for any map, in Python, the CLI and the viewer (§7.7) |
 | **Custom zones** ✅ | Delivery areas as sets of sub-cells from polygons, circles, cells and places, with fast pin checks and a compact stored form (§7.6) |
 | **Radius search and distances** ✅ | Blocks within a radius of a point and cell-to-cell distances, in Python, the CLI and the viewer, plus a Grid show/hide toggle (§7.5) |
-| **Next — Documentation guides** | A guide for every feature, for app developers |
+| **What can drive through** ✅ | Shop owners and residents say with a tap what can drive through a street; riders see it on lookups (§5.9) |
+| **Walkthroughs** ✅ stages 1–2 | Photos from the road to the door with a rider rule for ports, the viewer's Walk tool, and an optional Django app (§5.10). Stage 3 (blurring, several per address, expiry, feedback) later. A standalone pakgrid feature: no app uses it yet |
+| **Documentation** ✅ | Every feature documented: this file, the feature table in the README, [docs/django.md](docs/django.md), [viewer/README.md](viewer/README.md) and [conformance/](conformance/) |
 | **v0.1.0 release** | First tagged GitHub release, with the databases attached |
 | **Pilot** | Dukandaari in one city (Lahore or Karachi): addresses, batching, rider navigation |
 | **v1.0 — Public release** | Frozen grid v1, published database (full and Pakistan editions), documentation |
@@ -2037,3 +2106,17 @@ to use them in their application.
 | **Margin** | Distance from a point to the nearest edge of its block |
 | **Catalogue** | The pre-built set of all cells and sub-cells in the database |
 | **µs** | Microsecond: one millionth of a second |
+| **Grid address** | A sub-cell code plus an offset in metres from its centroid, e.g. `11-0140-0471-00 W23 S18`; turns back into the exact point with no database (§4.4) |
+| **Border flag** | Whether a cell or sub-cell is `inside`, on the `border` of, or `outside` Pakistan (§5.6) |
+| **Pakistan edition** | The database with only the cells touching Pakistan, with the same IDs as the full one (§5.6) |
+| **Places layer** | The province, district, tehsil and locality tags on every cell and sub-cell (§5.7) |
+| **Tehsil** | The administrative level below a district |
+| **Locality** | A city, town, village, neighbourhood or residential area; a block is *in* one or *near* one (§5.7) |
+| **User places file** | A separate SQLite file of an app's own localities, roads and access answers, with authors and history (§5.8–5.9) |
+| **User locality / user road** | A locality or street drawn and named by an app's authorised users (§5.8, §5.9) |
+| **Access note** | The answer to "what can drive through this street?" for a street with no user road (§5.9) |
+| **Zone** | A set of sub-cells, such as a delivery area, with fast pin checks (§7.6) |
+| **Block (custom)** | An app's own named, coded group of cells; blocks in a set never overlap (§7.9) |
+| **Walkthrough** | Photos of the walk from the road to a door, picked from a video and its GPS track (§5.10) |
+| **Rider rule** | The exact rule a rider's phone follows to pick the photo to show, written for ports (`conformance/WALKTHROUGH.md`) |
+| **Conformance file** | Inputs with expected results, so a port to another language can prove it matches pakgrid (`conformance/`) |
