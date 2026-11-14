@@ -37,6 +37,8 @@ The file is safe to share between the threads of a web server: each thread gets 
 connection, writes are transactions, and readers see each committed change at once.
 """
 
+from __future__ import annotations
+
 import contextlib
 import json
 import os
@@ -46,9 +48,11 @@ import struct
 import threading
 import weakref
 from collections import Counter
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from . import ids, navigate
 from .errors import InvalidIdError, NotInDatabaseError, PakgridError
@@ -56,7 +60,13 @@ from .layout import SCALE, SUB, to_e7
 from . import zones as _zones
 from .access import AccessMixin
 from .roads import RoadsMixin
-from .zones import ZoneError, polygon_masks, rings_e7
+from .zones import RingE7, ZoneError, polygon_masks, rings_e7
+
+if TYPE_CHECKING:
+    from .access import StreetAccess
+    from .grid import Grid, Place
+    from .layout import GridLayout
+    from .roads import UserRoad
 
 USER_PLACES_VERSION = 1
 USER_ID_BASE = 1_000_000_000     # user locality place IDs start above every official place ID
@@ -106,11 +116,11 @@ class Reference:
     north_m: float
 
     @property
-    def text(self):
+    def text(self) -> str:
         """'500 m SW of Askari 2'"""
         return f"{navigate.format_distance(self.distance_m)} {self.direction} of {self.place_name}"
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {"place_key": self.place_key, "place_name": self.place_name, "distance_m": self.distance_m,
                 "bearing_deg": self.bearing_deg, "direction": self.direction, "east_m": self.east_m,
                 "north_m": self.north_m, "text": self.text}
@@ -128,8 +138,8 @@ class UserLocality:
     lat: float                  # its centre: a covered sub-cell's centroid
     lon: float
     sub_cell_count: int
-    shape: dict                 # how it was drawn: {"polygon": [[lat, lon], ...] rings} or {"sub_cells": [...]}
-    references: tuple           # Reference, in the order given
+    shape: dict[str, Any]       # how it was drawn: {"polygon": [[lat, lon], ...] rings} or {"sub_cells": [...]}
+    references: tuple[Reference, ...]   # in the order given
     created_by: str
     created_at: str
     updated_by: str
@@ -138,15 +148,15 @@ class UserLocality:
     removed_at: str | None = None
 
     @property
-    def removed(self):
+    def removed(self) -> bool:
         return self.removed_at is not None
 
     @property
-    def text(self):
+    def text(self) -> str:
         """'Gali 7 (500 m SW of Askari 2)': the name and its first reference."""
         return f"{self.name} ({self.references[0].text})" if self.references else self.name
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "key": self.key, "name": self.name, "local_name": self.local_name,
                 "kind": self.kind, "tehsil_key": self.tehsil_key, "centre": [self.lat, self.lon],
                 "sub_cells": self.sub_cell_count, "shape": self.shape, "text": self.text,
@@ -157,31 +167,39 @@ class UserLocality:
 
 
 class _Connection:
-    def __init__(self, path):
+    def __init__(self, path: Path) -> None:
         self.pid = os.getpid()
         self.db = sqlite3.connect(path, check_same_thread=False, timeout=30)
         self.db.execute("PRAGMA foreign_keys = ON")
 
-    def close(self):
+    def close(self) -> None:
         if self.pid == os.getpid():
             self.db.close()
 
-    def __del__(self):
+    def __del__(self) -> None:
         try:
             self.close()
         except Exception:
             pass
 
 
-def _now():
+def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _slug(text):
+def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
-def _check_text(value, what, required=True):
+@overload
+def _check_text(value: object, what: str) -> str: ...
+@overload
+def _check_text(value: object, what: str, required: Literal[True]) -> str: ...
+@overload
+def _check_text(value: object, what: str, required: bool) -> str | None: ...
+
+
+def _check_text(value: object, what: str, required: bool = True) -> str | None:
     if value is None and not required:
         return None
     if not isinstance(value, str) or not value.strip():
@@ -193,11 +211,11 @@ class UserPlaces(RoadsMixin, AccessMixin):
     """The user localities file. Get one with `Grid.attach_user_places(path)`, which creates it if
     needed; it then answers `Grid.place` and `Grid.locate` together with the official layer."""
 
-    def __init__(self, path, grid):
+    def __init__(self, path: str | os.PathLike[str], grid: Grid) -> None:
         self.path = Path(path)
         self.grid = grid
         self._local = threading.local()
-        self._open = weakref.WeakSet()
+        self._open: weakref.WeakSet[_Connection] = weakref.WeakSet()
         self._lock = threading.Lock()
         self._write_lock = threading.RLock()
         self._closed = False
@@ -220,7 +238,7 @@ class UserPlaces(RoadsMixin, AccessMixin):
         self._ensure_access_tables(db)          # street access notes (pakgrid.access), likewise
 
     @property
-    def _db(self):
+    def _db(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
         if conn is None or conn.pid != os.getpid():
             if self._closed:
@@ -231,13 +249,13 @@ class UserPlaces(RoadsMixin, AccessMixin):
         return conn.db
 
     @contextlib.contextmanager
-    def _writing(self, db):
+    def _writing(self, db: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
         """One write transaction at a time in this process (SQLite allows one writer anyway; waiting
         on a Python lock is much quicker than SQLite's busy retries), committed or rolled back."""
         with self._write_lock, db:
             yield db
 
-    def close(self):
+    def close(self) -> None:
         self._closed = True
         with self._lock:
             conns = list(self._open)
@@ -246,8 +264,9 @@ class UserPlaces(RoadsMixin, AccessMixin):
 
     # -- Adding and changing -----------------------------------------------------
 
-    def add(self, name, *, author, polygon=None, cells=None, kind="neighbourhood", local_name=None,
-            references=(), nearest=None):
+    def add(self, name: str, *, author: str, polygon: Any = None, cells: Iterable[str | int] | None = None,
+            kind: str = "neighbourhood", local_name: str | None = None, references: Iterable[str | int] = (),
+            nearest: int | None = None) -> UserLocality:
         """Add a locality drawn as `polygon` (rings of (lat, lon), or a GeoJSON Polygon), or made of
         `cells` (cell and sub-cell codes, or sub-cell IDs; a cell means all 25 of its sub-cells).
 
@@ -272,14 +291,17 @@ class UserPlaces(RoadsMixin, AccessMixin):
                            "NULL,NULL,?)",
                            (key, name, local_name, kind, tehsil.key, lat, lon, len(subs), json.dumps(shape),
                             author, now, author, now, self._places_version())).lastrowid
+            assert n is not None                    # an INSERT always gives its row ID
             db.executemany("INSERT INTO locality_cells VALUES (?, ?)", [(n, s) for s in subs])
             self._write_refs(n, refs)
             loc = self._get(n)
             self._log(n, author, "add", loc)
         return loc
 
-    def update(self, locality, *, author, name=None, local_name=None, kind=None, polygon=None, cells=None,
-               references=None, nearest=None):
+    def update(self, locality: str | int | UserLocality, *, author: str, name: str | None = None,
+               local_name: str | None = None, kind: str | None = None, polygon: Any = None,
+               cells: Iterable[str | int] | None = None, references: Iterable[str | int] | None = None,
+               nearest: int | None = None) -> UserLocality:
         """Change a locality: any of its name, local name, kind, shape (polygon or cells) and
         references (references and nearest replace the old ones). Its key stays the same."""
         author = _check_text(author, "author")
@@ -289,7 +311,7 @@ class UserPlaces(RoadsMixin, AccessMixin):
         n = old.id - USER_ID_BASE
         db = self._db
         with self._writing(db):
-            fields = {}
+            fields: dict[str, Any] = {}
             if name is not None:
                 fields["name"] = _check_text(name, "name")
             if local_name is not None:
@@ -315,7 +337,7 @@ class UserPlaces(RoadsMixin, AccessMixin):
             self._log(n, author, "update", loc)
         return loc
 
-    def remove(self, locality, *, author):
+    def remove(self, locality: str | int | UserLocality, *, author: str) -> UserLocality:
         """Remove a locality: lookups stop showing it; its record and history are kept."""
         author = _check_text(author, "author")
         loc = self.get(locality)
@@ -327,7 +349,7 @@ class UserPlaces(RoadsMixin, AccessMixin):
             self._log(n, author, "remove", loc)
         return loc
 
-    def refresh(self, *, author):
+    def refresh(self, *, author: str) -> list[UserLocality]:
         """Recompute every locality's tehsil, centre and reference vectors against the grid's
         current places layer (after a new places version). Returns the localities that changed."""
         changed = []
@@ -355,7 +377,7 @@ class UserPlaces(RoadsMixin, AccessMixin):
 
     # -- Reading -------------------------------------------------------------------
 
-    def get(self, locality):
+    def get(self, locality: str | int | UserLocality) -> UserLocality:
         """A UserLocality by key, place ID or UserLocality (removed ones too)."""
         if isinstance(locality, UserLocality):
             locality = locality.id
@@ -369,52 +391,52 @@ class UserPlaces(RoadsMixin, AccessMixin):
             raise InvalidIdError(f"no such user locality: {locality!r}")
         return self._from_row(row)
 
-    def localities(self, include_removed=False):
+    def localities(self, include_removed: bool = False) -> list[UserLocality]:
         """All user localities, in the order they were added."""
         rows = self._db.execute(f"SELECT {_LOCALITY_COLUMNS} FROM localities"
                                 + ("" if include_removed else " WHERE removed_at IS NULL") + " ORDER BY id")
         return [self._from_row(r) for r in rows.fetchall()]
 
-    def find(self, text):
+    def find(self, text: str) -> list[UserLocality]:
         """User localities whose name or local name contains `text`, or whose key is `text`."""
         t = text.strip().lower()
         return [loc for loc in self.localities()
                 if t in loc.name.lower() or t == loc.key or (loc.local_name and t in loc.local_name)]
 
-    def sub_cells(self, locality):
+    def sub_cells(self, locality: str | int | UserLocality) -> list[int]:
         """IDs of a user locality's sub-cells, in ID order."""
         n = self.get(locality).id - USER_ID_BASE
         return [s for (s,) in self._db.execute(
             "SELECT sub_cell FROM locality_cells WHERE locality = ? ORDER BY sub_cell", (n,))]
 
-    def history(self, locality=None):
+    def history(self, locality: str | int | UserLocality | None = None) -> list[dict[str, Any]]:
         """Every change, oldest first: dicts of at, author, action, key and the locality after it."""
-        sql, args = "SELECT h.at, h.author, h.action, l.key, h.data FROM history h JOIN localities l " \
-                    "ON l.id = h.locality", ()
+        sql = "SELECT h.at, h.author, h.action, l.key, h.data FROM history h JOIN localities l ON l.id = h.locality"
+        args: tuple[Any, ...] = ()
         if locality is not None:
             sql, args = sql + " WHERE h.locality = ?", (self.get(locality).id - USER_ID_BASE,)
         return [{"at": at, "author": who, "action": action, "key": key, "locality": json.loads(data)}
                 for at, who, action, key, data in self._db.execute(sql + " ORDER BY h.id", args)]
 
-    def at_sub_cells(self, sub_cell_ids):
+    def at_sub_cells(self, sub_cell_ids: Iterable[int]) -> dict[int, UserLocality]:
         """{sub-cell ID: UserLocality} for those of the given sub-cells inside a user locality
         (the smallest, else the newest, where several overlap)."""
-        sub_cell_ids = list(sub_cell_ids)
-        best = {}
-        for k in range(0, len(sub_cell_ids), 900):
-            chunk = sub_cell_ids[k:k + 900]
+        wanted = list(sub_cell_ids)
+        best: dict[int, tuple[int, int]] = {}
+        for k in range(0, len(wanted), 900):
+            chunk = wanted[k:k + 900]
             for sid, n, size in self._db.execute(
                     "SELECT c.sub_cell, l.id, l.sub_cells FROM locality_cells c JOIN localities l ON l.id = c.locality "
                     f"WHERE l.removed_at IS NULL AND c.sub_cell IN ({','.join('?' * len(chunk))})", chunk):
                 if sid not in best or (size, -n) < best[sid]:
                     best[sid] = (size, -n)
-        got = {}
+        got: dict[int, UserLocality] = {}
         for sid, (_, neg) in best.items():
             if -neg not in got:
                 got[-neg] = self._get(-neg)
         return {sid: got[-neg] for sid, (_, neg) in best.items()}
 
-    def at_cell(self, cell_id):
+    def at_cell(self, cell_id: int) -> UserLocality | None:
         """The user locality of a cell: the one most of its 25 sub-cells have (sub-cells in none
         count too, as for OpenStreetMap localities), or None."""
         first = ids.sub_cell_id(cell_id, 0)
@@ -428,7 +450,7 @@ class UserPlaces(RoadsMixin, AccessMixin):
 
     # -- Backup ----------------------------------------------------------------------
 
-    def export_data(self, include_removed=False):
+    def export_data(self, include_removed: bool = False) -> dict[str, Any]:
         """Every locality, road and street access note as JSON-ready data, to back up or move to
         another server (see import_data)."""
         return {"user_places_version": USER_PLACES_VERSION, "exported_at": _now(),
@@ -444,13 +466,13 @@ class UserPlaces(RoadsMixin, AccessMixin):
                                 "removed": loc.removed}
                                for loc in self.localities(include_removed)]}
 
-    def import_data(self, data, *, author):
+    def import_data(self, data: Mapping[str, Any], *, author: str) -> list[UserLocality | UserRoad | StreetAccess]:
         """Add the localities, roads and access notes of export_data() output (skipping removed
         ones, keys already here, and notes for a source_id or line already here). Returns the
         localities, roads and StreetAccess answers added."""
         if data.get("user_places_version") != USER_PLACES_VERSION:
             raise UserPlacesError(f"not user places version {USER_PLACES_VERSION} data")
-        added = []
+        added: list[UserLocality | UserRoad | StreetAccess] = []
         for item in data["localities"]:
             if item.get("removed") or self._key_exists(item["key"]):
                 continue
@@ -476,36 +498,36 @@ class UserPlaces(RoadsMixin, AccessMixin):
 
     # -- Internals ------------------------------------------------------------------
 
-    def _one(self, sql, args):
+    def _one(self, sql: str, args: Sequence[Any]) -> tuple[Any, ...] | None:
         """The first row of a query, with the statement finished at once: an unfinished SELECT keeps
         its read snapshot open, which makes this connection's next write wait on SQLite's locks."""
         rows = self._db.execute(sql, args).fetchall()
-        return rows[0] if rows else None
+        return tuple(rows[0]) if rows else None
 
-    def _places_version(self):
+    def _places_version(self) -> int:
         return int(self.grid.meta.get("places_version", 0))
 
-    def _key_exists(self, key):
+    def _key_exists(self, key: str) -> bool:
         return self._one("SELECT 1 FROM localities WHERE key = ?", (key,)) is not None
 
-    def _free_key(self, base):
+    def _free_key(self, base: str) -> str:
         key, n = base, 2
         keys = self.grid._key_map()
         while key in keys or self._key_exists(key):
             key, n = f"{base}-{n}", n + 1
         return key
 
-    def _shape(self, polygon, cells):
+    def _shape(self, polygon: Any, cells: Iterable[str | int] | None) -> tuple[dict[str, Any], dict[int, int]]:
         """(shape to store, sorted sub-cell IDs in Pakistan) from a polygon or cells."""
         if (polygon is None) == (cells is None):
             raise UserPlacesError("give exactly one of polygon or cells")
         if polygon is not None:
             rings = _rings_e7(polygon)
-            shape = {"polygon": [[[y / SCALE, x / SCALE] for y, x in ring] for ring in rings]}
-            subs = _sub_cells_in_polygon(self.grid.layout, rings)
+            shape: dict[str, Any] = {"polygon": [[[y / SCALE, x / SCALE] for y, x in ring] for ring in rings]}
+            found: Iterable[int] = _sub_cells_in_polygon(self.grid.layout, rings)
         else:
-            subs = set()
-            for item in cells:
+            subs: set[int] = set()
+            for item in cells or ():
                 if isinstance(item, str):
                     level, item_id = ids.parse_code(item)
                 elif isinstance(item, int) and not isinstance(item, bool):
@@ -519,19 +541,21 @@ class UserPlaces(RoadsMixin, AccessMixin):
                 else:
                     subs.add(item_id)
             shape = {"sub_cells": sorted(ids.sub_cell_code(s) for s in subs)}
-        subs = self._in_pakistan(sorted(subs))
-        if not subs:
+            found = subs
+        tagged = self._in_pakistan(sorted(found))
+        if not tagged:
             raise UserPlacesError("the locality covers no sub-cell in Pakistan: a sub-cell counts when its "
                                   "centre is inside the polygon (sub-cells are ~200 m)")
-        if len(subs) > MAX_SUB_CELLS:
-            raise UserPlacesError(f"the locality covers {len(subs):,} sub-cells (~{len(subs) * 0.04:,.0f} km²); "
+        if len(tagged) > MAX_SUB_CELLS:
+            raise UserPlacesError(f"the locality covers {len(tagged):,} sub-cells (~{len(tagged) * 0.04:,.0f} km²); "
                                   f"at most {MAX_SUB_CELLS:,} are allowed")
-        return shape, subs
+        return shape, tagged
 
-    def _in_pakistan(self, subs):
+    def _in_pakistan(self, subs: Iterable[int]) -> dict[int, int]:
         """The sub-cells with a tehsil, as {sub-cell ID: tehsil place ID} in ID order."""
-        store, out = self.grid.store, {}
-        by_cell = {}
+        store = self.grid.store
+        out: dict[int, int] = {}
+        by_cell: dict[int, list[int]] = {}
         for s in subs:
             by_cell.setdefault(ids.parent(s), []).append(s)
         for cid, members in by_cell.items():
@@ -548,16 +572,15 @@ class UserPlaces(RoadsMixin, AccessMixin):
                     out[s] = tags[s & ids.SUB_MASK]
         return out
 
-    def _tehsil_and_centre(self, subs):
+    def _tehsil_and_centre(self, subs: Iterable[int] | dict[int, int]) -> tuple[Place, tuple[int, int]]:
         """(tehsil Place most of the sub-cells have, centre (lat_e7, lon_e7))."""
-        if not isinstance(subs, dict):
-            subs = self._in_pakistan(subs)
-        counts = Counter(subs.values())
+        tagged = subs if isinstance(subs, dict) else self._in_pakistan(subs)
+        counts = Counter(tagged.values())
         top = max(counts.values())
         tehsil = self.grid._place_table()[min(t for t, c in counts.items() if c == top)]
         layout = self.grid.layout
-        cents = []
-        for s in subs:
+        cents: list[tuple[int, int]] = []
+        for s in tagged:
             q, i, j = layout.item_from_id(s, "sub")
             cents.append(layout.quadrants[q].item_centroid_e7(i, j, "sub"))
         my = sum(c[0] for c in cents) / len(cents)
@@ -565,10 +588,11 @@ class UserPlaces(RoadsMixin, AccessMixin):
         centre = min(cents, key=lambda c: ((c[0] - my) ** 2 + (0.85 * (c[1] - mx)) ** 2, c))
         return tehsil, centre
 
-    def _references(self, lat_e7, lon_e7, keys, nearest, own=None, missing_ok=False):
+    def _references(self, lat_e7: int, lon_e7: int, keys: Iterable[str | int], nearest: int | None,
+                    own: int | None = None, missing_ok: bool = False) -> list[Reference]:
         """[Reference] from the named localities, then the `nearest` official ones not named."""
         lat, lon = lat_e7 / SCALE, lon_e7 / SCALE
-        points = []
+        points: list[tuple[str, str, float, float]] = []
         for key in keys:
             try:
                 points.append(self._ref_point(key, own))
@@ -579,18 +603,18 @@ class UserPlaces(RoadsMixin, AccessMixin):
         if nearest:
             if not isinstance(nearest, int) or nearest < 0:
                 raise UserPlacesError(f"nearest must be a whole number, got {nearest!r}")
-            found = []
+            found: list[tuple[float, int, Place]] = []
             for p in self.grid._place_table().values():
-                if p.level == "locality" and p.key not in named:
+                if p.level == "locality" and p.key not in named and p.lat is not None and p.lon is not None:
                     e, n = (p.lon - lon) * 94_350.0, (p.lat - lat) * 111_000.0
                     found.append((e * e + n * n, p.id, p))
             found.sort()
-            points += [(p.key, p.name, p.lat, p.lon) for _, _, p in found[:nearest]]
+            points += [(p.key, p.name, p.lat or 0.0, p.lon or 0.0) for _, _, p in found[:nearest]]
         if len(points) > MAX_REFERENCES:
             raise UserPlacesError(f"at most {MAX_REFERENCES} references are allowed")
         if len({p[0] for p in points}) != len(points):
             raise UserPlacesError("a reference is given twice")
-        refs = []
+        refs: list[Reference] = []
         for key, name, plat, plon in points:
             way = navigate.direction(plat, plon, lat, lon)
             if way.distance_m > MAX_REFERENCE_KM * 1000:
@@ -601,7 +625,7 @@ class UserPlaces(RoadsMixin, AccessMixin):
                                   way.compass_short, round(east, 1), round(north, 1)))
         return refs
 
-    def _ref_point(self, ref, own):
+    def _ref_point(self, ref: str | int, own: int | None) -> tuple[str, str, float, float]:
         """(key, name, lat, lon) of a reference: an official locality or another user locality."""
         p = None
         if isinstance(ref, int) and not isinstance(ref, bool) and ref < USER_ID_BASE:
@@ -619,20 +643,21 @@ class UserPlaces(RoadsMixin, AccessMixin):
             raise InvalidIdError(f"no such reference locality: {ref!r}")
         return loc.key, loc.name, loc.lat, loc.lon
 
-    def _write_refs(self, n, refs):
+    def _write_refs(self, n: int, refs: Iterable[Reference]) -> None:
         self._db.executemany("INSERT INTO refs VALUES (?,?,?,?,?,?,?,?,?)", [
             (n, k, r.place_key, r.place_name, r.distance_m, r.bearing_deg, r.direction, r.east_m, r.north_m)
             for k, r in enumerate(refs)])
 
-    def _log(self, n, author, action, loc):
+    def _log(self, n: int, author: str, action: str, loc: UserLocality) -> None:
         self._db.execute("INSERT INTO history (locality, at, author, action, data) VALUES (?,?,?,?,?)",
                          (n, _now(), author, action, json.dumps(loc.to_dict(), ensure_ascii=False)))
 
-    def _get(self, n):
+    def _get(self, n: int) -> UserLocality:
         row = self._one(f"SELECT {_LOCALITY_COLUMNS} FROM localities WHERE id = ?", (n,))
+        assert row is not None, f"no user locality {n}"
         return self._from_row(row)
 
-    def _from_row(self, r):
+    def _from_row(self, r: Sequence[Any]) -> UserLocality:
         refs = tuple(Reference(*x) for x in self._db.execute(
             "SELECT place_key, place_name, distance_m, bearing_deg, direction, east_m, north_m FROM refs "
             "WHERE locality = ? ORDER BY ord", (r[0],)))
@@ -646,21 +671,21 @@ class UserPlaces(RoadsMixin, AccessMixin):
 point_in_rings = _zones.point_in_rings
 
 
-def _rings_e7(polygon):
+def _rings_e7(polygon: Any) -> list[RingE7]:
     try:
         return rings_e7(polygon)
     except ZoneError as exc:
         raise UserPlacesError(str(exc)) from None
 
 
-def _sub_cells_in_polygon(layout, rings):
+def _sub_cells_in_polygon(layout: GridLayout, rings: Sequence[RingE7]) -> list[int]:
     """Sub-cell IDs whose centroid is inside the rings."""
     ys = [y for r in rings for y, _ in r]
     xs = [x for r in rings for _, x in r]
     # a sub-cell is ~0.0018 x 0.0021 degree: refuse boxes that could hold far too many before looking
     if (max(ys) - min(ys)) * (max(xs) - min(xs)) > MAX_SUB_CELLS * 16 * 18_000 * 21_000:
         raise UserPlacesError("the polygon is far too large for a locality")
-    out = []
+    out: list[int] = []
     for c, m in sorted(polygon_masks(layout, rings).items()):
         base = ids.sub_cell_id(c, 0)
         out.extend(base + k for k in range(SUB * SUB) if m >> k & 1)

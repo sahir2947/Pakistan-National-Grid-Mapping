@@ -30,13 +30,26 @@ Rules:
   Lookups (Grid.locate, Grid.place) carry it as PlaceTags.access.
 """
 
+from __future__ import annotations
+
 import json
 import math
+from collections.abc import Callable, Iterable, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from . import ids
 from .errors import InvalidIdError
 from .layout import SCALE, SUB
+
+if TYPE_CHECKING:
+    import sqlite3
+
+    from .grid import Grid
+    from .roads import UserRoad
+
+Vehicles = tuple[str, ...]
 
 VEHICLES = ("foot", "bicycle", "motorbike", "rickshaw", "car", "pickup", "truck")
 LABELS = {"foot": "on foot", "bicycle": "bicycle", "motorbike": "motorbike", "rickshaw": "rickshaw",
@@ -64,7 +77,7 @@ _NOTE_COLUMNS = ("id, source_id, name, line, length_m, vehicles, created_by, cre
                  "removed_by, removed_at")
 
 
-def up_to(largest):
+def up_to(largest: str) -> Vehicles:
     """Every vehicle up to and including `largest`, smallest first: up_to('rickshaw') is
     ('foot', 'bicycle', 'motorbike', 'rickshaw')."""
     if largest not in VEHICLES:
@@ -72,34 +85,35 @@ def up_to(largest):
     return VEHICLES[:VEHICLES.index(largest) + 1]
 
 
-def vehicles_list(vehicles, error=ValueError):
+def vehicles_list(vehicles: object, error: Callable[[str], Exception] = ValueError) -> Vehicles:
     """The vehicles, checked, without repeats, smallest first. At least one is needed."""
     if isinstance(vehicles, str) or not isinstance(vehicles, (list, tuple, set, frozenset)):
         raise error(f"vehicles must be a list, e.g. ['foot', 'motorbike'], got {vehicles!r}")
     bad = [v for v in vehicles if v not in VEHICLES]
     if bad:
         raise error(f"unknown vehicle {bad[0]!r}; the vehicles are {', '.join(VEHICLES)}")
+    assert isinstance(vehicles, (list, tuple, set, frozenset))
     if not vehicles:
         raise error("give at least one vehicle (['foot'] when only people on foot get through)")
     return tuple(v for v in VEHICLES if v in vehicles)
 
 
-def access_text(vehicles):
+def access_text(vehicles: Iterable[str]) -> str:
     """'On foot only', 'Up to rickshaw size', 'All vehicles', or 'Only on foot, motorbike'."""
-    vehicles = vehicles_list(vehicles)
-    if vehicles == ("foot",):
+    vs = vehicles_list(vehicles)
+    if vs == ("foot",):
         return "On foot only"
-    if vehicles == VEHICLES:
+    if vs == VEHICLES:
         return "All vehicles"
-    if vehicles == up_to(vehicles[-1]):
-        return f"Up to {LABELS[vehicles[-1]]} size"
-    return "Only " + ", ".join(LABELS[v] for v in vehicles)
+    if vs == up_to(vs[-1]):
+        return f"Up to {LABELS[vs[-1]]} size"
+    return "Only " + ", ".join(LABELS[v] for v in vs)
 
 
 @dataclass(frozen=True)
 class StreetAccess:
     """What can drive through a street (see the module docstring)."""
-    vehicles: tuple             # smallest first
+    vehicles: Vehicles          # smallest first
     source: str                 # 'road' (a user road's detail) or 'note' (an access note)
     key: str                    # the road's key, or 'note/<id>'
     name: str | None            # the street's name, if known
@@ -109,25 +123,25 @@ class StreetAccess:
     distance_m: float | None = None     # from the pin, for access_at
 
     @property
-    def largest(self):
+    def largest(self) -> str:
         return self.vehicles[-1]
 
     @property
-    def nested(self):
+    def nested(self) -> bool:
         """True when it is 'up to the largest': every smaller vehicle gets through too."""
         return self.vehicles == up_to(self.largest)
 
     @property
-    def text(self):
+    def text(self) -> str:
         return access_text(self.vehicles)
 
-    def allows(self, vehicle):
+    def allows(self, vehicle: str) -> bool:
         """Whether this vehicle gets through."""
         if vehicle not in VEHICLES:
             raise ValueError(f"unknown vehicle {vehicle!r}; the vehicles are {', '.join(VEHICLES)}")
         return vehicle in self.vehicles
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {"vehicles": list(self.vehicles), "largest": self.largest, "nested": self.nested, "text": self.text,
                 "source": self.source, "key": self.key, "name": self.name, "source_id": self.source_id,
                 "set_by": self.set_by, "set_at": self.set_at,
@@ -140,9 +154,9 @@ class AccessNote:
     id: int
     source_id: str | None
     name: str | None
-    line: tuple                 # ((lat, lon), ...)
+    line: tuple[tuple[float, float], ...]   # ((lat, lon), ...)
     length_m: float
-    vehicles: tuple
+    vehicles: Vehicles
     created_by: str
     created_at: str
     updated_by: str
@@ -151,32 +165,32 @@ class AccessNote:
     removed_at: str | None = None
 
     @property
-    def key(self):
+    def key(self) -> str:
         return f"note/{self.id}"
 
     @property
-    def removed(self):
+    def removed(self) -> bool:
         return self.removed_at is not None
 
-    def access(self, distance_m=None):
+    def access(self, distance_m: float | None = None) -> StreetAccess:
         return StreetAccess(self.vehicles, "note", self.key, self.name, self.source_id, self.updated_by,
                             self.updated_at, distance_m)
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "key": self.key, "source_id": self.source_id, "name": self.name,
                 "line": [list(p) for p in self.line], "length_m": self.length_m, "vehicles": list(self.vehicles),
                 "text": access_text(self.vehicles), "created_by": self.created_by, "created_at": self.created_at,
                 "updated_by": self.updated_by, "updated_at": self.updated_at,
                 "removed_by": self.removed_by, "removed_at": self.removed_at}
 
-    def to_geojson(self):
+    def to_geojson(self) -> dict[str, Any]:
         return {"type": "Feature", "id": self.key,
                 "geometry": {"type": "LineString", "coordinates": [[lon, lat] for lat, lon in self.line]},
                 "properties": {"key": self.key, "source_id": self.source_id, "name": self.name,
                                "vehicles": list(self.vehicles), "text": access_text(self.vehicles)}}
 
 
-def road_access(road, distance_m=None):
+def road_access(road: UserRoad, distance_m: float | None = None) -> StreetAccess | None:
     """A user road's StreetAccess, or None when its `vehicles` detail is not set."""
     v = road.details.get("vehicles")
     if not v:
@@ -190,7 +204,26 @@ def road_access(road, distance_m=None):
 class AccessMixin:
     """The street access methods of UserPlaces (see the module docstring)."""
 
-    def set_access(self, vehicles=None, *, author, largest=None, road=None, line=None, source_id=None, name=None):
+    if TYPE_CHECKING:       # provided by UserPlaces and RoadsMixin
+        grid: Grid
+        _has_notes: bool | None
+
+        @property
+        def _db(self) -> sqlite3.Connection: ...
+        def _writing(self, db: sqlite3.Connection) -> AbstractContextManager[sqlite3.Connection]: ...
+        def _one(self, sql: str, args: Sequence[Any]) -> tuple[Any, ...] | None: ...
+        def _in_pakistan(self, subs: Iterable[int]) -> dict[int, int]: ...
+        def get_road(self, road: str | int | UserRoad) -> UserRoad: ...
+        def update_road(self, road: str | int | UserRoad, *, author: str, name: str | None = None,
+                        local_name: str | None = None, kind: str | None = None, line: Any = None,
+                        details: dict[str, Any] | None = None) -> UserRoad: ...
+        def roads_in(self, sub_cell_ids: Iterable[int]) -> list[UserRoad]: ...
+        @property
+        def has_roads(self) -> bool: ...
+
+    def set_access(self, vehicles: Iterable[str] | None = None, *, author: str, largest: str | None = None,
+                   road: str | int | UserRoad | None = None, line: Any = None, source_id: str | None = None,
+                   name: str | None = None) -> StreetAccess:
         """Record what can drive through a street: `vehicles` (a list) or `largest` (everything up
         to it). The street is a user road (`road`: key, ID or UserRoad), or any other street as an
         access note: its `source_id` in another map (a note with it is updated), and/or its `line`
@@ -200,15 +233,17 @@ class AccessMixin:
         if (vehicles is None) == (largest is None):
             raise UserPlacesError("give exactly one of vehicles (a list) or largest (a vehicle)")
         try:
-            vehicles = vehicles_list(vehicles) if vehicles is not None else up_to(largest)
+            vs = vehicles_list(vehicles) if vehicles is not None else up_to(str(largest))
         except ValueError as e:
             raise UserPlacesError(str(e)) from None
         if road is not None:
             if line is not None or source_id is not None or name is not None:
                 raise UserPlacesError("for a user road, give only road (its line and name are the road's)")
             r = self.get_road(road)
-            r = self.update_road(r, author=author, details={**r.details, "vehicles": list(vehicles)})
-            return road_access(r)
+            r = self.update_road(r, author=author, details={**r.details, "vehicles": list(vs)})
+            a = road_access(r)
+            assert a is not None                    # its vehicles were just set
+            return a
         source_id = _check_text(source_id, "source_id", required=False)
         name = _check_text(name, "name", required=False)
         old = None
@@ -221,7 +256,7 @@ class AccessMixin:
                                   + (f"; there is no note for {source_id!r} yet" if source_id else ""))
         db, now = self._db, _now()
         with self._writing(db):
-            fields = {"vehicles": json.dumps(list(vehicles)), "updated_by": author, "updated_at": now}
+            fields: dict[str, Any] = {"vehicles": json.dumps(list(vs)), "updated_by": author, "updated_at": now}
             if name is not None or old is None:
                 fields["name"] = name
             if line is not None:
@@ -231,6 +266,7 @@ class AccessMixin:
                 fields.update(source_id=source_id, created_by=author, created_at=now)
                 n = db.execute(f"INSERT INTO access_notes ({', '.join(fields)}) VALUES ({', '.join('?' * len(fields))})",
                                tuple(fields.values())).lastrowid
+                assert n is not None                # an INSERT always gives its row ID
                 action = "add"
             else:
                 n = old.id
@@ -245,13 +281,13 @@ class AccessMixin:
         self._has_notes = True
         return note.access()
 
-    def remove_access(self, street, *, author):
+    def remove_access(self, street: str | int | AccessNote | UserRoad, *, author: str) -> AccessNote | None:
         """Take back an answer: remove an access note (its ID, 'note/<id>', source_id or AccessNote;
         its history is kept), or clear a user road's `vehicles` detail (its key or UserRoad)."""
         from .userplaces import _check_text, _now
         from .roads import UserRoad
         author = _check_text(author, "author")
-        road = street if isinstance(street, UserRoad) else None
+        road: UserRoad | None = street if isinstance(street, UserRoad) else None
         if isinstance(street, str) and not street.startswith("note/"):
             try:
                 road = self.get_road(street)
@@ -261,6 +297,7 @@ class AccessMixin:
             r = self.get_road(road)
             self.update_road(r, author=author, details={k: v for k, v in r.details.items() if k != "vehicles"})
             return None
+        assert not isinstance(street, UserRoad)
         note = self.get_access_note(street)
         if note.removed:
             return note
@@ -272,7 +309,7 @@ class AccessMixin:
         self._has_notes = None
         return note
 
-    def get_access_note(self, note):
+    def get_access_note(self, note: str | int | AccessNote) -> AccessNote:
         """An AccessNote by ID, 'note/<id>', a live note's source_id, or AccessNote (removed ones too by ID)."""
         if isinstance(note, AccessNote):
             note = note.id
@@ -289,21 +326,22 @@ class AccessMixin:
             raise InvalidIdError(f"no such access note: {note!r}")
         return self._note_from_row(row)
 
-    def access_notes(self, include_removed=False):
+    def access_notes(self, include_removed: bool = False) -> list[AccessNote]:
         """All access notes, in the order they were added."""
         rows = self._db.execute(f"SELECT {_NOTE_COLUMNS} FROM access_notes"
                                 + ("" if include_removed else " WHERE removed_at IS NULL") + " ORDER BY id").fetchall()
         return [self._note_from_row(r) for r in rows]
 
-    def access_history(self, note=None):
+    def access_history(self, note: str | int | AccessNote | None = None) -> list[dict[str, Any]]:
         """Every change to access notes, oldest first (a user road's answers are in road_history)."""
-        sql, args = "SELECT h.at, h.author, h.action, h.note, h.data FROM access_history h", ()
+        sql = "SELECT h.at, h.author, h.action, h.note, h.data FROM access_history h"
+        args: tuple[Any, ...] = ()
         if note is not None:
             sql, args = sql + " WHERE h.note = ?", (self.get_access_note(note).id,)
         return [{"at": at, "author": who, "action": action, "key": f"note/{n}", "note": json.loads(data)}
                 for at, who, action, n, data in self._db.execute(sql + " ORDER BY h.id", args).fetchall()]
 
-    def access_at(self, lat, lon, max_m=None):
+    def access_at(self, lat: float, lon: float, max_m: float | None = None) -> StreetAccess | None:
         """What can drive through the street at this pin: the answer of the nearest street that has
         one within max_m (default STREET_ON_M, at most 100 m), as a StreetAccess, or None."""
         from .roads import STREET_MAX_M, STREET_ON_M, _subs_near, nearest_on_line
@@ -312,49 +350,49 @@ class AccessMixin:
             return None
         if not self.has_access:
             return None
-        max_m = STREET_ON_M if max_m is None else min(float(max_m), STREET_MAX_M)
-        subs = _subs_near(self.grid.layout, lat, lon, max_m)
-        found = []
+        r = STREET_ON_M if max_m is None else min(float(max_m), STREET_MAX_M)
+        subs = _subs_near(self.grid.layout, lat, lon, r)
+        found: list[StreetAccess] = []
         if self.has_roads:
             for road in self.roads_in(subs):
-                if road.details.get("vehicles"):
-                    d = nearest_on_line(road.line, lat, lon)[0]
-                    if d <= max_m:
-                        found.append(road_access(road, d))
+                d = nearest_on_line(road.line, lat, lon)[0] if road.details.get("vehicles") else math.inf
+                a = road_access(road, d) if d <= r else None
+                if a is not None:
+                    found.append(a)
         if self.has_access_notes:
             for note in self._notes_in(subs):
                 d = nearest_on_line(note.line, lat, lon)[0]
-                if d <= max_m:
+                if d <= r:
                     found.append(note.access(d))
         if not found:
             return None
         # nearest; then the newest answer; then by key, so the choice never depends on order
         found.sort(key=lambda a: a.key)
         found.sort(key=lambda a: a.set_at, reverse=True)
-        return min(found, key=lambda a: round(a.distance_m, 6))
+        return min(found, key=lambda a: round(a.distance_m or 0.0, 6))
 
     @property
-    def has_access_notes(self):
+    def has_access_notes(self) -> bool:
         if getattr(self, "_has_notes", None) is None:
             self._has_notes = self._one("SELECT 1 FROM access_notes WHERE removed_at IS NULL LIMIT 1", ()) is not None
-        return self._has_notes
+        return bool(self._has_notes)
 
     @property
-    def has_access(self):
+    def has_access(self) -> bool:
         """Whether any street may have an answer (any access note or user road)."""
         return self.has_access_notes or self.has_roads
 
-    def access_geojson(self):
+    def access_geojson(self) -> dict[str, Any]:
         """Every access note as a GeoJSON FeatureCollection of LineStrings (user roads are in roads_geojson)."""
         return {"type": "FeatureCollection", "features": [n.to_geojson() for n in self.access_notes()]}
 
     # -- Internals --------------------------------------------------------------------
 
-    def _ensure_access_tables(self, db):
+    def _ensure_access_tables(self, db: sqlite3.Connection) -> None:
         with self._writing(db):
             db.executescript(ACCESS_SCHEMA)
 
-    def _note_shape(self, line):
+    def _note_shape(self, line: Any) -> tuple[list[tuple[int, int]], list[int], float]:
         from .roads import line_e7, line_length_m, line_masks
         from .userplaces import UserPlacesError
         pts = line_e7(line, UserPlacesError)
@@ -368,25 +406,27 @@ class AccessMixin:
             raise UserPlacesError("the street does not pass through any sub-cell in Pakistan")
         return pts, subs, length
 
-    def _notes_in(self, sub_cell_ids):
-        found = set()
-        sub_cell_ids = list(sub_cell_ids)
-        for k in range(0, len(sub_cell_ids), 900):
-            chunk = sub_cell_ids[k:k + 900]
+    def _notes_in(self, sub_cell_ids: Iterable[int]) -> list[AccessNote]:
+        found: set[int] = set()
+        wanted = list(sub_cell_ids)
+        for k in range(0, len(wanted), 900):
+            chunk = wanted[k:k + 900]
             found.update(n for (n,) in self._db.execute(
                 "SELECT DISTINCT c.note FROM access_cells c JOIN access_notes a ON a.id = c.note "
                 f"WHERE a.removed_at IS NULL AND c.sub_cell IN ({','.join('?' * len(chunk))})", chunk).fetchall())
         return [self._get_note(n) for n in sorted(found)]
 
-    def _log_note(self, n, author, action, note):
+    def _log_note(self, n: int, author: str, action: str, note: AccessNote) -> None:
         from .userplaces import _now
         self._db.execute("INSERT INTO access_history (note, at, author, action, data) VALUES (?,?,?,?,?)",
                          (n, _now(), author, action, json.dumps(note.to_dict(), ensure_ascii=False)))
 
-    def _get_note(self, n):
-        return self._note_from_row(self._one(f"SELECT {_NOTE_COLUMNS} FROM access_notes WHERE id = ?", (n,)))
+    def _get_note(self, n: int) -> AccessNote:
+        row = self._one(f"SELECT {_NOTE_COLUMNS} FROM access_notes WHERE id = ?", (n,))
+        assert row is not None, f"no access note {n}"
+        return self._note_from_row(row)
 
     @staticmethod
-    def _note_from_row(r):
+    def _note_from_row(r: Sequence[Any]) -> AccessNote:
         return AccessNote(r[0], r[1], r[2], tuple(tuple(p) for p in json.loads(r[3])), r[4],
                           tuple(json.loads(r[5])), r[6], r[7], r[8], r[9], r[10], r[11])
