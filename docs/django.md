@@ -570,12 +570,25 @@ ffmpeg cannot read; the video is kept so it can be retried) and `replaced`.
   process_walkthroughs` every minute. A job whose worker died is started again
   after 30 minutes.
 - `"thread"`: a thread in the web process (small sites).
-- `"sync"`: during the upload (development).
+- `"sync"`: during the upload, from the uploaded file itself: the video is
+  stored only if the photos fail (so it can be retried). Fast enough for 1–2
+  minute videos (a few seconds); keep the request timeout in mind.
 
 The job copies the video from your storage (local files or S3 via
 django-storages), takes each photo with ffmpeg, stores them under
 `walkthroughs/<id>/frame-NNN.jpg`, and deletes the video unless `KEEP_VIDEO`
 is set.
+
+**Where the files go:** `STORAGE` names a Django storage class for the videos
+and photos (default: Django's default storage). Its `url()` gives the links in
+the API, so a private bucket's storage can hand out links that expire in
+minutes, e.g. django-storages' S3 storage with query-string auth, or your own
+storage class around boto3.
+
+**Without the grid database:** if neither `PAKGRID_DB` nor `PAKGRID_GRID` is
+set, walkthroughs are made without the grid. Everything works, but
+`pin_sub_cell` and the sub-cell fields stay empty. That is fine when your app
+identifies the address by its own `place_ref`.
 
 **Other settings:** `AUTO_APPROVE` (no owner review), `PHOTO_WIDTH` (1280),
 `PHOTO_QUALITY` (3), `MAX_VIDEO_MB` (200), `FFMPEG`, `FFMPEG_TIMEOUT_S`, and

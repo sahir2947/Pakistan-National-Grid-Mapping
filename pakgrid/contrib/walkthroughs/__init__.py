@@ -3,7 +3,7 @@
 Install with `pip install "pakgrid[django]"` (Django and Django REST framework), then:
 
     INSTALLED_APPS += ["rest_framework", "pakgrid.contrib.walkthroughs"]
-    PAKGRID_DB = "/srv/pakgrid/pakgrid_v1_pakistan.sqlite"
+    PAKGRID_DB = "/srv/pakgrid/pakgrid_v1_pakistan.sqlite"   # optional
     PAKGRID_WALKTHROUGHS = {
         "JOB": "celery",                                  # or "thread", "command", "sync"
         "CAN_VIEW": "shop.walkthroughs.rider_can_view",   # who may see a live walkthrough

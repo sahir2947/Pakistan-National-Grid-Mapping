@@ -15,6 +15,7 @@ from django.utils import timezone
 
 from pakgrid.walkthrough import Walkthrough as WalkthroughData
 from pakgrid.walkthrough import WalkthroughError, read_gpx
+from pakgrid.walkthrough import build as build_walkthrough
 
 from . import conf
 from .models import Walkthrough, WalkthroughPhoto
@@ -69,7 +70,10 @@ def parse_track(track, video_start=None):
 
 def create(user, *, video, track, pin, start=None, place_ref="", video_start=None, properties=None):
     """Make the walkthrough from the track (refusing a bad recording with WalkthroughError), store
-    it with its video, and start the photo job. Returns the Walkthrough record."""
+    it with its video, and start the photo job. Returns the Walkthrough record.
+
+    With JOB "sync" the photos are taken straight from the uploaded file, and the video is
+    stored only if that fails (so it can be retried) or KEEP_VIDEO is set."""
     place_ref = (place_ref or "").strip()
     if not can_upload(user, place_ref):
         raise PermissionDenied("you may not record a walkthrough for this address")
@@ -79,14 +83,21 @@ def create(user, *, video, track, pin, start=None, place_ref="", video_start=Non
     if getattr(video, "size", 0) > limit * 1024 * 1024:
         raise WalkthroughError(f"the video is {video.size / 1048576:.0f} MB; at most {limit} MB is allowed")
     props = {**(properties or {}), **({"place_ref": place_ref} if place_ref else {})}
-    data = conf.get_grid().walkthrough(parse_track(track, video_start), pin=pin, start=start,
-                                       author=user.get_username() if user else "unknown", properties=props)
+    grid = conf.get_grid()
+    args = dict(pin=pin, start=start, author=user.get_username() if user else "unknown", properties=props)
+    track = parse_track(track, video_start)
+    data = grid.walkthrough(track, **args) if grid is not None else build_walkthrough(track, **args)
     with transaction.atomic():
         wt = Walkthrough(owner=user if user and user.is_authenticated else None, place_ref=place_ref,
                          pin_sub_cell=data.data["pin_sub_cell"] or "", length_m=data.length_m, data=data.to_dict())
-        wt.video.save(getattr(video, "name", None) or "video.mp4", video, save=False)
+        sync = conf.get("JOB") == "sync"
+        if not sync or conf.get("KEEP_VIDEO"):
+            wt.video.save(getattr(video, "name", None) or "video.mp4", video, save=False)
         wt.save()
-        transaction.on_commit(lambda: start_job(wt.pk))
+        if sync:
+            transaction.on_commit(lambda: take_photos(wt.pk, upload=video))
+        else:
+            transaction.on_commit(lambda: start_job(wt.pk))
     return wt
 
 
@@ -113,10 +124,13 @@ def _in_thread(pk):
 
 # -- The photo job ---------------------------------------------------------------------
 
-def take_photos(pk):
+def take_photos(pk, upload=None):
     """Take a processing walkthrough's photos from its video with ffmpeg, store them, and move it
     to review (or live, with AUTO_APPROVE). Safe to run twice: only a 'processing' record is
-    taken, and claimed first. Returns the record (status 'failed', with `error`, if it failed)."""
+    taken, and claimed first. Returns the record (status 'failed', with `error`, if it failed).
+
+    `upload`: the uploaded video file itself, read instead of the stored video (JOB "sync").
+    If the photos then fail, it is stored, so the walkthrough can be retried."""
     with transaction.atomic():
         claimed = Walkthrough.objects.filter(pk=pk, status=Walkthrough.PROCESSING, photos_at__isnull=True) \
             .update(photos_at=timezone.now())
@@ -124,14 +138,21 @@ def take_photos(pk):
     if not claimed:
         return wt
     try:
-        if not wt.video:
+        if not wt.video and upload is None:
             raise WalkthroughError("the video is missing")
         data = WalkthroughData.from_dict(wt.data)
         with tempfile.TemporaryDirectory(prefix="pakgrid-walk-") as tmp:
-            src = os.path.join(tmp, "video" + (os.path.splitext(wt.video.name)[1] or ".mp4"))
-            with wt.video.open("rb") as f, open(src, "wb") as out:      # from any storage (local, S3, ...)
-                for chunk in f.chunks():
-                    out.write(chunk)
+            name = wt.video.name if wt.video else (getattr(upload, "name", None) or "video.mp4")
+            src = os.path.join(tmp, "video" + (os.path.splitext(name)[1].lower()[:8] or ".mp4"))
+            if upload is not None:
+                upload.seek(0)
+                with open(src, "wb") as out:
+                    for chunk in upload.chunks():
+                        out.write(chunk)
+            else:
+                with wt.video.open("rb") as f, open(src, "wb") as out:      # from any storage (local, S3, ...)
+                    for chunk in f.chunks():
+                        out.write(chunk)
             ffmpeg, timeout = conf.get("FFMPEG"), conf.get("FFMPEG_TIMEOUT_S")
             for cmd in data.ffmpeg_commands(src, tmp, conf.get("PHOTO_WIDTH"), conf.get("PHOTO_QUALITY")):
                 cmd[0] = ffmpeg
@@ -150,13 +171,26 @@ def take_photos(pk):
                 wt.save(update_fields=["status", "error"])
                 if wt.status == Walkthrough.LIVE:
                     _replace_others(wt)
-        if not conf.get("KEEP_VIDEO"):
+        if not conf.get("KEEP_VIDEO") and wt.video:
             wt.video.delete(save=False)
             wt.save(update_fields=["video"])
-    except (OSError, subprocess.SubprocessError, WalkthroughError, ValueError) as exc:
-        log.warning("walkthrough %s: photos failed: %s", pk, exc)
-        wt.status, wt.error = Walkthrough.FAILED, str(exc)[:2000]
-        wt.save(update_fields=["status", "error"])
+    except Exception as exc:  # noqa: BLE001 - any failure (ffmpeg, storage, ...) fails this job only
+        if isinstance(exc, (OSError, subprocess.SubprocessError, WalkthroughError, ValueError)):
+            log.warning("walkthrough %s: photos failed: %s", pk, exc)
+            reason = str(exc)
+        else:                                   # e.g. the storage refused: say what, not a traceback
+            log.exception("walkthrough %s: photos failed", pk)
+            reason = f"the photos could not be stored ({type(exc).__name__})"
+        wt.status, wt.error = Walkthrough.FAILED, reason[:2000]
+        fields = ["status", "error"]
+        if upload is not None and not wt.video:
+            try:                                    # keep it, so the walkthrough can be retried
+                upload.seek(0)
+                wt.video.save(getattr(upload, "name", None) or "video.mp4", upload, save=False)
+                fields.append("video")
+            except Exception as keep:  # noqa: BLE001
+                log.warning("walkthrough %s: could not keep the video for a retry: %s", pk, keep)
+        wt.save(update_fields=fields)
     return wt
 
 
