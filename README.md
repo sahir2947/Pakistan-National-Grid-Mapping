@@ -245,6 +245,13 @@ rickshaw, car, pickup, truck), for a user road or any street on the app's
 map. Lookups then tell riders `Up to rickshaw size` within 25 m of that
 street (project.md §5.9).
 
+**Walkthroughs:** a shop owner films the walk from the road to their door
+once, with the phone's GPS. The library cleans the track and picks the photos
+to take from the video, every 5 m and at each turn, each with a step such as
+`In 25 m, turn right`. Riders then see the photo that matches where they are
+standing. The rider rule runs on the phone, and comes with a conformance file
+for the Flutter port (project.md §5.10).
+
 **Border flags:** every cell and sub-cell is flagged `inside`, `border` or
 `outside` Pakistan, using the geoBoundaries / OpenStreetMap border (including
 AJK and Gilgit-Baltistan). Border data © OpenStreetMap contributors, ODbL, via

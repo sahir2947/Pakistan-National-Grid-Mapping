@@ -49,6 +49,17 @@ their centres, and the east/north metres.
    answer what can drive through. The panel shows the `user.set_access(...)`
    call that saves the answer.
 
+**Walk** tries a walkthrough (project.md §5.10):
+
+1. Load a walkthrough's JSON, made with `pakgrid walkthrough build`.
+2. Choose its photos (the `frame-NNN.jpg` files) or the video itself; the
+   photos are then taken from the video in the browser.
+3. Tap the map where a rider is: the panel shows the photo the rider would
+   see, the step (`In 25 m, turn right`) and the distance to the door, using
+   the same rider rule as the library (with the GPS accuracy you choose).
+   **Back** and **Next** step through the photos by hand; tapping a dot on
+   the path shows that photo.
+
 **Blocks** makes your own named blocks (project.md §7.9):
 
 1. Give a new block a code (and a name) and press **Create**.

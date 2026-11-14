@@ -241,6 +241,30 @@ def main(argv=None):
     a = act.add_parser("refresh", help="recompute tehsils and references after a new places version")
     a.add_argument("--author", required=True)
 
+    p = sub.add_parser("walkthrough", help="walkthroughs: photos of the walk from the road to a door, for riders")
+    wact = p.add_subparsers(dest="action", required=True)
+    a = wact.add_parser("build", help="make a walkthrough from the GPS track recorded with a video")
+    a.add_argument("--db", default=DEFAULT_DB)
+    a.add_argument("--track", required=True, metavar="FILE",
+                   help="JSON readings [{t, lat, lon, accuracy}, ...] (t: seconds into the video), or a GPX file")
+    a.add_argument("--video-start", metavar="TIME", help="for GPX: when the video started (ISO time); default the first point")
+    a.add_argument("--pin", nargs=2, type=float, required=True, metavar=("LAT", "LON"), help="the door")
+    a.add_argument("--start", nargs=2, type=float, metavar=("LAT", "LON"), help="the point on the road (default the first reading)")
+    a.add_argument("--author", required=True)
+    a.add_argument("-o", "--output", metavar="FILE", help="write the walkthrough JSON here (default: print it)")
+    a.add_argument("--video", metavar="FILE", help="also take the photos from this video (needs ffmpeg) ...")
+    a.add_argument("--frames-dir", metavar="DIR", help="... into this folder")
+    a.add_argument("--width", type=int, default=1280, help="photo width in pixels (default 1280)")
+    a = wact.add_parser("frames", help="take a walkthrough's photos from its video (needs ffmpeg)")
+    a.add_argument("walkthrough", metavar="FILE")
+    a.add_argument("--video", required=True)
+    a.add_argument("--frames-dir", required=True)
+    a.add_argument("--width", type=int, default=1280)
+    a.add_argument("--print", action="store_true", help="only print the ffmpeg commands")
+    a = wact.add_parser("guide", help="what a rider at these points would see (the rider rule)")
+    a.add_argument("walkthrough", metavar="FILE")
+    a.add_argument("points", nargs="+", metavar="LAT,LON[,ACCURACY]", help="readings, in order")
+
     p = sub.add_parser("info", help="print grid and database information")
     p.add_argument("--db", default=DEFAULT_DB)
 
@@ -249,7 +273,7 @@ def main(argv=None):
     p.add_argument("-o", "--output-dir", default="viewer")
 
     p = sub.add_parser("export-conformance",
-                       help="write the conformance test files for ports to other languages (navigation.json)")
+                       help="write the conformance test files for ports to other languages (navigation.json, walkthrough.json)")
     p.add_argument("-o", "--output-dir", default="conformance")
 
     args = parser.parse_args(argv)
@@ -317,6 +341,57 @@ def _export_layout(args):
     for path in write_viewer_files(args.output_dir,
                                    progress=lambda msg: print(f"building {msg}…", file=sys.stderr)):
         print(f"wrote {path}")
+    return 0
+
+
+def _walkthrough(args):
+    import shutil
+    import subprocess
+    from .walkthrough import Walkthrough, read_gpx
+    a = args.action
+    if a == "build":
+        from .grid import Grid
+        with open(args.track, encoding="utf-8") as f:
+            text = f.read()
+        track = read_gpx(text, args.video_start) if text.lstrip().startswith("<") else json.loads(text)
+        if (args.video is None) != (args.frames_dir is None):
+            raise ValueError("give both --video and --frames-dir, or neither")
+        with Grid.open(args.db) as grid:
+            wt = grid.walkthrough(track, pin=tuple(args.pin), start=tuple(args.start) if args.start else None,
+                                  author=args.author)
+    else:
+        with open(args.walkthrough, encoding="utf-8") as f:
+            wt = Walkthrough.from_dict(json.load(f))
+    if a == "guide":
+        guide, out = wt.guide(), []
+        for p in args.points:
+            v = [float(x) for x in p.split(",")]
+            if len(v) not in (2, 3):
+                raise ValueError(f"a point is LAT,LON or LAT,LON,ACCURACY, got {p!r}")
+            out.append(guide.update(*v).to_dict())
+        print(json.dumps(out, indent=2))
+        return 0
+    if args.video:
+        cmds = wt.ffmpeg_commands(args.video, args.frames_dir, args.width)
+        if a == "frames" and args.print:
+            print("\n".join(" ".join(c) for c in cmds))
+            return 0
+        if shutil.which("ffmpeg") is None:
+            raise ValueError("ffmpeg is not installed; use `pakgrid walkthrough frames --print` for the commands")
+        os.makedirs(args.frames_dir, exist_ok=True)
+        for c in cmds:
+            subprocess.run(c, check=True)
+    if a == "frames":
+        print(json.dumps({"frames": len(wt.frames), "written": args.frames_dir}))
+        return 0
+    text = json.dumps(wt.to_dict(), ensure_ascii=False, indent=1)
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(json.dumps({"written": args.output, "length_m": wt.length_m, "frames": len(wt.frames),
+                          "turns": [t["turn"] for t in wt.turns], "track": wt.data["track"]}, indent=2))
+    else:
+        print(text)
     return 0
 
 
@@ -610,6 +685,7 @@ _COMMANDS = {
     "nearest": _with_grid(_nearest),
     "geojson": _geojson,
     "blocks": _blocks,
+    "walkthrough": _walkthrough,
     "info": _with_grid(lambda grid, a: grid.info()),
     "export-layout": _export_layout,
     "export-conformance": _export_conformance,

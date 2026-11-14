@@ -131,5 +131,82 @@ def test_javascript_reference_runner_passes():
 
 def test_cli_writes_the_file(tmp_path, capsys):
     assert main(["export-conformance", "-o", str(tmp_path / "out")]) == 0
-    assert "navigation.json" in capsys.readouterr().out
+    printed = capsys.readouterr().out
+    assert "navigation.json" in printed and "walkthrough.json" in printed
     assert json.loads((tmp_path / "out" / "navigation.json").read_text(encoding="utf-8"))["suite"] == "navigation"
+
+
+# -- Walkthrough suite ------------------------------------------------------------------
+
+WT_PATH = ROOT / "conformance" / "walkthrough.json"
+
+
+@pytest.fixture(scope="module")
+def wt_suite():
+    return json.loads(WT_PATH.read_text(encoding="utf-8"))
+
+
+def test_walkthrough_file_is_up_to_date(wt_suite):
+    """As for navigation.json: numbers within tolerance (another platform's last digits), the rest identical."""
+    from pakgrid.conformance import walkthrough_json
+    text = walkthrough_json()
+    if WT_PATH.read_text(encoding="utf-8") == text:
+        return
+    fresh = json.loads(text)
+
+    def walk(a, b, path):
+        if isinstance(a, dict):
+            assert isinstance(b, dict) and a.keys() == b.keys(), f"{path}: stale, run `pakgrid export-conformance`"
+            for k in a:
+                walk(a[k], b[k], f"{path}.{k}")
+        elif isinstance(a, list):
+            assert isinstance(b, list) and len(a) == len(b), f"{path}: stale, run `pakgrid export-conformance`"
+            for i, (x, y) in enumerate(zip(a, b)):
+                walk(x, y, f"{path}[{i}]")
+        elif isinstance(a, float) and isinstance(b, float):
+            assert abs(a - b) <= 1e-9 * max(1.0, abs(a)), (path, a, b)
+        else:
+            assert a == b, (path, a, b)
+
+    walk(fresh, wt_suite, "suite")
+    pytest.skip("this platform's last digits differ slightly from the committed file (allowed)")
+
+
+def test_python_passes_the_walkthrough_file(wt_suite):
+    from pakgrid import WalkthroughGuide
+    nan = lambda v: math.nan if v == "NaN" else v          # noqa: E731
+    n = 0
+    for s in wt_suite["sessions"]:
+        guide = WalkthroughGuide(s["walkthrough"])
+        _compare(s["start"], guide.state.to_dict(), wt_suite, (s["name"], "start"))
+        for k, step in enumerate(s["steps"]):
+            a = {key: nan(v) for key, v in step["args"].items()}
+            if step["call"] == "update":
+                state = guide.update(a["lat"], a["lon"], a["accuracy_m"])
+            elif step["call"] == "show":
+                state = guide.show(a["index"])
+            else:
+                state = getattr(guide, step["call"])()
+            _compare(step["expect"], state.to_dict(), wt_suite, (s["name"], k))
+            n += 1
+    assert n >= 500
+
+
+def test_walkthrough_file_covers_every_behaviour(wt_suite):
+    states = [st["expect"] for s in wt_suite["sessions"] for st in s["steps"]]
+    assert {s["gps"] for s in states} == {"ok", "weak", "off_path", "ignored", "manual"}
+    assert {s["start"]["gps"] for s in wt_suite["sessions"]} == {"start"}
+    texts = {s["text"].split(" ")[0] for s in states}
+    assert {"In", "The", "You", "Turn", "Go"} <= texts
+    assert any(s["arrived"] for s in states) and any(s["next_turn"] for s in states)
+    assert {st["call"] for s in wt_suite["sessions"] for st in s["steps"]} == {"update", "show", "next", "previous"}
+    accs = {json.dumps(st["args"].get("accuracy_m")) for s in wt_suite["sessions"] for st in s["steps"]}
+    assert {'"NaN"', "null", "-1.0", "0.0", "45.0"} <= accs
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_walkthrough_runner_passes():
+    out = subprocess.run([NODE, str(ROOT / "conformance" / "runners" / "walkthrough.js")],
+                         capture_output=True, text=True)
+    assert out.returncode == 0, out.stdout[-2000:] + out.stderr[-2000:]
+    assert out.stdout.strip().startswith("OK:")
