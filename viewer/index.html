@@ -729,8 +729,11 @@
   // -- User roads (pakgrid.roads) ---------------------------------------------------------
   // Tap points along a road, press Done: the panel shows its length, the sub-cells it passes
   // through (shaded) and the places it runs through, with the user.add_road(...) call that stores
-  // it with the library. Nothing is stored in the viewer.
+  // it with the library. "What can drive through" (pakgrid.access) is asked with one tap per
+  // vehicle; for a street that is already on the map, the tool makes the user.set_access(...) call
+  // instead. Nothing is stored in the viewer.
   var roading = null, roadsBtn = document.getElementById("roadsbtn");
+  var VEHICLE_ICONS = { foot: "🚶", bicycle: "🚲", motorbike: "🏍️", rickshaw: "🛺", car: "🚗", pickup: "🛻", truck: "🚚" };
   function startRoad() {
     if (nav.target) nav.close(true);
     if (drawing) stopDrawing();
@@ -738,7 +741,7 @@
     if (measuring) stopMeasure();
     if (blocking) stopBlocks();
     selLayer.clearLayers(); arrow = arrowMarker = null;
-    roading = { pts: [], done: false, name: "", local: "", kind: "street", oneway: false, surface: "", vehicles: {} };
+    roading = { pts: [], done: false, name: "", local: "", kind: "street", oneway: false, surface: "", vehicles: {}, mode: "road", sourceId: "" };
     roadsBtn.classList.add("on");
     map.doubleClickZoom.disable();
     showRoad();
@@ -755,8 +758,18 @@
     var d = {}, v = Object.keys(r.vehicles).filter(function (k) { return r.vehicles[k]; });
     if (r.oneway) d.oneway = true;
     if (r.surface) d.surface = r.surface;
-    if (v.length) d.vehicles = ["car", "motorbike", "bicycle", "foot"].filter(function (k) { return v.indexOf(k) >= 0; });
+    if (v.length) d.vehicles = PakGrid.vehiclesList(v);
     return d;
+  }
+  function accessCall(r, pts) {               // user.set_access(...) for a street already on the map
+    var v = roadDetails(r).vehicles;
+    if (!v) return "# Choose what can drive through this street first.";
+    var nested = v.join() === PakGrid.vehiclesUpTo(v[v.length - 1]).join();
+    return "user = grid.attach_user_places(\"user_places.sqlite\")\n" +
+      "user.set_access(" + (nested ? "largest=" + JSON.stringify(v[v.length - 1]) : "vehicles=" + JSON.stringify(v)) +
+      ", author=request.user.username,\n                line=" + JSON.stringify(pts) +
+      (r.sourceId ? ", source_id=" + JSON.stringify(r.sourceId) : "") +
+      (r.name ? ", name=" + JSON.stringify(r.name) : "") + ")";
   }
   function pyValue(v) {                     // a JSON value written as Python
     return JSON.stringify(v).replace(/\btrue\b/g, "True").replace(/\bfalse\b/g, "False").replace(/\bnull\b/g, "None");
@@ -781,31 +794,47 @@
       }
     }
     var kinds = ["street", "gali", "road", "main road", "highway", "track", "path"];
-    var html = "<h2>Draw a road</h2><div class='sub'>Tap the map along the road, from one end to the other, then press " +
-               "<b>Done</b>. A one-way road runs in the direction you draw it.</div>" +
+    var asAccess = r.mode === "access", chosen = roadDetails(r).vehicles;
+    var html = "<h2>" + (asAccess ? "What can drive through?" : "Draw a road") + "</h2>" +
+               "<div class='around'><label><input type='radio' name='r-mode' value='road'" + (asAccess ? "" : " checked") +
+               "> New road</label><label><input type='radio' name='r-mode' value='access'" + (asAccess ? " checked" : "") +
+               "> Street already on the map</label></div>" +
+               "<div class='sub'>Tap the map along the " + (asAccess ? "stretch of street the answer is for" : "road, from one end to the other") +
+               ", then press <b>Done</b>." + (asAccess ? "" : " A one-way road runs in the direction you draw it.") + "</div>" +
                "<p><button type='button' id='r-undo'" + (pts.length ? "" : " disabled") + ">Undo</button> " +
                "<button type='button' id='r-done' class='on'" + (pts.length >= 2 ? "" : " disabled") + ">Done</button> " +
                "<button type='button' id='r-cancel'>Cancel</button></p>" +
-               "<h3>Road</h3><input class='name' id='r-name' placeholder='Name, e.g. Street 7' value='" + esc(r.name) + "'>" +
-               "<input class='name' id='r-local' dir='rtl' placeholder='اردو نام (optional)' value='" + esc(r.local) + "' style='margin-top:4px'>" +
-               "<div class='around' style='margin-top:6px'><select id='r-kind'>" + kinds.map(function (k) {
-                 return "<option" + (k === r.kind ? " selected" : "") + ">" + k + "</option>"; }).join("") + "</select>" +
-               "<select id='r-surface'><option value=''>surface (optional)</option>" + ["paved", "unpaved", "gravel"].map(function (k) {
-                 return "<option" + (k === r.surface ? " selected" : "") + ">" + k + "</option>"; }).join("") + "</select>" +
-               "<label><input type='checkbox' id='r-oneway'" + (r.oneway ? " checked" : "") + "> one-way</label></div>" +
-               "<div class='around'><span class='sub'>Allowed (optional):</span>" + ["car", "motorbike", "bicycle", "foot"].map(function (v) {
-                 return "<label><input type='checkbox' data-vehicle='" + v + "'" + (r.vehicles[v] ? " checked" : "") + "> " + v + "</label>"; }).join("") + "</div>";
+               (asAccess
+                 ? "<h3>Street</h3><input class='name' id='r-name' placeholder='Name (optional), e.g. Gali 3' value='" + esc(r.name) + "'>" +
+                   "<input class='name' id='r-source' placeholder='ID in your map (optional), e.g. way/123456' value='" + esc(r.sourceId) + "' style='margin-top:4px'>"
+                 : "<h3>Road</h3><input class='name' id='r-name' placeholder='Name, e.g. Street 7' value='" + esc(r.name) + "'>" +
+                   "<input class='name' id='r-local' dir='rtl' placeholder='اردو نام (optional)' value='" + esc(r.local) + "' style='margin-top:4px'>" +
+                   "<div class='around' style='margin-top:6px'><select id='r-kind'>" + kinds.map(function (k) {
+                     return "<option" + (k === r.kind ? " selected" : "") + ">" + k + "</option>"; }).join("") + "</select>" +
+                   "<select id='r-surface'><option value=''>surface (optional)</option>" + ["paved", "unpaved", "gravel"].map(function (k) {
+                     return "<option" + (k === r.surface ? " selected" : "") + ">" + k + "</option>"; }).join("") + "</select>" +
+                   "<label><input type='checkbox' id='r-oneway'" + (r.oneway ? " checked" : "") + "> one-way</label></div>") +
+               "<h3>What can drive through" + (asAccess ? "" : " (optional)") + "?</h3><div class='sub'>Tap the largest that fits; " +
+               "untick any that cannot pass (a barrier, steps).</div><div class='around'>" + PakGrid.VEHICLES.map(function (v) {
+                 return "<button type='button' data-largest='" + v + "'" + (chosen && chosen[chosen.length - 1] === v ? " class='on'" : "") +
+                        ">" + VEHICLE_ICONS[v] + " " + v + "</button>"; }).join(" ") + "</div>" +
+               "<div class='around'>" + PakGrid.VEHICLES.map(function (v) {
+                 return "<label><input type='checkbox' data-vehicle='" + v + "'" + (r.vehicles[v] ? " checked" : "") + "> " + v + "</label>"; }).join("") +
+               "</div><div class='sub' id='r-access'>" + (chosen ? esc(PakGrid.accessText(chosen)) : "Not answered") + "</div>";
     if (masks) {
       var d = places.describe(grid, masks), n = d.size.sub_cells, len = PakGrid.lineLength(pts);
-      html += "<h3>What the library will store</h3>" + rowsHtml([
+      html += "<h3>What the library will store</h3>" + rowsHtml(asAccess ? [
+                ["Length", len >= 1000 ? (len / 1000).toFixed(2) + " km" : Math.round(len) + " m"],
+                ["Runs through", d.label ? esc(d.label) : "outside Pakistan"]] : [
                 ["Length", len >= 1000 ? (len / 1000).toFixed(2) + " km" : Math.round(len) + " m"],
                 ["Sub-cells", n.toLocaleString() + " in " + d.size.cells + " cells"],
                 ["Runs through", d.label ? esc(d.label) : "outside Pakistan"],
                 ["Localities", d.places.locality.slice(0, 5).map(function (x) { return esc(x.name); }).join(", ") || "none"]]) +
               (d.places.tehsil.length ? "" : "<p class='error'>The road must pass through Pakistan.</p>") +
-              "<h3>Add it with the library</h3><textarea id='r-code' readonly></textarea>" +
-              "<div class='sub'>Run this in your backend (it checks who may add roads; the library keeps the author and " +
-              "a history). The street then shows on lookups near it. See project.md §5.9.</div>" +
+              "<h3>" + (asAccess ? "Save the answer with the library" : "Add it with the library") + "</h3><textarea id='r-code' readonly></textarea>" +
+              "<div class='sub'>Run this in your backend (it checks who may " + (asAccess ? "answer" : "add roads") + "; the library " +
+              "keeps the author and a history). " + (asAccess ? "Lookups within 25 m of the street then carry the answer."
+              : "The street then shows on lookups near it.") + " See project.md §5.9.</div>" +
               "<p><button type='button' id='r-geo'>Download GeoJSON</button></p>";
     }
     panel.innerHTML = html;
@@ -814,10 +843,20 @@
     q("r-done").onclick = function () { r.done = true; showRoad(); };
     q("r-cancel").onclick = stopRoad;
     var refresh = function () {
-      r.name = q("r-name").value; r.local = q("r-local").value; r.kind = q("r-kind").value;
-      r.surface = q("r-surface").value; r.oneway = q("r-oneway").checked;
+      r.name = q("r-name").value;
+      if (asAccess) r.sourceId = q("r-source").value.trim();
+      else {
+        r.local = q("r-local").value; r.kind = q("r-kind").value;
+        r.surface = q("r-surface").value; r.oneway = q("r-oneway").checked;
+      }
       panel.querySelectorAll("input[data-vehicle]").forEach(function (c) { r.vehicles[c.getAttribute("data-vehicle")] = c.checked; });
-      if (q("r-code")) {
+      var now = roadDetails(r).vehicles;
+      q("r-access").textContent = now ? PakGrid.accessText(now) : "Not answered";
+      panel.querySelectorAll("button[data-largest]").forEach(function (b) {
+        b.classList.toggle("on", !!now && now[now.length - 1] === b.getAttribute("data-largest"));
+      });
+      if (q("r-code") && asAccess) q("r-code").value = accessCall(r, pts);
+      else if (q("r-code")) {
         var details = roadDetails(r);
         q("r-code").value = "user = grid.attach_user_places(\"user_places.sqlite\")\n" +
           "user.add_road(" + JSON.stringify(r.name || "New road") + ", author=request.user.username, kind=" + JSON.stringify(r.kind) +
@@ -825,13 +864,26 @@
           (Object.keys(details).length ? ",\n              details=" + pyValue(details) : "") + ")";
       }
     };
-    ["r-name", "r-local"].forEach(function (id) { q(id).addEventListener("input", refresh); });
-    ["r-kind", "r-surface", "r-oneway"].forEach(function (id) { q(id).addEventListener("change", function () { refresh(); if (id === "r-oneway") showRoad(); }); });
+    (asAccess ? ["r-name", "r-source"] : ["r-name", "r-local"]).forEach(function (id) { q(id).addEventListener("input", refresh); });
+    if (!asAccess) ["r-kind", "r-surface", "r-oneway"].forEach(function (id) { q(id).addEventListener("change", function () { refresh(); if (id === "r-oneway") showRoad(); }); });
+    panel.querySelectorAll("input[name=r-mode]").forEach(function (c) {
+      c.addEventListener("change", function () { refresh(); r.mode = c.value; showRoad(); });
+    });
+    panel.querySelectorAll("button[data-largest]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var fit = PakGrid.vehiclesUpTo(b.getAttribute("data-largest"));
+        PakGrid.VEHICLES.forEach(function (v) { r.vehicles[v] = fit.indexOf(v) >= 0; });
+        panel.querySelectorAll("input[data-vehicle]").forEach(function (c) { c.checked = !!r.vehicles[c.getAttribute("data-vehicle")]; });
+        refresh();
+      });
+    });
     panel.querySelectorAll("input[data-vehicle]").forEach(function (c) { c.addEventListener("change", refresh); });
     refresh();
     if (q("r-geo")) q("r-geo").onclick = function () {
-      var props = { name: r.name || null, local_name: r.local || null, kind: r.kind, length_m: Math.round(PakGrid.lineLength(pts) * 10) / 10 };
-      var det = roadDetails(r);
+      var props = asAccess
+        ? { name: r.name || null, source_id: r.sourceId || null, length_m: Math.round(PakGrid.lineLength(pts) * 10) / 10 }
+        : { name: r.name || null, local_name: r.local || null, kind: r.kind, length_m: Math.round(PakGrid.lineLength(pts) * 10) / 10 };
+      var det = asAccess ? { vehicles: roadDetails(r).vehicles || [] } : roadDetails(r);
       for (var k in det) props[k] = det[k];
       downloadGeoJSON({ type: "Feature", geometry: { type: "LineString", coordinates: pts.map(function (p) { return [p[1], p[0]]; }) },
                         properties: props }, "road.geojson");

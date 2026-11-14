@@ -183,6 +183,7 @@ class PlaceTags:
     osm_locality: Place | None = None          # the OpenStreetMap locality, also when a user one is shown
     user_locality: object = None               # the UserLocality shown as `locality`, if any
     street: object = None                      # the nearest user road (pakgrid.roads.RoadMatch), if any
+    access: object = None                      # what can drive through the street here (pakgrid.access.StreetAccess)
 
     @property
     def street_text(self):
@@ -225,6 +226,7 @@ class PlaceTags:
                 loc["references"] = [r.to_dict() for r in self.user_locality.references]
                 loc["osm_locality"] = brief(self.osm_locality)
         return {"label": self.label, "street": self.street.to_dict() if self.street is not None else None,
+                "access": self.access.to_dict() if self.access is not None else None,
                 "locality": loc, "tehsil": brief(self.tehsil),
                 "district": brief(self.district), "province": brief(self.province)}
 
@@ -790,17 +792,21 @@ class Grid:
         else:
             cid, sub = ids.split_sub_cell_id(item_id)
             tags = self._tags(cid, sub, centroid)
-        if tags is None or self._user is None or not self._user.has_roads:
+        if tags is None or self._user is None or not self._user.has_access:
             return tags
         lat_e7, lon_e7 = centroid()
         return self._with_street(tags, lat_e7 / SCALE, lon_e7 / SCALE)
 
     def _with_street(self, tags, lat, lon):
-        """The tags with the nearest user road within 100 m of (lat, lon), if any."""
-        if self._user is None or not self._user.has_roads:
+        """The tags with the nearest user road within 100 m of (lat, lon), and what can drive
+        through the street there (pakgrid.access), if any."""
+        if self._user is None or not self._user.has_access:
             return tags
         match = self._user.nearest_road(lat, lon)
-        return dataclasses.replace(tags, street=match) if match is not None else tags
+        access = self._user.access_at(lat, lon)
+        if match is None and access is None:
+            return tags
+        return dataclasses.replace(tags, street=match, access=access)
 
     def places(self, level=None):
         """All places, or those of one level ("province", "district", "tehsil", "locality"), by ID."""

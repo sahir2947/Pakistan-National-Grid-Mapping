@@ -54,6 +54,7 @@ from . import ids, navigate
 from .errors import InvalidIdError, NotInDatabaseError, PakgridError
 from .layout import SCALE, SUB, to_e7
 from . import zones as _zones
+from .access import AccessMixin
 from .roads import RoadsMixin
 from .zones import ZoneError, polygon_masks, rings_e7
 
@@ -188,7 +189,7 @@ def _check_text(value, what, required=True):
     return re.sub(r"\s+", " ", value).strip()
 
 
-class UserPlaces(RoadsMixin):
+class UserPlaces(RoadsMixin, AccessMixin):
     """The user localities file. Get one with `Grid.attach_user_places(path)`, which creates it if
     needed; it then answers `Grid.place` and `Grid.locate` together with the official layer."""
 
@@ -216,6 +217,7 @@ class UserPlaces(RoadsMixin):
         if meta.get("grid_version") != grid.meta["grid_version"]:
             raise UserPlacesError(f"{self.path.name} was made for grid version {meta.get('grid_version')}")
         self._ensure_road_tables(db)            # user roads (pakgrid.roads), added to older files too
+        self._ensure_access_tables(db)          # street access notes (pakgrid.access), likewise
 
     @property
     def _db(self):
@@ -427,8 +429,12 @@ class UserPlaces(RoadsMixin):
     # -- Backup ----------------------------------------------------------------------
 
     def export_data(self, include_removed=False):
-        """Every locality and road as JSON-ready data, to back up or move to another server (see import_data)."""
+        """Every locality, road and street access note as JSON-ready data, to back up or move to
+        another server (see import_data)."""
         return {"user_places_version": USER_PLACES_VERSION, "exported_at": _now(),
+                "access_notes": [{"source_id": n.source_id, "name": n.name, "line": [list(p) for p in n.line],
+                                  "vehicles": list(n.vehicles), "updated_by": n.updated_by, "updated_at": n.updated_at,
+                                  "removed": n.removed} for n in self.access_notes(include_removed)],
                 "roads": [{"key": r.key, "name": r.name, "local_name": r.local_name, "kind": r.kind,
                            "line": [list(p) for p in r.line], "details": r.details, "created_by": r.created_by,
                            "created_at": r.created_at, "removed": r.removed} for r in self.roads(include_removed)],
@@ -439,8 +445,9 @@ class UserPlaces(RoadsMixin):
                                for loc in self.localities(include_removed)]}
 
     def import_data(self, data, *, author):
-        """Add the localities and roads of export_data() output (skipping removed ones and keys
-        already here). Returns the localities and roads added."""
+        """Add the localities, roads and access notes of export_data() output (skipping removed
+        ones, keys already here, and notes for a source_id or line already here). Returns the
+        localities, roads and StreetAccess answers added."""
         if data.get("user_places_version") != USER_PLACES_VERSION:
             raise UserPlacesError(f"not user places version {USER_PLACES_VERSION} data")
         added = []
@@ -456,6 +463,15 @@ class UserPlaces(RoadsMixin):
                 continue
             added.append(self.add_road(item["name"], author=author, line=item["line"], kind=item["kind"],
                                        local_name=item.get("local_name"), details=item.get("details")))
+        lines = {json.dumps([list(p) for p in n.line]) for n in self.access_notes()}
+        for item in data.get("access_notes", []):
+            if item.get("removed") or json.dumps(item["line"]) in lines:
+                continue
+            if item.get("source_id") and self._one("SELECT 1 FROM access_notes WHERE source_id = ? AND removed_at IS NULL",
+                                                   (item["source_id"],)):
+                continue
+            added.append(self.set_access(item["vehicles"], author=author, line=item["line"],
+                                         source_id=item.get("source_id"), name=item.get("name")))
         return added
 
     # -- Internals ------------------------------------------------------------------

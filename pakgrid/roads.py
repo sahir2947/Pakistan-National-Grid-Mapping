@@ -23,8 +23,9 @@ How a road is made:
 - Its **tehsil** is the one most of those sub-cells have; its key is that tehsil's key, "roads",
   and its name: 'punjab/lahore/lahore-cantt/roads/street-7'. The key never changes.
 - Its **length** is the sum of its segments, as direction() measures them.
-- **Details** are optional: oneway (bool), surface, vehicles (allowed: car, motorbike,
-  bicycle, foot), width_m, speed_kmh, and any other fields you like.
+- **Details** are optional: oneway (bool), surface, vehicles (what can drive through, from
+  pakgrid.access.VEHICLES: foot, bicycle, motorbike, rickshaw, car, pickup, truck; set it with
+  UserPlaces.set_access), width_m, speed_kmh, and any other fields you like.
 - **Junctions:** where it crosses another road, or one of the two ends within JUNCTION_SNAP_M of
   the other (a T-junction drawn by hand rarely touches exactly).
 - **Streets on lookups:** with the file attached, Grid.locate and Grid.place give the nearest road
@@ -40,6 +41,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from . import geodesy, ids, navigate
+from .access import VEHICLES
 from .errors import InvalidIdError
 from .layout import SCALE, SUB, to_e7
 from .zones import _set_run, make_zone
@@ -50,7 +52,6 @@ JUNCTION_SNAP_M = 12.0       # a road's end this close to another road meets it
 STREET_ON_M = 25.0           # a point this close to a road is 'on' it
 STREET_MAX_M = 100.0         # the furthest a lookup looks for a street
 ROAD_KINDS = ("street", "gali", "road", "main road", "highway", "track", "path")
-VEHICLES = ("car", "motorbike", "bicycle", "foot")
 
 ROADS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS roads (
@@ -132,7 +133,8 @@ class RoadMatch:
 
     def to_dict(self):
         return {"key": self.road.key, "name": self.road.name, "local_name": self.road.local_name,
-                "kind": self.road.kind, "distance_m": round(self.distance_m, 1), "on": self.on,
+                "kind": self.road.kind, "vehicles": self.road.details.get("vehicles"),
+                "distance_m": round(self.distance_m, 1), "on": self.on,
                 "point": [self.lat, self.lon], "text": self.text}
 
 

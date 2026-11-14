@@ -89,7 +89,7 @@ def test_add_and_describe(user):
     s7 = user.add_road("Street 7", author="ali", kind="Street", local_name="گلی ۷", line=STREET,
                        details={"oneway": False, "surface": "paved", "vehicles": ["motorbike", "car", "car"]})
     assert s7.key == "punjab/lahore/lahore-cantt/roads/street-7" and s7.kind == "street"
-    assert s7.details == {"oneway": False, "surface": "paved", "vehicles": ["car", "motorbike"]}
+    assert s7.details == {"oneway": False, "surface": "paved", "vehicles": ["motorbike", "car"]}
     expected = sum(navigate.direction(*a, *b).distance_m for a, b in zip(STREET, STREET[1:]))
     assert s7.length_m == round(expected, 1)
     assert user.road_sub_cells(s7) == sorted(_brute_masks(STREET)) and s7.sub_cell_count == len(_brute_masks(STREET))
@@ -213,7 +213,7 @@ def test_cli(lahore_db, tmp_path, capsys):
                         "--vehicles", "motorbike", "car", "--local-name", "گلی ۷"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["key"] == "punjab/lahore/lahore-cantt/roads/street-7"
-    assert out["details"] == {"oneway": True, "surface": "paved", "vehicles": ["car", "motorbike"]}
+    assert out["details"] == {"oneway": True, "surface": "paved", "vehicles": ["motorbike", "car"]}
     assert main(base + ["update-road", out["key"], "--author", "sara", "--speed-kmh", "30"]) == 0
     assert json.loads(capsys.readouterr().out)["details"]["speed_kmh"] == 30
     assert main(base + ["roads"]) == 0

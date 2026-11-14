@@ -239,6 +239,12 @@ vehicles). The library records the sub-cells each road passes through, its
 length, places and junctions, and adds the nearest street to location
 lookups: `Street 7, Lahore Cant, Lahore Cantt, Lahore, Punjab` (project.md §5.9).
 
+**What can drive through:** shop owners and residents answer one question
+with a tap, "What can drive through this street?" (foot, bicycle, motorbike,
+rickshaw, car, pickup, truck), for a user road or any street on the app's
+map. Lookups then tell riders `Up to rickshaw size` within 25 m of that
+street (project.md §5.9).
+
 **Border flags:** every cell and sub-cell is flagged `inside`, `border` or
 `outside` Pakistan, using the geoBoundaries / OpenStreetMap border (including
 AJK and Gilgit-Baltistan). Border data © OpenStreetMap contributors, ODbL, via

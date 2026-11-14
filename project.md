@@ -741,7 +741,8 @@ grid.locate(31.52025, 74.3580).place.label         # 'Street 7, Lahore Cant, Lah
 - **Details** (all optional):
   - `oneway`: in the direction drawn;
   - `surface`: paved, unpaved, …;
-  - `vehicles`: those allowed, from car, motorbike, bicycle, foot;
+  - `vehicles`: what can drive through, from foot, bicycle, motorbike,
+    rickshaw, car, pickup, truck (see *What can drive through* below);
   - `width_m`, `speed_kmh`;
   - any other fields you like.
 
@@ -771,6 +772,60 @@ the `user.add_road(...)` call that stores it; the viewer itself stores
 nothing. Its JavaScript (`grid.lineMasks`, `PakGrid.lineLength`) finds the
 same sub-cells and length as the library.
 
+#### What can drive through (street access)
+
+A rider in a car loses time when the app sends them down a gali only a
+motorbike gets through. The people who know are the shop owners and
+residents, so the app asks them one question with a few buttons, **"What can
+drive through this street?"**, and the library keeps the answer on that
+street (`pakgrid/access.py`):
+
+```python
+user.set_access(largest="rickshaw", author="ali", road="punjab/lahore/lahore-cantt/roads/street-7")
+user.set_access(largest="motorbike", author="ali", line=[(31.5150, 74.3500), (31.5160, 74.3502)],
+                source_id="way/123456789", name="Gali 3")      # a street on the app's map
+a = user.access_at(31.5155, 74.3501)          # the answer for the street at this pin, or None
+a.largest, a.text, a.allows("car")            # 'motorbike', 'Up to motorbike size', False
+grid.locate(31.5155, 74.3501).place.access    # lookups carry it too
+```
+
+- **The buttons**, smallest first (`pakgrid.VEHICLES`): 🚶 foot, 🚲 bicycle,
+  🏍️ motorbike, 🛺 rickshaw (and Qingqi), 🚗 car, 🛻 pickup (pickups and
+  loaders: Suzuki, Shehzore), 🚚 truck. `pakgrid.access.LABELS_UR` has Urdu
+  labels for them.
+- **The answer** is usually one tap, the largest that fits: `largest="car"`
+  stores everything up to a car. A list says anything else
+  (`vehicles=["foot", "motorbike"]` for a barrier only motorbikes pass).
+- **Which street:**
+  - A **user road** (`road=`): the answer is its `vehicles` detail, and the
+    change is in the road's history.
+  - **Any other street**, one in OpenStreetMap or the app's map that the
+    library has no road for: an **access note**. It holds the stretch of
+    street as a `line` (2 or more points, at most 5 km), the street's ID in
+    that map (`source_id`, e.g. `way/123`), and its `name`. Answering again
+    with the same `source_id` updates the note (no line needed); the original
+    map is never changed.
+- **The latest answer counts.** Every answer keeps who gave it and when;
+  `access_history()` lists the changes to notes, and `remove_access()` takes
+  an answer back.
+- **Lookups:** `access_at(lat, lon)` gives the answer of the nearest street
+  that has one within 25 m (user roads and notes alike; ties go to the
+  newest answer). `Grid.locate` and `Grid.place` carry it as
+  `PlaceTags.access`, and `to_dict()["access"]`:
+  `{"vehicles": [...], "largest": "rickshaw", "nested": true, "text": "Up to rickshaw size", "source": "note", "key": "note/1", "set_by": "ali", ...}`.
+- **For riders:** a vehicle gets through when it is in `vehicles`
+  (`allows()`). `text` is `On foot only`, `Up to rickshaw size`,
+  `All vehicles`, or `Only on foot, motorbike` for a list with gaps. A
+  Flutter app only needs this list order and those four rules; the viewer's
+  JavaScript (`PakGrid.vehiclesUpTo`, `PakGrid.accessText`) is checked
+  against the library.
+
+Notes are included in `export_data` / `import_data`, and older user places
+files gain their tables when first opened. In the viewer, the **Roads** tool
+asks the question with one button per vehicle, and its *Street already on the
+map* option makes the `user.set_access(...)` call for a street that is not a
+user road.
+
 ---
 
 ## 6. Library architecture
@@ -792,6 +847,7 @@ pakgrid/
 ├── places.py     The places layer: province, district, tehsil and locality tags (§5.7)
 ├── userplaces.py Localities drawn by users, kept in a separate file (§5.8)
 ├── roads.py      Roads and streets drawn by users, in the same file (§5.9)
+├── access.py     What can drive through a street: answers on roads and other streets (§5.9)
 ├── zones.py      Custom zones: sets of sub-cells, pin checks, stored form (§7.6)
 ├── geojson.py    GeoJSON: blocks, zones and places' exact outlines (§7.7)
 ├── nearest.py    Nearest lookup: PointIndex and the ring search (§7.8)
@@ -956,6 +1012,7 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 | `pakgrid places [TEXT] [--level L] [--cells]` | List or search places (province, district, tehsil, locality); `--cells` prints the cells of one place |
 | `pakgrid user-places [--file F] add NAME (--polygon FILE \| --cells CODE...) --author A [--kind K] [--local-name L] [--ref KEY]... [--nearest N]` | Add a user locality (§5.8); also `update KEY`, `remove KEY`, `list`, `show KEY`, `history [KEY]`, `export FILE`, `import FILE`, `refresh` |
 | `pakgrid user-places add-road NAME --line FILE --author A [--kind K] [--local-name L] [--oneway] [--surface S] [--vehicles ...] [--width-m W] [--speed-kmh V]` | Add a user road (§5.9); also `update-road KEY`, `remove-road KEY`, `roads`, `road KEY`, `near-road LAT LON`, `roads-geojson` |
+| `pakgrid user-places access set --author A (--largest V \| --vehicles V ...) (--road KEY \| --line FILE [--source-id ID] [--name N])` | What can drive through a street (§5.9); also `access at LAT LON`, `list`, `remove --street S`, `history [--street S]`, `geojson` |
 | `pakgrid locate ... --user-places FILE` / `pakgrid show ... --user-places FILE` | Include user localities in the answer |
 
 The database path defaults to `pakgrid_v1.sqlite`, or the `PAKGRID_DB`
