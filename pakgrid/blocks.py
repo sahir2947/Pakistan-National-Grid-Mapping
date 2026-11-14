@@ -265,7 +265,8 @@ class BlockSet:
             raise BlockError("give cells, a polygon, a circle or a place")
         zone: Zone | None = None
         for k, v in sources:
-            z = self.grid.zone(**{k: v}, pakistan_only=pakistan_only)
+            given: dict[str, Any] = {k: v}
+            z = self.grid.zone(**given, pakistan_only=pakistan_only)
             zone = z if zone is None else zone | z
         assert zone is not None
         return dict(zone.masks)

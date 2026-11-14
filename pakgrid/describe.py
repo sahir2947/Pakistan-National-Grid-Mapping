@@ -29,7 +29,7 @@ from __future__ import annotations
 import struct
 from collections import Counter
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from . import ids, navigate
 from .layout import SCALE, SUB, GridLayout
@@ -106,7 +106,7 @@ def nearest_place(grid: Grid, lat: float, lon: float, kinds: Iterable[str] | Non
     wanted = set(kinds) if kinds else None
     near = grid.nearest_places(lat, lon, k=1, kind=wanted)
     if near:
-        found: Place = near[0].id
+        found = cast("Place", near[0].id)
         return found
     best: tuple[float, int, Place] | None = None
     for p in grid._place_table().values():
@@ -148,9 +148,9 @@ def describe(grid: Grid, masks: Mapping[int, int], references: Iterable[Any] = (
     districts: Counter[int] = Counter()
     provinces: Counter[int] = Counter()
     for t, n in tehsils.items():
-        d = table[t].parent_id
+        d = cast(int, table[t].parent_id)
         districts[d] += n
-        provinces[table[d].parent_id] += n
+        provinces[cast(int, table[d].parent_id)] += n
     out["places"] = {"province": ranked(provinces), "district": ranked(districts), "tehsil": ranked(tehsils),
                      "locality": ranked(localities)}
 
@@ -179,9 +179,9 @@ def describe(grid: Grid, masks: Mapping[int, int], references: Iterable[Any] = (
     elif out["nearest_locality"] and tehsils:
         names.append(f"near {out['nearest_locality']['name']}")
     if tehsils:
-        t = table[ranked(tehsils)[0]["id"]]
-        d = table[t.parent_id]
-        names += [t.name, d.name, table[d.parent_id].name]
+        tp = table[ranked(tehsils)[0]["id"]]
+        dp = table[cast(int, tp.parent_id)]
+        names += [tp.name, dp.name, table[cast(int, dp.parent_id)].name]
     out["label"] = ", ".join(n for k, n in enumerate(names) if not k or n.lower() != names[k - 1].lower()) or None
     return out
 

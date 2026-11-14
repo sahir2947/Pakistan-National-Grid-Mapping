@@ -52,7 +52,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 from . import ids, navigate
 from .errors import InvalidIdError, NotInDatabaseError, PakgridError
@@ -637,7 +637,7 @@ class UserPlaces(RoadsMixin, AccessMixin):
         if p is not None:
             if p.level != "locality":
                 raise UserPlacesError(f"{p.key} is a {p.level}; a reference must be a locality")
-            return p.key, p.name, p.lat, p.lon
+            return p.key, p.name, cast(float, p.lat), cast(float, p.lon)
         loc = self.get(ref)
         if loc.removed or loc.id - USER_ID_BASE == own:
             raise InvalidIdError(f"no such reference locality: {ref!r}")
