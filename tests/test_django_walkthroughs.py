@@ -303,3 +303,24 @@ def test_without_the_grid_database():
     assert r.status_code == 201, r.content
     wt = Walkthrough.objects.get(pk=r.json()["id"])
     assert wt.pin_sub_cell == "" and wt.data["sub_cells"] == [] and r.json()["turns"] == ["turn right", "turn left"]
+
+
+class RefusingBucket:
+    """A storage that refuses every write, like a bucket with the wrong credentials."""
+
+    def __new__(cls):
+        from django.core.files.storage import InMemoryStorage
+
+        class _Storage(InMemoryStorage):
+            def _save(self, name, content):
+                raise RuntimeError("AccessDenied")
+        return _Storage()
+
+
+def test_storage_failure_fails_the_job_cleanly():
+    with override_settings(PAKGRID_WALKTHROUGHS={"FFMPEG": "fake-ffmpeg", "JOB": "sync",
+                                                 "STORAGE": f"{__name__}.RefusingBucket"}):
+        r = upload(client("ali"))
+    assert r.status_code == 201 and r.json()["status"] == "failed"
+    assert r.json()["error"] == "the photos could not be stored (RuntimeError)"
+    assert WalkthroughPhoto.objects.count() == 0

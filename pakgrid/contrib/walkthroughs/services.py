@@ -174,16 +174,21 @@ def take_photos(pk, upload=None):
         if not conf.get("KEEP_VIDEO") and wt.video:
             wt.video.delete(save=False)
             wt.save(update_fields=["video"])
-    except (OSError, subprocess.SubprocessError, WalkthroughError, ValueError) as exc:
-        log.warning("walkthrough %s: photos failed: %s", pk, exc)
-        wt.status, wt.error = Walkthrough.FAILED, str(exc)[:2000]
+    except Exception as exc:  # noqa: BLE001 - any failure (ffmpeg, storage, ...) fails this job only
+        if isinstance(exc, (OSError, subprocess.SubprocessError, WalkthroughError, ValueError)):
+            log.warning("walkthrough %s: photos failed: %s", pk, exc)
+            reason = str(exc)
+        else:                                   # e.g. the storage refused: say what, not a traceback
+            log.exception("walkthrough %s: photos failed", pk)
+            reason = f"the photos could not be stored ({type(exc).__name__})"
+        wt.status, wt.error = Walkthrough.FAILED, reason[:2000]
         fields = ["status", "error"]
         if upload is not None and not wt.video:
             try:                                    # keep it, so the walkthrough can be retried
                 upload.seek(0)
                 wt.video.save(getattr(upload, "name", None) or "video.mp4", upload, save=False)
                 fields.append("video")
-            except OSError as keep:
+            except Exception as keep:  # noqa: BLE001
                 log.warning("walkthrough %s: could not keep the video for a retry: %s", pk, keep)
         wt.save(update_fields=fields)
     return wt
