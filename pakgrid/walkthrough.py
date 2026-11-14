@@ -46,14 +46,25 @@ The rider rule (WalkthroughGuide) is in conformance/WALKTHROUGH.md, with test ca
 conformance/walkthrough.json for ports (the viewer's JavaScript passes them).
 """
 
+from __future__ import annotations
+
 import math
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 from . import geodesy, ids, navigate, spec
 from .errors import PakgridError
+
+if TYPE_CHECKING:
+    from .grid import Grid
+
+XY = tuple[float, float]                        # metres east and north of the reference point
+LatLon = tuple[float, float]
+TimedPoint = tuple[float, float, float]         # (t, lat, lon)
 
 WALKTHROUGH_VERSION = 1
 
@@ -88,14 +99,14 @@ class WalkthroughError(PakgridError, ValueError):
 
 # -- Geometry in the walkthrough's flat frame ------------------------------------------------
 
-def _xy(ref, lat, lon):
+def _xy(ref: Sequence[float], lat: float, lon: float) -> XY:
     return geodesy.local_offset(ref[0], ref[1], lat, lon)
 
 
-def _project(xy, along, x, y):
+def _project(xy: Sequence[XY], along: Sequence[float], x: float, y: float) -> tuple[float, float, int]:
     """(distance, along, segment) of the nearest point of the path [(x, y)] to (x, y); the
     first segment wins a tie."""
-    best = None
+    best: tuple[float, float, int] | None = None
     for k in range(len(xy) - 1):
         (ax, ay), (bx, by) = xy[k], xy[k + 1]
         dx, dy = bx - ax, by - ay
@@ -104,10 +115,11 @@ def _project(xy, along, x, y):
         d = math.hypot(x - (ax + t * dx), y - (ay + t * dy))
         if best is None or d < best[0]:
             best = (d, along[k] + t * (along[k + 1] - along[k]), k)
+    assert best is not None, "a path has at least two points"
     return best
 
 
-def _simplify(xy, tol):
+def _simplify(xy: Sequence[XY], tol: float) -> list[int]:
     """Indices kept by Douglas-Peucker (segment distance), first and last always kept."""
     keep = {0, len(xy) - 1}
     stack = [(0, len(xy) - 1)]
@@ -116,24 +128,24 @@ def _simplify(xy, tol):
         (ax, ay), (bx, by) = xy[i], xy[j]
         dx, dy = bx - ax, by - ay
         seg2 = dx * dx + dy * dy
-        far, at = -1.0, None
+        far, at = -1.0, -1
         for k in range(i + 1, j):
             px, py = xy[k]
             t = 0.0 if seg2 == 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / seg2))
             d = math.hypot(px - (ax + t * dx), py - (ay + t * dy))
             if d > far:
                 far, at = d, k
-        if at is not None and far > tol:
+        if at >= 0 and far > tol:
             keep.add(at)
             stack += [(i, at), (at, j)]
     return sorted(keep)
 
 
-def _bearing(a, b):
+def _bearing(a: XY, b: XY) -> float:
     return geodesy.bearing(b[0] - a[0], b[1] - a[1])
 
 
-def _change(b1, b2):
+def _change(b1: float, b2: float) -> float:
     """Signed turn from bearing b1 to b2, in (-180, 180]; negative is left."""
     c = (b2 - b1 + 180.0) % 360.0 - 180.0
     return 180.0 if c == -180.0 else c
@@ -141,37 +153,38 @@ def _change(b1, b2):
 
 # -- Reading tracks ------------------------------------------------------------------------
 
-def _reading(r):
+def _reading(r: object) -> tuple[Any, Any, Any, Any]:
     if isinstance(r, dict):
         return r.get("t"), r.get("lat"), r.get("lon"), r.get("accuracy", r.get("accuracy_m"))
     if isinstance(r, (list, tuple)) and len(r) in (3, 4):
-        return (*r, None) if len(r) == 3 else tuple(r)
+        t, lat, lon, *acc = r
+        return t, lat, lon, acc[0] if acc else None
     raise WalkthroughError(f"a reading must be (t, lat, lon[, accuracy_m]) or a dict, got {r!r}")
 
 
-def _num(v):
+def _num(v: object) -> TypeGuard[float]:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
-def read_gpx(text, video_start=None):
+def read_gpx(text: str | bytes, video_start: datetime | str | None = None) -> list[dict[str, float]]:
     """Readings [{'t', 'lat', 'lon'}] from a GPX file's track points. t is seconds from
     video_start (an aware datetime or ISO text), or from the first point when not given."""
     root = ET.fromstring(text)
-    points = []
+    points: list[tuple[datetime, float, float]] = []
     for el in root.iter():
         if el.tag.rsplit("}", 1)[-1] != "trkpt":
             continue
         when = next((c.text for c in el if c.tag.rsplit("}", 1)[-1] == "time"), None)
         if when is None:
             continue
-        points.append((_parse_time(when), float(el.get("lat")), float(el.get("lon"))))
+        points.append((_parse_time(when), float(cast(str, el.get("lat"))), float(cast(str, el.get("lon")))))
     if not points:
         raise WalkthroughError("the GPX file has no track points with times")
     t0 = _parse_time(video_start) if video_start is not None else points[0][0]
     return [{"t": (when - t0).total_seconds(), "lat": lat, "lon": lon} for when, lat, lon in points]
 
 
-def _parse_time(v):
+def _parse_time(v: datetime | str) -> datetime:
     if isinstance(v, datetime):
         d = v
     else:
@@ -183,18 +196,19 @@ def _parse_time(v):
 
 # -- Building ------------------------------------------------------------------------------
 
-def build(track, *, pin, author, start=None, grid=None, properties=None):
+def build(track: Iterable[Any], *, pin: Sequence[float], author: str, start: Sequence[float] | None = None,
+          grid: Grid | None = None, properties: dict[str, Any] | None = None) -> Walkthrough:
     """Make a Walkthrough from a GPS track recorded with the video (see the module docstring).
     With a grid, frames and the path also get their sub-cells."""
     if not isinstance(author, str) or not author.strip():
         raise WalkthroughError("author must be a non-empty string")
-    pin = _point(pin, "pin")
-    start = _point(start, "start") if start is not None else None
+    pin_p = _point(pin, "pin")
+    start_p = _point(start, "start") if start is not None else None
 
     # 1. Clean
     raw = [_reading(r) for r in track]
     dropped = {"invalid": 0, "inaccurate": 0, "repeated_time": 0, "jump": 0}
-    good = []
+    good: list[tuple[float, float, float, float]] = []
     for t, lat, lon, acc in sorted((r for r in raw if _num(r[0])), key=lambda r: r[0]):
         if not (_num(lat) and _num(lon) and -90 <= lat <= 90 and -180 <= lon <= 180) \
                 or (acc is not None and not (_num(acc) and acc > 0)):
@@ -221,7 +235,7 @@ def build(track, *, pin, author, start=None, grid=None, properties=None):
     # 2. Smooth, in metres from the first reading
     ref0 = good[0][1:3]
     pts = [(t, *_xy(ref0, lat, lon)) for t, lat, lon, _ in good]
-    smooth = []
+    smooth: list[TimedPoint] = []
     for t, _, _ in pts:
         sw = sx = sy = 0.0
         for (u, x, y), r in zip(pts, good):
@@ -234,14 +248,14 @@ def build(track, *, pin, author, start=None, grid=None, properties=None):
 
     # 3. Anchor
     first, last = as_lat_lon[0], as_lat_lon[-1]
-    if start is None:
-        start = (first[1], first[2])
-    for what, p, r in (("start", start, first), ("pin", pin, last)):
-        gap = navigate.direction(p[0], p[1], r[1], r[2]).distance_m
+    if start_p is None:
+        start_p = (first[1], first[2])
+    for what, end, rd in (("start", start_p, first), ("pin", pin_p, last)):
+        gap = navigate.direction(end[0], end[1], rd[1], rd[2]).distance_m
         if gap > ANCHOR_MAX_M:
             raise WalkthroughError(f"the {'first' if what == 'start' else 'last'} reading is {gap:.0f} m from the "
                                    f"{what}; it must be within {ANCHOR_MAX_M:g} m (record from the {what})")
-    seq = [(first[0], *start)] + as_lat_lon[1:-1] + [(last[0], *pin)]
+    seq: list[TimedPoint] = [(first[0], *start_p)] + as_lat_lon[1:-1] + [(last[0], *pin_p)]
 
     # 4. Round, drop repeats, simplify
     seq = [(t, round(lat, 7), round(lon, 7)) for t, lat, lon in seq]
@@ -261,18 +275,20 @@ def build(track, *, pin, author, start=None, grid=None, properties=None):
     return Walkthrough(data)
 
 
-def _point(p, what):
+def _point(p: object, what: str) -> LatLon:
     if not (isinstance(p, (list, tuple)) and len(p) == 2 and all(_num(v) for v in p)
             and -90 <= p[0] <= 90 and -180 <= p[1] <= 180):
         raise WalkthroughError(f"{what} must be (lat, lon), got {p!r}")
+    assert isinstance(p, (list, tuple))
     return float(p[0]), float(p[1])
 
 
-def _dropped_text(d):
+def _dropped_text(d: dict[str, int]) -> str:
     return ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in d.items() if n) or "none dropped"
 
 
-def _manifest(path, author, properties, grid, dropped, n_readings):
+def _manifest(path: list[TimedPoint], author: str, properties: dict[str, Any] | None, grid: Grid | None,
+              dropped: dict[str, int], n_readings: int) -> dict[str, Any]:
     from .userplaces import _now
     ref = path[0][1:]
     xy = [_xy(ref, lat, lon) for _, lat, lon in path]
@@ -290,21 +306,21 @@ def _manifest(path, author, properties, grid, dropped, n_readings):
         raise WalkthroughError(f"the walk takes {duration:.0f} s; at most {MAX_DURATION_S:g} s is allowed")
 
     # Turns: measured over TURN_ARM_M either side, the sharper of two close ones kept
-    def at(s):
+    def at(s: float) -> XY:
         s = min(max(s, 0.0), length)
         k = _segment_at(along, s)
         f = 0.0 if along[k + 1] == along[k] else (s - along[k]) / (along[k + 1] - along[k])
         return xy[k][0] + f * (xy[k + 1][0] - xy[k][0]), xy[k][1] + f * (xy[k + 1][1] - xy[k][1])
-    found = []
+    found: list[tuple[int, float]] = []
     for k in range(1, len(xy) - 1):
         c = _change(_bearing(at(along[k] - TURN_ARM_M), xy[k]), _bearing(xy[k], at(along[k] + TURN_ARM_M)))
         if abs(c) >= TURN_DEG:
             found.append((k, c))
-    kept = []
+    kept: list[tuple[int, float]] = []
     for k, c in sorted(found, key=lambda kc: (-abs(kc[1]), kc[0])):
         if all(abs(along[k] - along[j]) >= TURN_GAP_M for j, _ in kept):
             kept.append((k, c))
-    turns = [{"along_m": round(along[k], 2), "turn_deg": round(c, 1), "turn": navigate.turn_words(c),
+    turns: list[dict[str, Any]] = [{"along_m": round(along[k], 2), "turn_deg": round(c, 1), "turn": navigate.turn_words(c),
               "point": [path[k][1], path[k][2]]} for k, c in sorted(kept)]
 
     # Frames
@@ -313,7 +329,7 @@ def _manifest(path, author, properties, grid, dropped, n_readings):
     regular = [round(k * FRAME_EVERY_M, 2) for k in range(int(length // FRAME_EVERY_M) + 1)]
     regular = [s for s in regular if all(abs(s - m) >= MIN_FRAME_GAP_M for m in stops)]
     m_lat, m_lon = geodesy.metres_per_degree(ref[0])
-    frames = []
+    frames: list[dict[str, Any]] = []
     vertex = {round(a, 2): k for k, a in enumerate(along[:-1])}
     for s in sorted(set(regular) | set(stops)):
         k = vertex[s] if s in marks else _segment_at(along, s)        # at a turn: the way out of it
@@ -328,7 +344,7 @@ def _manifest(path, author, properties, grid, dropped, n_readings):
                        "to_go_m": round(length - s, 2), "turn": marks.get(s),
                        "image": f"frame-{len(frames):03d}.jpg"})
 
-    def sub_code(lat, lon):
+    def sub_code(lat: float, lon: float) -> str | None:
         if grid is None:
             return None
         from .layout import SUB, to_e7
@@ -340,7 +356,7 @@ def _manifest(path, author, properties, grid, dropped, n_readings):
 
     for f in frames:
         f["sub_cell"] = sub_code(f["lat"], f["lon"])
-    sub_cells = []
+    sub_cells: list[str] = []
     if grid is not None:
         from .layout import SUB, to_e7
         from .roads import line_masks
@@ -364,7 +380,7 @@ def _manifest(path, author, properties, grid, dropped, n_readings):
     return data
 
 
-def _segment_at(along, s):
+def _segment_at(along: Sequence[float], s: float) -> int:
     """The segment k with along[k] <= s <= along[k + 1] (the last one for s past the end)."""
     for k in range(len(along) - 1):
         if s <= along[k + 1]:
@@ -377,7 +393,7 @@ def _segment_at(along, s):
 class Walkthrough:
     """A walkthrough's data (see the module docstring); to_dict() is its stored form."""
 
-    def __init__(self, data):
+    def __init__(self, data: dict[str, Any]) -> None:
         self.data = data
         p = data["path"]
         self.ref = (p[0][0], p[0][1])
@@ -385,7 +401,7 @@ class Walkthrough:
         self.along = [a for *_, a in p]
 
     @classmethod
-    def from_dict(cls, data):
+    def from_dict(cls, data: object) -> Walkthrough:
         if not isinstance(data, dict) or data.get("walkthrough_version") != WALKTHROUGH_VERSION:
             raise WalkthroughError(f"not walkthrough version {WALKTHROUGH_VERSION} data")
         try:
@@ -396,30 +412,30 @@ class Walkthrough:
             raise WalkthroughError("the walkthrough data is incomplete") from None
         return wt
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return self.data
 
     @property
-    def length_m(self):
+    def length_m(self) -> float:
         return self.data["length_m"]
 
     @property
-    def frames(self):
+    def frames(self) -> list[dict[str, Any]]:
         return self.data["frames"]
 
     @property
-    def turns(self):
+    def turns(self) -> list[dict[str, Any]]:
         return self.data["turns"]
 
-    def guide(self):
+    def guide(self) -> WalkthroughGuide:
         """A WalkthroughGuide for a rider following this walkthrough."""
         return WalkthroughGuide(self)
 
-    def frame_times(self):
+    def frame_times(self) -> list[float]:
         """The video time of each photo, in seconds."""
         return [f["t_s"] for f in self.frames]
 
-    def ffmpeg_commands(self, video, out_dir, width=1280, quality=3):
+    def ffmpeg_commands(self, video: object, out_dir: object, width: int = 1280, quality: int = 3) -> list[list[str]]:
         """One ffmpeg command (a list of arguments) per photo, taking it from the video at its time
         into out_dir/<image>, `width` pixels wide (JPEG quality 2-31, lower is better)."""
         import os
@@ -427,7 +443,7 @@ class Walkthrough:
                  "-frames:v", "1", "-vf", f"scale={int(width)}:-2", "-q:v", str(int(quality)),
                  os.path.join(str(out_dir), f["image"])] for f in self.frames]
 
-    def to_geojson(self):
+    def to_geojson(self) -> dict[str, Any]:
         """A FeatureCollection: the path as a LineString, then each photo's point."""
         from .geojson import feature_collection
         d = self.data
@@ -443,7 +459,7 @@ class Walkthrough:
         return feature_collection(feats)
 
     # The rider rule's guidance at a point of progress (also each frame's text)
-    def _guidance(self, progress, off, gps):
+    def _guidance(self, progress: float, off: float | None, gps: str) -> dict[str, Any]:
         frames, turns, length = self.frames, self.turns, self.length_m
         best = 0
         for i, f in enumerate(frames):
@@ -454,12 +470,12 @@ class Walkthrough:
         in_m = None if nxt is None else nxt["along_m"] - progress
         arrived = to_go <= ARRIVED_M
         if gps == "off_path":
-            text = f"Go back to the path: it is {navigate.format_distance(off)} away"
+            text = f"Go back to the path: it is {navigate.format_distance(off or 0.0)} away"
         elif arrived:
             text = "You have arrived"
-        elif nxt is not None and in_m <= TURN_NOW_M:
+        elif nxt is not None and in_m is not None and in_m <= TURN_NOW_M:
             text = f"{nxt['turn'][0].upper()}{nxt['turn'][1:]} now"
-        elif nxt is not None:
+        elif nxt is not None and in_m is not None:
             text = f"In {navigate.format_distance(in_m)}, {nxt['turn']}"
         else:
             text = f"The door is {navigate.format_distance(to_go)} ahead"
@@ -481,7 +497,7 @@ class GuideState:
     gps: str                    # 'ok', 'weak', 'off_path', 'ignored', 'manual', or 'start' before any reading
     text: str                   # 'In 15 m, turn left', 'Turn left now', 'The door is 35 m ahead', ...
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
 
 
@@ -503,12 +519,12 @@ class WalkthroughGuide:
       else 'The door is 35 m ahead' (distances as navigate.format_distance).
     """
 
-    def __init__(self, walkthrough):
+    def __init__(self, walkthrough: Walkthrough | dict[str, Any]) -> None:
         self.wt = walkthrough if isinstance(walkthrough, Walkthrough) else Walkthrough.from_dict(walkthrough)
         self.progress = 0.0
         self.state = self._state(None, "start")
 
-    def update(self, lat, lon, accuracy_m=None):
+    def update(self, lat: float, lon: float, accuracy_m: float | None = None) -> GuideState:
         """A GPS reading. Returns the GuideState."""
         if not (_num(lat) and _num(lon) and -90 <= lat <= 90 and -180 <= lon <= 180):
             return self._set(None, "ignored")
@@ -523,22 +539,22 @@ class WalkthroughGuide:
             self.progress = raw
         return self._set(off, "ok")
 
-    def show(self, index):
+    def show(self, index: int) -> GuideState:
         """Move to a photo by hand (a swipe). Returns the GuideState."""
         frames = self.wt.frames
         index = min(max(int(index), 0), len(frames) - 1)
         self.progress = float(frames[index]["along_m"])
         return self._set(None, "manual")
 
-    def next(self):
+    def next(self) -> GuideState:
         return self.show(self.state.frame + 1)
 
-    def previous(self):
+    def previous(self) -> GuideState:
         return self.show(self.state.frame - 1)
 
-    def _set(self, off, gps):
+    def _set(self, off: float | None, gps: str) -> GuideState:
         self.state = self._state(off, gps)
         return self.state
 
-    def _state(self, off, gps):
+    def _state(self, off: float | None, gps: str) -> GuideState:
         return GuideState(**self.wt._guidance(self.progress, off, gps))
