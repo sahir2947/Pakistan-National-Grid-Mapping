@@ -2,8 +2,11 @@
 `WalkthroughPhoto`s. Files live in PAKGRID_WALKTHROUGHS['STORAGE'] and are deleted with
 their records."""
 
+from __future__ import annotations
+
 import os
 import uuid
+from typing import Any
 
 from django.conf import settings
 from django.core.files.storage import Storage
@@ -12,7 +15,7 @@ from django.db.models.signals import post_delete
 from django.dispatch import receiver
 
 
-def video_path(instance, filename):
+def video_path(instance: Walkthrough, filename: str) -> str:
     ext = os.path.splitext(filename)[1].lower()[:8] or ".mp4"
     return f"walkthroughs/{instance.id}/video{ext}"
 
@@ -21,53 +24,53 @@ class _ConfiguredStorage(Storage):
     """Passes every call to PAKGRID_WALKTHROUGHS['STORAGE'], looked up at that moment (Django
     reads a field's storage once, at start-up; this keeps settings overrides working)."""
 
-    def _s(self):
+    def _s(self) -> Storage:
         from .conf import get_storage
         return get_storage()
 
-    def _open(self, name, mode="rb"):
+    def _open(self, name: str, mode: str = "rb") -> Any:
         return self._s().open(name, mode)
 
-    def _save(self, name, content):
+    def _save(self, name: str, content: Any) -> str:
         return self._s().save(name, content)
 
-    def generate_filename(self, filename):
+    def generate_filename(self, filename: str) -> str:
         return self._s().generate_filename(filename)
 
-    def get_available_name(self, name, max_length=None):
+    def get_available_name(self, name: str, max_length: int | None = None) -> str:
         return self._s().get_available_name(name, max_length=max_length)
 
-    def get_valid_name(self, name):
+    def get_valid_name(self, name: str) -> str:
         return self._s().get_valid_name(name)
 
-    def delete(self, name):
+    def delete(self, name: str) -> None:
         return self._s().delete(name)
 
-    def exists(self, name):
+    def exists(self, name: str) -> bool:
         return self._s().exists(name)
 
-    def url(self, name):
+    def url(self, name: str) -> str:
         return self._s().url(name)
 
-    def size(self, name):
+    def size(self, name: str) -> int:
         return self._s().size(name)
 
-    def path(self, name):
+    def path(self, name: str) -> str:
         return self._s().path(name)
 
-    def listdir(self, path):
+    def listdir(self, path: str) -> tuple[list[str], list[str]]:
         return self._s().listdir(path)
 
 
 _STORAGE = _ConfiguredStorage()
 
 
-def walkthrough_storage():
+def walkthrough_storage() -> Storage:
     """The storage of videos and photos: PAKGRID_WALKTHROUGHS['STORAGE'] (see conf)."""
     return _STORAGE
 
 
-def photo_path(instance, filename):
+def photo_path(instance: WalkthroughPhoto, filename: str) -> str:
     return f"walkthroughs/{instance.walkthrough_id}/{os.path.basename(filename)}"
 
 
@@ -100,7 +103,7 @@ class Walkthrough(models.Model):
         ordering = ["-created_at"]
         indexes = [models.Index(fields=["place_ref", "status"])]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"Walkthrough {self.place_ref or self.pin_sub_cell} ({self.get_status_display()}, {self.length_m:.0f} m)"
 
 
@@ -113,13 +116,13 @@ class WalkthroughPhoto(models.Model):
         ordering = ["walkthrough", "index"]
         constraints = [models.UniqueConstraint(fields=["walkthrough", "index"], name="pakgrid_walkthrough_photo_index")]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.walkthrough_id} photo {self.index}"
 
 
 # Files go with their records (storage does not delete them by itself).
 @receiver(post_delete)
-def _delete_files(sender, instance, **kwargs):
+def _delete_files(sender: Any, instance: Any, **kwargs: Any) -> None:
     if sender is WalkthroughPhoto and instance.image:
         instance.image.delete(save=False)
     elif sender is Walkthrough and instance.video:

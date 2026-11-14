@@ -2048,6 +2048,13 @@ for Python 3.10, 3.11, 3.12 and 3.13 on Linux, and Python 3.13 on macOS and
 Windows, on every push to `main` and every pull request. The workflow also runs `pyflakes`, and checks that the viewer's
 `layout.js` and `boundary.js` match the library.
 
+Every function in the package has type hints, and the package ships a
+`py.typed` marker, so an app's own type checker (mypy, Pyright) checks its
+calls into pakgrid. The workflow runs `python -m mypy` once per push (settings
+in `pyproject.toml`: every function typed, checked as Python 3.10). Django,
+Django REST framework and Celery have no type information of their own, so in
+`pakgrid.contrib` their objects are not checked.
+
 ---
 
 ## 15. Roadmap

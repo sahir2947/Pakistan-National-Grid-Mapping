@@ -1,20 +1,31 @@
 """Command-line tools: pakgrid build | build-places | verify | locate | show | within | distance | nearest |
 zone | blocks | geojson | places | user-places | walkthrough | info | export-layout | export-conformance."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
 import sys
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, Any, cast
 
 from . import ids, spec
 from .access import VEHICLES
 from .errors import PakgridError
 
+if TYPE_CHECKING:
+    from .grid import Grid, Place
+    from .userplaces import UserPlaces
+    from .zones import Zone
+
+Args = argparse.Namespace
+
 DEFAULT_DB = os.environ.get("PAKGRID_DB", f"pakgrid_v{spec.GRID_VERSION}.sqlite")
 DEFAULT_USER_PLACES = os.environ.get("PAKGRID_USER_PLACES")
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pakgrid", description="Pakistan National Grid tools")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -284,7 +295,7 @@ def main(argv=None):
         return 1
 
 
-def _build(args):
+def _build(args: Args) -> int:
     from .builder import build_database
     rows = tuple(int(x) for x in args.rows.split(":")) if args.rows else None
     report = build_database(args.output, quadrants=args.quadrant, rows=rows, overwrite=args.overwrite,
@@ -296,7 +307,7 @@ def _build(args):
     return 0
 
 
-def _build_places(args):
+def _build_places(args: Args) -> int:
     from .places import build_places
     meta = build_places(args.db, progress=lambda msg: print(f"building {msg}…", file=sys.stderr))
     print(f"wrote the places layer (version {meta['places_version']}) to {args.db}: {meta['places_count']} places, "
@@ -306,7 +317,7 @@ def _build_places(args):
     return 0
 
 
-def _places(grid, args):
+def _places(grid: Grid, args: Args) -> Any:
     from .grid import PLACE_LEVELS
     found = grid.find_places(args.text, args.level) if args.text else grid.places(args.level)
     if not args.cells:
@@ -324,7 +335,7 @@ def _places(grid, args):
     return {"place": p.to_dict(), "cells": [ids.cell_code(c) for c in grid.cells_in_place(p)]}
 
 
-def _verify(args):
+def _verify(args: Args) -> int:
     from .verify import verify_database
     report = verify_database(args.db, full=args.full, expected_sha256=args.expect)
     for name, passed, detail, required in report.checks:
@@ -336,7 +347,7 @@ def _verify(args):
     return 0 if report.ok else 2
 
 
-def _export_layout(args):
+def _export_layout(args: Args) -> int:
     from .export import write_viewer_files
     for path in write_viewer_files(args.output_dir,
                                    progress=lambda msg: print(f"building {msg}…", file=sys.stderr)):
@@ -344,7 +355,7 @@ def _export_layout(args):
     return 0
 
 
-def _walkthrough(args):
+def _walkthrough(args: Args) -> int:
     import shutil
     import subprocess
     from .walkthrough import Walkthrough, read_gpx
@@ -395,15 +406,15 @@ def _walkthrough(args):
     return 0
 
 
-def _export_conformance(args):
+def _export_conformance(args: Args) -> int:
     from .conformance import write_conformance_files
     for path in write_conformance_files(args.output_dir):
         print(f"wrote {path}")
     return 0
 
 
-def _with_grid(fn):
-    def run(args):
+def _with_grid(fn: Callable[[Grid, Args], Any]) -> Callable[[Args], int]:
+    def run(args: Args) -> int:
         from .grid import Grid
         with Grid.open(args.db, user_places=getattr(args, "user_places", None)) as grid:
             print(json.dumps(fn(grid, args), indent=2, ensure_ascii=False))
@@ -411,7 +422,7 @@ def _with_grid(fn):
     return run
 
 
-def _show(grid, args):
+def _show(grid: Grid, args: Args) -> Any:
     from .ids import parse_code
     level, _ = parse_code(args.code)
     item = grid.cell(args.code) if level == "cell" else grid.sub_cell(args.code)
@@ -422,7 +433,7 @@ def _show(grid, args):
     return out
 
 
-def _nearest(grid, args):
+def _nearest(grid: Grid, args: Args) -> Any:
     if args.points:
         with open(args.points, encoding="utf-8") as f:
             text = f.read()
@@ -435,16 +446,17 @@ def _nearest(grid, args):
         found = grid.point_index(points).nearest(args.lat, args.lon, args.k, args.max_m)
         return [n.to_dict() for n in found]
     found = grid.nearest_places(args.lat, args.lon, args.k, args.max_m, kind=args.kind)
-    return [dict(n.to_dict(), id=n.id.id, key=n.id.key, name=n.id.name, kind=n.id.kind) for n in found]
+    pairs = [(n, cast("Place", n.id)) for n in found]
+    return [dict(n.to_dict(), id=p.id, key=p.key, name=p.name, kind=p.kind) for n, p in pairs]
 
 
-def _zone_summary(zone):
+def _zone_summary(zone: Zone) -> dict[str, Any]:
     b = zone.bounds()
     return {"sub_cells": zone.sub_cell_count, "cells": zone.cell_count, "full_cells": len(zone.cells(full_only=True)),
             "area_km2": round(zone.area_km2, 3), "bounds": [round(v, 7) for v in b] if b else None}
 
 
-def _zone(grid, args):
+def _zone(grid: Grid, args: Args) -> Any:
     from .zones import Zone
     if args.action == "make":
         polygon = None
@@ -472,7 +484,7 @@ def _zone(grid, args):
             "sub_cell": ids.sub_cell_code(ids.sub_cell_id(ids.cell_id(*loc[:3]), loc[3] * 5 + loc[4]))}
 
 
-def _geojson(args):
+def _geojson(args: Args) -> int:
     from .grid import Grid
     from .zones import Zone
     with Grid.open(args.db, user_places=args.user_places) as grid:
@@ -503,7 +515,7 @@ def _geojson(args):
     return 0
 
 
-def _blocks(args):
+def _blocks(args: Args) -> int:
     from .blocks import BlockSet
     from .grid import Grid
     with Grid.open(args.db, user_places=args.user_places) as grid:
@@ -514,7 +526,8 @@ def _blocks(args):
             if args.action != "add":
                 raise
             blocks = grid.block_set(getattr(args, "set_name", None) or "blocks")
-        a, changed, out = args.action, True, None
+        out: Any = None
+        a, changed = args.action, True
         if a in ("add", "add-cells", "remove-cells"):
             polygon = None
             if args.polygon:
@@ -561,7 +574,7 @@ def _blocks(args):
     return 0
 
 
-def _user_places(args):
+def _user_places(args: Args) -> int:
     from .grid import Grid
     with Grid.open(args.db) as grid:
         user = grid.attach_user_places(args.file)
@@ -571,7 +584,7 @@ def _user_places(args):
     return 0
 
 
-def _access_action(user, args):
+def _access_action(user: UserPlaces, args: Args) -> Any:
     from .userplaces import UserPlacesError
     w = args.what
     if w in ("set", "remove") and not args.author:
@@ -600,7 +613,7 @@ def _access_action(user, args):
     return user.access_geojson()
 
 
-def _user_action(grid, user, args):
+def _user_action(grid: Grid, user: UserPlaces, args: Args) -> Any:
     a = args.action
     if a in ("add", "update"):
         polygon = None
@@ -650,9 +663,9 @@ def _user_action(grid, user, args):
     if a == "remove":
         return user.remove(args.key, author=args.author).to_dict()
     if a == "list":
-        found = user.find(args.text) if args.text else user.localities(include_removed=args.removed)
+        locs = user.find(args.text) if args.text else user.localities(include_removed=args.removed)
         return [{"key": loc.key, "name": loc.name, "kind": loc.kind, "text": loc.text,
-                 "sub_cells": loc.sub_cell_count, "removed": loc.removed} for loc in found]
+                 "sub_cells": loc.sub_cell_count, "removed": loc.removed} for loc in locs]
     if a == "show":
         loc = user.get(args.key)
         return dict(loc.to_dict(), sub_cell_codes=[ids.sub_cell_code(s) for s in user.sub_cells(loc)])

@@ -12,6 +12,7 @@ dependencies = []
 classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: GIS",
+    "Typing :: Typed",
 ]
 
 [project.optional-dependencies]
@@ -25,7 +26,21 @@ pakgrid = "pakgrid.cli:main"
 include = ["pakgrid*"]
 
 [tool.setuptools.package-data]
-pakgrid = ["data/*.geojson.gz", "data/*.json.gz", "data/*.md"]
+pakgrid = ["py.typed", "data/*.geojson.gz", "data/*.json.gz", "data/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+# Every function is typed; `python -m mypy` checks the package (CI runs it on each push).
+files = ["pakgrid"]
+python_version = "3.10"
+disallow_untyped_defs = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[[tool.mypy.overrides]]
+# Django, Django REST framework and Celery (used only by pakgrid.contrib) ship no type information.
+module = ["django.*", "rest_framework.*", "celery.*"]
+ignore_missing_imports = true

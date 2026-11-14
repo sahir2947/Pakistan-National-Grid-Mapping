@@ -134,6 +134,8 @@ first release. Pull request numbers are in brackets.
 - Continuous integration on GitHub Actions: Python 3.10–3.13 on Linux, and
   3.13 on macOS and Windows [#5]; official checksums built on all three
   [#10, #12].
+- Type hints on every function, a `py.typed` marker so apps' type checkers
+  check their calls into pakgrid, and `mypy` in continuous integration.
 
 ### Fixed
 - Verifier gaps, bad sensor readings in navigation, and documentation, from a
