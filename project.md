@@ -29,7 +29,7 @@
 10. [Rider navigation](#10-rider-navigation)
 11. [From request to response](#11-from-request-to-response)
 12. [Performance](#12-performance)
-13. [Using it in Dukandaari](#13-using-it-in-dukandaari)
+13. [Using it in an app](#13-using-it-in-an-app)
 14. [Validation and testing](#14-validation-and-testing)
 15. [Roadmap](#15-roadmap)
 16. [Open decisions](#16-open-decisions)
@@ -1826,7 +1826,7 @@ address.
 ### 11.1 Flow: a customer saves an address
 
 ```
- Phone (Flutter)        Dukandaari backend          pakgrid               Grid DB (SQLite)
+ Phone (Flutter)        App backend                 pakgrid               Grid DB (SQLite)
       │                        │                       │                        │
  1 ── │ lat, lon, accuracy ──► │                       │                        │
       │                   2 ── │ validate → locate() ─►│ 3 arithmetic → ID      │
@@ -1877,7 +1877,7 @@ POST /addresses
 | Part | Time |
 |---|---|
 | Phone ↔ server network | ~50–300 ms |
-| Dukandaari backend and its own database | ~1–10 ms |
+| The app's backend and its own database | ~1–10 ms |
 | **Grid lookup** | **~0.02 ms** |
 
 ### 11.3 Errors
@@ -1958,40 +1958,56 @@ the same data centre.
 
 ---
 
-## 13. Using it in Dukandaari
+## 13. Using it in an app
+
+pakgrid is a standalone library: each feature works on its own, and an app
+picks only what it needs. Nothing in pakgrid is specific to one app; the
+pieces an app builds around it (screens, permissions, storage, its own
+records) live in that app.
 
 | What | Where it lives |
 |---|---|
-| Grid catalogue (cells, sub-cells, centroids, border flags) | Grid database (`pakgrid_v1.sqlite`, or the 275 MB Pakistan edition), read-only |
-| Customer, shop and order records | **Dukandaari's own database** |
-| Personal data (names, phone numbers, CNIC) | **Dukandaari's own database only**, protected there. Never in the grid |
+| Grid catalogue (cells, sub-cells, centroids, border flags, places) | Grid database (`pakgrid_v1.sqlite`, or the 275 MB Pakistan edition), read-only |
+| The app's customers, shops, orders and other records | **The app's own database** |
+| Personal data (names, phone numbers, CNIC) | **The app's own database only**, protected there. Never in the grid |
 | Per address | Sub-cell ID (4 bytes), cell ID, grid address, exact pin, accuracy, text notes |
+| The app's own localities, roads and street answers (optional) | A user places file, beside the grid (§5.8–5.9) |
 
-**How it fits together.** Dukandaari's Django (DRF) backend installs `pakgrid`
-with pip, builds and verifies the Pakistan edition once (in its Docker
-image), and is the single source of truth: it locates pins and stores the
-results. The Flutter app talks only to Dukandaari's own API, and does live
-rider guidance on the phone. Step-by-step setup, with tested code:
-[docs/django.md](docs/django.md).
+**How it usually fits together.** The app's backend (for example Django REST
+framework) installs `pakgrid` with pip, builds and verifies the database once
+(for example in its Docker image), and is the single source of truth: it
+locates pins and stores the results. The phone app talks only to the app's
+own API, and runs what must work offline (live rider guidance, a
+walkthrough's rider rule) on the phone. Step-by-step backend setup, with
+tested code: [docs/django.md](docs/django.md).
 
-**Uses:**
+**What an app can use it for:**
 
 - **Addresses:** the customer drops and confirms a pin; `locate()` gives the
-  sub-cell ID. Shops are registered the same way.
-- **Service area:** reject or flag addresses where `in_pakistan` is `False`,
-  and use the Pakistan edition so the server only stores cells it can deliver to.
+  sub-cell ID and the grid address. Shops are registered the same way.
+- **Service area:** reject or flag addresses where `in_pakistan` is `False`;
+  the Pakistan edition stores only the cells it can deliver to.
+- **Place names:** the locality, tehsil, district and province of any pin,
+  for labels, reports and pricing (§5.7).
 - **Order batching:** group orders by cell ID (`sub_id >> 5`).
-- **Rider zones and shop delivery areas:** sets of cell IDs (`cells_in_area`,
-  `neighbours`).
+- **Delivery zones, territories and pricing bands:** custom zones (§7.6) and
+  custom blocks (§7.9).
+- **Riders and shops near a pin:** radius search (§7.5) and nearest lookup
+  (§7.8).
 - **Delivery fees and time estimates:** from the distance between cells or
-  centroids.
+  centroids (§7.5).
+- **Maps:** GeoJSON of blocks, zones and places for any map (§7.7).
 - **Rider navigation:** block-level guidance, then distance and direction to
   the exact pin (§10).
-- **On the phone:** live navigation runs in Dukandaari's own Dart code,
-  following the rules in `conformance/NAVIGATION.md` and passing
-  `conformance/navigation.json`; it needs no database. Dukandaari may also
-  port `layout`, `ids` and grid addresses (with the ~100 KB rows table) to
-  work out IDs offline.
+- **Local knowledge:** localities, streets and "what can drive through" from
+  the app's own users (§5.8–5.9).
+- **The last stretch:** walkthroughs from the road to the door (§5.10), with
+  the optional Django app if the backend is Django.
+- **On the phone:** live navigation and the walkthrough rider rule run in the
+  app's own code (for example Dart), following `conformance/NAVIGATION.md`
+  and `conformance/WALKTHROUGH.md` and passing their test files; they need no
+  database. An app may also port `layout`, `ids` and grid addresses (with the
+  ~100 KB rows table) to work out IDs offline.
 
 ---
 
