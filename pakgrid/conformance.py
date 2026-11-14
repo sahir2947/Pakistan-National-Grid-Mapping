@@ -17,12 +17,24 @@ the small tolerances in the file. Exact ties are tested separately, with
 inputs that need no trigonometry (compass bearings, turn angles, distances).
 """
 
+from __future__ import annotations
+
 import json
 import math
 import random
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from . import __version__, geodesy, spec
 from .navigate import _COMPASS_8, _COMPASS_16, NavigationSession, direction, format_distance, turn_words
+
+if TYPE_CHECKING:
+    from .navigate import NavState
+    from .walkthrough import GuideState, Walkthrough, WalkthroughGuide
+
+Case = dict[str, Any]
+Step = tuple[str, dict[str, Any]]               # (call, arguments)
+DirectionCase = tuple[float, float, float, float, float | None]
 
 FORMAT_VERSION = 1
 MARGIN = 1e-6           # metres or degrees between a random case and any decision threshold
@@ -46,12 +58,12 @@ class _TooClose(Exception):
     pass
 
 
-def _check(value, threshold):
+def _check(value: float, threshold: float) -> None:
     if abs(value - threshold) < MARGIN:
         raise _TooClose
 
 
-def _check_bearing(brg):
+def _check_bearing(brg: float) -> None:
     # sector boundaries of the 16-point names (the 8-point boundaries are among them)
     for k in range(16):
         _check(brg, 11.25 + 22.5 * k)
@@ -61,14 +73,15 @@ def _check_bearing(brg):
         raise _TooClose
 
 
-def _check_turn(turn_deg):
+def _check_turn(turn_deg: float) -> None:
     for limit in _TURN_LIMITS:
         _check(abs(turn_deg), limit)
 
 
-def _check_state(nav, s):
+def _check_state(nav: NavigationSession, s: NavState) -> None:
     if s.status == "waiting":
         return
+    assert s.distance_m is not None and s.bearing_deg is not None     # set unless waiting
     _check(s.distance_m, nav.arrived_m)
     _check(s.distance_m, nav.almost_m)
     _check_bearing(s.bearing_deg)
@@ -78,46 +91,46 @@ def _check_state(nav, s):
 
 # -- Building blocks -------------------------------------------------------------
 
-def _compass_cases():
+def _compass_cases() -> list[Case]:
     bearings = [k * 11.25 for k in range(32)] + [0.0, 359.99, 360.0 - 1e-9, 5.625, 348.75, 337.5]
     return [{"bearing_deg": b, "compass": _COMPASS_8[round(b / 45.0) % 8],
              "compass_short": _COMPASS_16[round(b / 22.5) % 16]} for b in bearings]
 
 
-def _turn_cases():
+def _turn_cases() -> list[Case]:
     angles = [0.0, 9.99, 10.0, -10.0, 29.99, 30.0, -30.0, 59.99, 60.0, -60.0, 134.99, 135.0, -135.0,
               179.9, -180.0, 45.0, -45.0, 90.0, -90.0, 5.0, -5.0]
     return [{"turn_deg": t, "turn": turn_words(t)} for t in angles]
 
 
-def _distance_cases():
+def _distance_cases() -> list[Case]:
     metres = [0.0, 2.4, 2.5, 7.5, 12.5, 17.5, 97.4, 97.5, 99.99, 100.0, 104.99, 105.0, 115.0, 125.0,
               434.0, 995.0, 999.9, 1000.0, 1049.9, 1050.0, 1150.0, 1250.0, 12345.6, 150000.0]
     feet_as_metres = [ft * 0.3048 for ft in (0.0, 12.5, 17.5, 297.4, 297.5, 300.0, 305.0, 315.0,
                                              5275.0, 5280.0, 5544.0, 5808.0, 52800.0)]
-    out = []
+    out: list[Case] = []
     for m in metres + feet_as_metres:
         for units in ("m", "ft"):
             out.append({"metres": m, "units": units, "text": format_distance(m, units)})
     return out
 
 
-def _scale_cases():
-    out = []
+def _scale_cases() -> list[Case]:
+    out: list[Case] = []
     for lat in (23.5, 24.86, 27.0, 30.258, 31.5204, 33.68, 35.3, 37.08):
         m_lat, m_lon = geodesy.metres_per_degree(lat)
         out.append({"lat": lat, "lat_m": m_lat, "lon_m": m_lon})
     return out
 
 
-def _direction_cases(rng, n):
-    out = []
-    fixed = [(31.5215, 74.3570, 31.5204, 74.3587, 90.0), (31.52085, 74.35855, 31.5204, 74.3587, 180.0),
+def _direction_cases(rng: random.Random, n: int) -> list[Case]:
+    out: list[DirectionCase] = []
+    fixed: list[DirectionCase] = [(31.5215, 74.3570, 31.5204, 74.3587, 90.0), (31.52085, 74.35855, 31.5204, 74.3587, 180.0),
              (31.5204, 74.3587, 31.5204, 74.3587, None), (31.5, 74.3, 31.6, 74.3001, 350.0),
              (24.86, 67.0, 24.87, 67.0, None), (35.3, 75.6, 35.29, 75.61, 10.0)]
     while len(fixed) + len(out) < n:
         lat, lon = rng.uniform(23.6, 37.0), rng.uniform(61.0, 77.8)
-        case = (lat, lon, lat + rng.uniform(-0.05, 0.05), lon + rng.uniform(-0.05, 0.05),
+        case: DirectionCase = (lat, lon, lat + rng.uniform(-0.05, 0.05), lon + rng.uniform(-0.05, 0.05),
                 rng.choice([None, rng.uniform(-30.0, 400.0)]))
         d = direction(*case)
         try:
@@ -127,7 +140,7 @@ def _direction_cases(rng, n):
         except _TooClose:
             continue
         out.append(case)
-    cases = []
+    cases: list[Case] = []
     for c in fixed + out:
         d = direction(*c)
         cases.append({"from": [c[0], c[1]], "to": [c[2], c[3]], "heading": c[4],
@@ -137,18 +150,18 @@ def _direction_cases(rng, n):
 
 # -- Navigation sessions -----------------------------------------------------------
 
-def _run(target, options, steps):
+def _run(target: tuple[float, float], options: dict[str, Any], steps: list[Step]) -> list[Case]:
     """Play steps through a NavigationSession, recording the expected state after each.
 
     Raises _TooClose if any decision in the run lies within MARGIN of its threshold.
     """
     nav = NavigationSession(*target, **options)
-    out = []
-    for call, args in steps:
+    out: list[Case] = []
+    for call, given in steps:
         # every argument is written out, null when not given, so ports can rely on the keys
-        args = {**{k: None for k in _ARGS[call]}, **args}
+        args = {**{k: None for k in _ARGS[call]}, **given}
         # decisions taken inside the call, checked before making it
-        if call == "add_fix" and nav._live:
+        if call == "add_fix" and nav._live and nav.position is not None:
             a = args.get("accuracy")
             acc = max(a if a is not None and a > 0 else 20.0, 1.0)
             _check(direction(*nav.position, args["lat"], args["lon"]).distance_m, max(acc, 5.0))
@@ -181,18 +194,18 @@ _ARGS = {
 }
 
 
-def _at(origin, east, north):
+def _at(origin: tuple[float, float], east: float, north: float) -> dict[str, float]:
     lat, lon = geodesy.apply_offset(*origin, east, north)
     return {"lat": lat, "lon": lon}
 
 
-def _named_sessions():
+def _named_sessions() -> list[tuple[str, tuple[float, float], dict[str, Any], list[Step]]]:
     t = (31.5204, 74.3587)
 
-    def fix(e, n, time, **kw):
+    def fix(e: float, n: float, time: float, **kw: Any) -> Step:
         return ("add_fix", {**_at(t, e, n), "time": time, **kw})
 
-    def pos(e, n, **kw):
+    def pos(e: float, n: float, **kw: Any) -> Step:
         return ("set_position", {**_at(t, e, n), **kw})
 
     return [
@@ -243,9 +256,9 @@ def _named_sessions():
     ]
 
 
-def _random_steps(rng, target):
+def _random_steps(rng: random.Random, target: tuple[float, float]) -> list[Step]:
     lat, lon, t = target[0] + rng.uniform(-0.01, 0.01), target[1] + rng.uniform(-0.01, 0.01), 0.0
-    steps = []
+    steps: list[Step] = []
     for _ in range(60):
         t = round(t + rng.choice([0.2, 1.0, 1.0, 1.0, 2.5, 4.0, 12.0]), 6)
         kind = rng.choices(["add_fix", "add_compass", "set_position", "set_target", "reset"], [60, 20, 15, 3, 2])[0]
@@ -267,8 +280,8 @@ def _random_steps(rng, target):
     return steps
 
 
-def _sessions(rng, n_random):
-    out = []
+def _sessions(rng: random.Random, n_random: int) -> list[Case]:
+    out: list[Case] = []
     for name, target, options, steps in _named_sessions():
         try:
             run = _run(target, options, steps)
@@ -279,17 +292,17 @@ def _sessions(rng, n_random):
         r = random.Random(rng.random())
         target = (r.uniform(23.6, 37.0), r.uniform(61.0, 77.8))
         try:
-            steps = _run(target, {}, _random_steps(r, target))
+            played = _run(target, {}, _random_steps(r, target))
         except _TooClose:
             continue
         out.append({"name": f"random ride {len(out) - len(_named_sessions()) + 1}", "target": list(target),
-                    "options": {}, "steps": steps})
+                    "options": {}, "steps": played})
     return out
 
 
 # -- The file ------------------------------------------------------------------------
 
-def navigation_suite(n_direction=300, n_random_sessions=25, seed=2026):
+def navigation_suite(n_direction: int = 300, n_random_sessions: int = 25, seed: int = 2026) -> dict[str, Any]:
     rng = random.Random(seed)
     return {
         "format": "pakgrid-conformance",
@@ -309,9 +322,9 @@ def navigation_suite(n_direction=300, n_random_sessions=25, seed=2026):
     }
 
 
-def navigation_json():
+def navigation_json() -> str:
     """The navigation suite as JSON text. NaN inputs are written as the string "NaN"."""
-    def clean(o):
+    def clean(o: Any) -> Any:
         if isinstance(o, dict):
             return {k: clean(v) for k, v in o.items()}
         if isinstance(o, list):
@@ -322,8 +335,7 @@ def navigation_json():
     return json.dumps(clean(navigation_suite()), indent=1, allow_nan=False) + "\n"
 
 
-def write_conformance_files(output_dir="conformance"):
-    from pathlib import Path
+def write_conformance_files(output_dir: str | Path = "conformance") -> list[Path]:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     path = out / "navigation.json"
@@ -335,7 +347,7 @@ def write_conformance_files(output_dir="conformance"):
 
 # -- Walkthrough suite ---------------------------------------------------------------
 
-_WT_LEGS = {                           # (east, north) metres of each leg of a walk
+_WT_LEGS: dict[str, list[tuple[float, float]]] = {                           # (east, north) metres of each leg of a walk
     "L-shape": [(0, 40), (30, 0), (0, 20)],
     "straight": [(3, 60)],
     "zig-zag": [(0, 20), (20, 15), (-10, 25), (25, 0), (0, 15)],
@@ -345,14 +357,17 @@ _WT_LEGS = {                           # (east, north) metres of each leg of a w
 _WT_FIELDS = ("frame", "progress_m", "to_go_m", "off_path_m", "next_turn", "next_turn_in_m", "arrived", "gps", "text")
 
 
-def _wt_walk(legs, noise, rng, ref=(31.5201, 74.3571)):
+def _wt_walk(legs: list[tuple[float, float]], noise: float, rng: random.Random,
+             ref: tuple[float, float] = (31.5201, 74.3571)
+             ) -> tuple[list[tuple[float, float, float, float]], tuple[float, float], tuple[float, float]]:
     from . import geodesy as g
     m_lat, m_lon = g.metres_per_degree(ref[0])
-    pts = [(0.0, 0.0)]
+    pts: list[tuple[float, float]] = [(0.0, 0.0)]
     for dx, dy in legs:
         pts.append((pts[-1][0] + dx, pts[-1][1] + dy))
     total = sum(math.hypot(*leg) for leg in legs)
-    track, t, s = [], 0.0, 0.0
+    track: list[tuple[float, float, float, float]] = []
+    t, s = 0.0, 0.0
     while s <= total + 1e-9:
         rem, (x, y) = s, pts[-1]
         for (ax, ay), (bx, by) in zip(pts, pts[1:]):
@@ -366,7 +381,7 @@ def _wt_walk(legs, noise, rng, ref=(31.5201, 74.3571)):
     return track, (ref[0] + pts[-1][1] / m_lat, ref[1] + pts[-1][0] / m_lon), ref
 
 
-def _distance_text_margin(v):
+def _distance_text_margin(v: float) -> float:
     """How far v is from a step of navigate.format_distance (in metres)."""
     if v < 100:
         return min(abs((v / 5) % 1 - 0.5) * 5, abs(v - 100))
@@ -375,15 +390,16 @@ def _distance_text_margin(v):
     return abs((v / 100) % 1 - 0.5) * 100
 
 
-def _wt_margins(wt, guide, before, call, args, state):
+def _wt_margins(wt: Walkthrough, guide: WalkthroughGuide, before: float, call: str, args: dict[str, Any],
+                state: GuideState) -> float:
     """The distances of this step's decisions from their thresholds (metres or accuracy)."""
     from . import walkthrough as W
-    out = []
+    out: list[float] = []
     if call == "update" and state.gps != "ignored":
         acc = args["accuracy_m"]
         acc = acc if isinstance(acc, (int, float)) and math.isfinite(acc) and acc > 0 else W.ASSUMED_ACCURACY_M
         x, y = W._xy(wt.ref, args["lat"], args["lon"])
-        cands = []
+        cands: list[tuple[float, float]] = []
         for k in range(len(wt.xy) - 1):
             d, a, _ = W._project(wt.xy[k:k + 2], wt.along[k:k + 2], x, y)
             cands.append((d, a))
@@ -399,18 +415,19 @@ def _wt_margins(wt, guide, before, call, args, state):
     out.append(_distance_text_margin(state.to_go_m))
     if state.off_path_m is not None:
         out.append(_distance_text_margin(state.off_path_m))
-    d = sorted(abs(f["along_m"] - p) for f in wt.frames)
-    if len(d) > 1:
-        out.append(d[1] - d[0])
+    gaps = sorted(abs(f["along_m"] - p) for f in wt.frames)
+    if len(gaps) > 1:
+        out.append(gaps[1] - gaps[0])
     return min(out) if out else math.inf
 
 
-def _wt_session(wt, name, rng, n_steps):
+def _wt_session(wt: Walkthrough, name: str, rng: random.Random, n_steps: int) -> Case:
     from . import geodesy as g
-    guide, steps = wt.guide(), []
+    guide = wt.guide()
+    steps: list[Case] = []
     m_lat, m_lon = g.metres_per_degree(wt.ref[0])
     length = wt.length_m
-    def point_near(s, off):
+    def point_near(s: float, off: float) -> tuple[float, float]:
         k = min(range(len(wt.along) - 1), key=lambda k: 0 if wt.along[k] <= s <= wt.along[k + 1] else 1)
         (ax, ay), (bx, by) = wt.xy[k], wt.xy[k + 1]
         seg = wt.along[k + 1] - wt.along[k]
@@ -422,7 +439,7 @@ def _wt_session(wt, name, rng, n_steps):
     while len(steps) < n_steps:
         r = rng.random()
         if r < 0.08:
-            call, args = rng.choice(("show", "next", "previous")), {}
+            call, args = rng.choice(("show", "next", "previous")), dict[str, Any]()
             if call == "show":
                 args = {"index": rng.randint(-1, len(wt.frames))}
         elif r < 0.11:
@@ -439,7 +456,7 @@ def _wt_session(wt, name, rng, n_steps):
         if call == "update":
             state = guide.update(num["lat"], num["lon"], num["accuracy_m"])
         elif call == "show":
-            state = guide.show(num["index"])
+            state = guide.show(int(num["index"]))
         else:
             state = getattr(guide, call)()
         if _wt_margins(wt, guide, before, call, num, state) < MARGIN:
@@ -450,10 +467,10 @@ def _wt_session(wt, name, rng, n_steps):
     return {"name": name, "walkthrough": wt.to_dict(), "start": {k: start[k] for k in _WT_FIELDS}, "steps": steps}
 
 
-def walkthrough_suite(seed=2027):
+def walkthrough_suite(seed: int = 2027) -> dict[str, Any]:
     from .walkthrough import build
     rng = random.Random(seed)
-    sessions = []
+    sessions: list[Case] = []
     for name, legs in _WT_LEGS.items():
         for noise in (0.0, 2.0):
             track, pin, ref = _wt_walk(legs, noise, rng)
@@ -474,6 +491,6 @@ def walkthrough_suite(seed=2027):
     }
 
 
-def walkthrough_json():
+def walkthrough_json() -> str:
     """The walkthrough suite as JSON text."""
     return json.dumps(walkthrough_suite(), indent=1, allow_nan=False, ensure_ascii=False) + "\n"
