@@ -144,7 +144,7 @@ Because the engine uses an optimized relational schema layout and basic integer 
 [![Tests](https://github.com/sahir2947/Pakistan-National-Grid-Mapping/actions/workflows/tests.yml/badge.svg)](https://github.com/sahir2947/Pakistan-National-Grid-Mapping/actions/workflows/tests.yml)
 
 The grid described above is implemented as the Python package `pakgrid`.
-Full design documentation: [project.md](project.md).
+Full design documentation: [project.md](project.md). What has changed: [CHANGELOG.md](CHANGELOG.md).
 
 **Requirements:** Python 3.10+, no other dependencies. The optional Django
 app for walkthroughs needs `pip install "pakgrid[django]"`.
