@@ -10,13 +10,17 @@ A block is
     BORDER   if the boundary line touches it.
 """
 
+from __future__ import annotations
+
 import functools
 import gzip
 import hashlib
 import json
 import struct
 from bisect import bisect_left, bisect_right
+from collections.abc import Iterable, Iterator, Sequence
 from importlib import resources
+from typing import Any
 
 from .layout import SCALE
 
@@ -31,15 +35,22 @@ DEFAULT_ATTRIBUTION = ("Boundary data © OpenStreetMap contributors, available u
 
 _BAND = 100_000  # edge index band height, in 1e-7 degree (0.01 degree)
 
+Ring = Sequence[tuple[int, int]]   # (lon_e7, lat_e7) vertices, closed
+Span = tuple[float, float]
+
 
 class Boundary:
     """A boundary given as rings of (lon_e7, lat_e7) integer vertices."""
 
-    def __init__(self, rings, name="", license="", attribution=""):
+    def __init__(self, rings: Iterable[Ring], name: str = "", license: str = "",
+                 attribution: str = "") -> None:
         self.rings = [tuple(r) for r in rings if len(r) >= 4]
         self.name, self.license, self.attribution = name, license, attribution
-        x1, y1, x2, y2 = [], [], [], []
-        self._bands = {}
+        x1: list[float] = []
+        y1: list[float] = []
+        x2: list[float] = []
+        y2: list[float] = []
+        self._bands: dict[int, list[int]] = {}
         for ring in self.rings:
             for (ax, ay), (bx, by) in zip(ring, ring[1:]):
                 if (ax, ay) == (bx, by):
@@ -57,21 +68,22 @@ class Boundary:
     # -- Loading and storing -----------------------------------------------
 
     @classmethod
-    def default(cls):
+    def default(cls) -> Boundary:
         """The boundary packaged with pakgrid (see pakgrid/data/BOUNDARY_SOURCE.md)."""
         return _default_boundary()
 
     @classmethod
-    def from_geojson(cls, obj, name="", license="", attribution=""):
+    def from_geojson(cls, obj: dict[str, Any], name: str = "", license: str = "",
+                     attribution: str = "") -> Boundary:
         """From a GeoJSON FeatureCollection, Feature or (Multi)Polygon geometry."""
-        geoms = []
+        geoms: list[dict[str, Any]] = []
         if obj.get("type") == "FeatureCollection":
             geoms = [f["geometry"] for f in obj["features"]]
         elif obj.get("type") == "Feature":
             geoms = [obj["geometry"]]
         else:
             geoms = [obj]
-        rings = []
+        rings: list[list[tuple[int, int]]] = []
         for g in geoms:
             polys = [g["coordinates"]] if g["type"] == "Polygon" else g["coordinates"]
             for poly in polys:
@@ -82,20 +94,21 @@ class Boundary:
                     rings.append(pts)
         return cls(rings, name, license, attribution)
 
-    def packed_rings(self):
+    def packed_rings(self) -> list[bytes]:
         """Rings as bytes: little-endian int32 (lon, lat) pairs, one bytes object per ring."""
         return [struct.pack(f"<{2 * len(r)}i", *(c for v in r for c in v)) for r in self.rings]
 
     @classmethod
-    def from_packed(cls, blobs, name="", license="", attribution=""):
-        rings = []
+    def from_packed(cls, blobs: Iterable[bytes], name: str = "", license: str = "",
+                    attribution: str = "") -> Boundary:
+        rings: list[list[tuple[int, int]]] = []
         for blob in blobs:
             vals = struct.unpack(f"<{len(blob) // 4}i", blob)
             rings.append(list(zip(vals[0::2], vals[1::2])))
         return cls(rings, name, license, attribution)
 
     @property
-    def sha256(self):
+    def sha256(self) -> str:
         h = hashlib.sha256(b"pakgrid-boundary-v1")
         for blob in self.packed_rings():
             h.update(struct.pack("<i", len(blob)))
@@ -103,12 +116,12 @@ class Boundary:
         return h.hexdigest()
 
     @property
-    def vertex_count(self):
+    def vertex_count(self) -> int:
         return sum(len(r) for r in self.rings)
 
     # -- Queries -------------------------------------------------------------
 
-    def _edges_near(self, south, north):
+    def _edges_near(self, south: float, north: float) -> Iterator[int]:
         seen = set()
         for b in range(int(south * SCALE) // _BAND, int(north * SCALE) // _BAND + 1):
             for k in self._bands.get(b, ()):
@@ -116,7 +129,7 @@ class Boundary:
                     seen.add(k)
                     yield k
 
-    def contains(self, lat, lon):
+    def contains(self, lat: float, lon: float) -> bool:
         """True if the point is inside Pakistan (even-odd rule, ray towards the east)."""
         inside = False
         x1, y1, x2, y2 = self._x1, self._y1, self._x2, self._y2
@@ -126,7 +139,7 @@ class Boundary:
                     inside = not inside
         return inside
 
-    def band(self, south, north):
+    def band(self, south: float, north: float) -> tuple[list[Span], list[float]]:
         """What the boundary does inside the latitude band [south, north].
 
         Returns (touched, crossings):
@@ -136,7 +149,8 @@ class Boundary:
         """
         mid = (south + north) / 2
         x1, y1, x2, y2 = self._x1, self._y1, self._x2, self._y2
-        spans, crossings = [], []
+        spans: list[Span] = []
+        crossings: list[float] = []
         for k in self._edges_near(south, north):
             ya, yb, xa, xb = y1[k], y2[k], x1[k], x2[k]
             lo_y, hi_y = (ya, yb) if ya <= yb else (yb, ya)
@@ -152,7 +166,7 @@ class Boundary:
                 if (ya <= mid) != (yb <= mid):
                     crossings.append(xa + (mid - ya) * (xb - xa) / (yb - ya))
         spans.sort()
-        touched = []
+        touched: list[Span] = []
         for lo, hi in spans:
             if touched and lo <= touched[-1][1]:
                 if hi > touched[-1][1]:
@@ -164,13 +178,14 @@ class Boundary:
 
 
 @functools.lru_cache(maxsize=1)
-def _default_boundary():
-    data = resources.files("pakgrid").joinpath("data", DEFAULT_FILE).read_bytes()
+def _default_boundary() -> Boundary:
+    data = resources.files("pakgrid").joinpath("data").joinpath(DEFAULT_FILE).read_bytes()
     return Boundary.from_geojson(json.loads(gzip.decompress(data)), DEFAULT_NAME, DEFAULT_LICENSE,
                                  DEFAULT_ATTRIBUTION)
 
 
-def row_flags(touched, crossings, lons, centres):
+def row_flags(touched: Sequence[Span], crossings: Sequence[float], lons: Sequence[float],
+              centres: Sequence[float]) -> bytearray:
     """Flags for the blocks of one band, given its block edges `lons` (len n + 1)."""
     n = len(centres)
     flags = bytearray(n)
@@ -189,7 +204,7 @@ _ALL_IN = b"\x02" * 5
 _ALL_OUT = b"\x00" * 5
 
 
-def cell_flags(sub_rows, col):
+def cell_flags(sub_rows: Sequence[bytes | bytearray], col: int) -> tuple[int, int, int]:
     """(cell flag, inside_mask, border_mask) from the 5 sub-row flag arrays of a cell row."""
     segs = [r[col * 5:col * 5 + 5] for r in sub_rows]
     if all(s == _ALL_IN for s in segs):
@@ -207,6 +222,6 @@ def cell_flags(sub_rows, col):
     return BORDER, inside, border
 
 
-def sub_flag(sub, inside_mask, border_mask):
+def sub_flag(sub: int, inside_mask: int, border_mask: int) -> int:
     bit = 1 << sub
     return INSIDE if inside_mask & bit else BORDER if border_mask & bit else OUTSIDE

@@ -168,7 +168,7 @@ class _Locality:
 
 
 def _load_sources():
-    raw = json.loads(gzip.decompress(resources.files("pakgrid").joinpath("data", DATA_FILE).read_bytes()))
+    raw = json.loads(gzip.decompress(resources.files("pakgrid").joinpath("data").joinpath(DATA_FILE).read_bytes()))
     tehsils = []
     for i, (pcode, name, dpcode, dname, ppcode, pname, rings) in enumerate(raw["tehsils"]):
         pts = [_decode_ring(r) for r in rings]
