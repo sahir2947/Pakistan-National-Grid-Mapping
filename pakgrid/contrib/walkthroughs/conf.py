@@ -1,7 +1,8 @@
 """Settings, read when used (so tests and settings overrides take effect).
 
 PAKGRID_DB             the grid database file (or PAKGRID_GRID: a dotted path to a function that
-                       returns your app's shared Grid)
+                       returns your app's shared Grid). Optional: without either, walkthroughs
+                       are made without the grid, and their sub-cell fields are empty
 PAKGRID_WALKTHROUGHS   a dict of any of:
 
     JOB           how the photo job runs after an upload:
@@ -21,6 +22,10 @@ PAKGRID_WALKTHROUGHS   a dict of any of:
     MAX_VIDEO_MB  the largest video accepted (default 200)
     FFMPEG        the ffmpeg program (default "ffmpeg")
     FFMPEG_TIMEOUT_S  seconds allowed per photo (default 60)
+    STORAGE       where videos and photos are kept: a dotted path to a Django Storage class (or a
+                  function returning a storage); default: Django's default storage. Its url()
+                  gives the links in the API, so a private bucket's storage can give links
+                  that expire (e.g. django-storages' S3 storage with querystring auth)
 """
 
 from threading import Lock
@@ -31,7 +36,7 @@ from django.utils.module_loading import import_string
 DEFAULTS = {
     "JOB": "command", "CAN_UPLOAD": None, "CAN_MANAGE": None, "CAN_VIEW": None, "AUTO_APPROVE": False,
     "KEEP_VIDEO": False, "PHOTO_WIDTH": 1280, "PHOTO_QUALITY": 3, "MAX_VIDEO_MB": 200, "FFMPEG": "ffmpeg",
-    "FFMPEG_TIMEOUT_S": 60,
+    "FFMPEG_TIMEOUT_S": 60, "STORAGE": None,
 }
 JOBS = ("command", "celery", "thread", "sync")
 
@@ -54,13 +59,26 @@ _grids = {}
 
 
 def get_grid():
-    """The app's Grid: PAKGRID_GRID's function, or PAKGRID_DB opened once per process."""
+    """The app's Grid: PAKGRID_GRID's function, or PAKGRID_DB opened once per process; None
+    when neither is set (walkthroughs are then made without the grid)."""
     fn = getattr(settings, "PAKGRID_GRID", None)
     if fn:
         return (import_string(fn) if isinstance(fn, str) else fn)()
+    if not getattr(settings, "PAKGRID_DB", None):
+        return None
     path = str(settings.PAKGRID_DB)
     with _grid_lock:
         if path not in _grids:
             from pakgrid import Grid
             _grids[path] = Grid.open(path)
         return _grids[path]
+
+
+def get_storage():
+    """The storage for videos and photos (STORAGE, or Django's default storage)."""
+    from django.core.files.storage import default_storage
+    value = get("STORAGE")
+    if not value:
+        return default_storage
+    obj = import_string(value) if isinstance(value, str) else value
+    return obj() if callable(obj) else obj

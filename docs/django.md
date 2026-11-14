@@ -577,6 +577,17 @@ django-storages), takes each photo with ffmpeg, stores them under
 `walkthroughs/<id>/frame-NNN.jpg`, and deletes the video unless `KEEP_VIDEO`
 is set.
 
+**Where the files go:** `STORAGE` names a Django storage class for the videos
+and photos (default: Django's default storage). Its `url()` gives the links in
+the API, so a private bucket's storage can hand out links that expire in
+minutes, e.g. django-storages' S3 storage with query-string auth, or your own
+storage class around boto3.
+
+**Without the grid database:** if neither `PAKGRID_DB` nor `PAKGRID_GRID` is
+set, walkthroughs are made without the grid. Everything works, but
+`pin_sub_cell` and the sub-cell fields stay empty. That is fine when your app
+identifies the address by its own `place_ref`.
+
 **Other settings:** `AUTO_APPROVE` (no owner review), `PHOTO_WIDTH` (1280),
 `PHOTO_QUALITY` (3), `MAX_VIDEO_MB` (200), `FFMPEG`, `FFMPEG_TIMEOUT_S`, and
 `CAN_MANAGE` (who may review, delete and retry: by default the uploader and

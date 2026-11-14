@@ -2,6 +2,7 @@ import os
 import uuid
 
 from django.conf import settings
+from django.core.files.storage import Storage
 from django.db import models
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
@@ -10,6 +11,56 @@ from django.dispatch import receiver
 def video_path(instance, filename):
     ext = os.path.splitext(filename)[1].lower()[:8] or ".mp4"
     return f"walkthroughs/{instance.id}/video{ext}"
+
+
+class _ConfiguredStorage(Storage):
+    """Passes every call to PAKGRID_WALKTHROUGHS['STORAGE'], looked up at that moment (Django
+    reads a field's storage once, at start-up; this keeps settings overrides working)."""
+
+    def _s(self):
+        from .conf import get_storage
+        return get_storage()
+
+    def _open(self, name, mode="rb"):
+        return self._s().open(name, mode)
+
+    def _save(self, name, content):
+        return self._s().save(name, content)
+
+    def generate_filename(self, filename):
+        return self._s().generate_filename(filename)
+
+    def get_available_name(self, name, max_length=None):
+        return self._s().get_available_name(name, max_length=max_length)
+
+    def get_valid_name(self, name):
+        return self._s().get_valid_name(name)
+
+    def delete(self, name):
+        return self._s().delete(name)
+
+    def exists(self, name):
+        return self._s().exists(name)
+
+    def url(self, name):
+        return self._s().url(name)
+
+    def size(self, name):
+        return self._s().size(name)
+
+    def path(self, name):
+        return self._s().path(name)
+
+    def listdir(self, path):
+        return self._s().listdir(path)
+
+
+_STORAGE = _ConfiguredStorage()
+
+
+def walkthrough_storage():
+    """The storage of videos and photos: PAKGRID_WALKTHROUGHS['STORAGE'] (see conf)."""
+    return _STORAGE
 
 
 def photo_path(instance, filename):
@@ -31,7 +82,7 @@ class Walkthrough(models.Model):
     pin_sub_cell = models.CharField(max_length=20, db_index=True, blank=True)
     length_m = models.FloatField()
     data = models.JSONField(help_text="pakgrid.Walkthrough.to_dict()")
-    video = models.FileField(upload_to=video_path, blank=True)
+    video = models.FileField(upload_to=video_path, storage=walkthrough_storage, blank=True)
     status = models.CharField(max_length=12, choices=STATUSES, default=PROCESSING, db_index=True)
     error = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -52,7 +103,7 @@ class Walkthrough(models.Model):
 class WalkthroughPhoto(models.Model):
     walkthrough = models.ForeignKey(Walkthrough, on_delete=models.CASCADE, related_name="photos")
     index = models.PositiveIntegerField()
-    image = models.FileField(upload_to=photo_path)
+    image = models.FileField(upload_to=photo_path, storage=walkthrough_storage)
 
     class Meta:
         ordering = ["walkthrough", "index"]

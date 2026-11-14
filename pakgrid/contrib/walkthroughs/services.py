@@ -15,6 +15,7 @@ from django.utils import timezone
 
 from pakgrid.walkthrough import Walkthrough as WalkthroughData
 from pakgrid.walkthrough import WalkthroughError, read_gpx
+from pakgrid.walkthrough import build as build_walkthrough
 
 from . import conf
 from .models import Walkthrough, WalkthroughPhoto
@@ -79,8 +80,10 @@ def create(user, *, video, track, pin, start=None, place_ref="", video_start=Non
     if getattr(video, "size", 0) > limit * 1024 * 1024:
         raise WalkthroughError(f"the video is {video.size / 1048576:.0f} MB; at most {limit} MB is allowed")
     props = {**(properties or {}), **({"place_ref": place_ref} if place_ref else {})}
-    data = conf.get_grid().walkthrough(parse_track(track, video_start), pin=pin, start=start,
-                                       author=user.get_username() if user else "unknown", properties=props)
+    grid = conf.get_grid()
+    args = dict(pin=pin, start=start, author=user.get_username() if user else "unknown", properties=props)
+    track = parse_track(track, video_start)
+    data = grid.walkthrough(track, **args) if grid is not None else build_walkthrough(track, **args)
     with transaction.atomic():
         wt = Walkthrough(owner=user if user and user.is_authenticated else None, place_ref=place_ref,
                          pin_sub_cell=data.data["pin_sub_cell"] or "", length_m=data.length_m, data=data.to_dict())

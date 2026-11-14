@@ -267,3 +267,36 @@ def test_real_ffmpeg(tmp_path):
     wt = Walkthrough.objects.get(pk=r.json()["id"])
     assert wt.status == "review", wt.error
     assert all(os.path.getsize(media(p.image.name)) > 500 for p in wt.photos.all())
+
+
+class PrivateBucket:
+    """Stands in for a private bucket's storage: files in their own folder, links that expire."""
+
+    def __new__(cls):
+        from django.core.files.storage import FileSystemStorage
+
+        class _Storage(FileSystemStorage):
+            def url(self, name):
+                return f"https://bucket.example/{name}?X-Amz-Expires=300"
+        return _Storage(location=os.path.join(_TMP, "bucket"))
+
+
+def test_own_storage_with_expiring_links():
+    owner = client("ali")
+    with override_settings(PAKGRID_WALKTHROUGHS={"FFMPEG": "fake-ffmpeg", "JOB": "sync",
+                                                 "STORAGE": f"{__name__}.PrivateBucket"}):
+        pk = upload(owner).json()["id"]
+        frames = owner.get(f"/api/walkthroughs/{pk}/").json()["walkthrough"]["frames"]
+        assert frames[0]["url"] == f"https://bucket.example/walkthroughs/{pk}/frame-000.jpg?X-Amz-Expires=300"
+        assert os.path.exists(os.path.join(_TMP, "bucket", f"walkthroughs/{pk}/frame-000.jpg"))
+        assert not os.path.exists(media(f"walkthroughs/{pk}/frame-000.jpg"))
+        assert owner.delete(f"/api/walkthroughs/{pk}/").status_code == 204
+        assert not os.path.exists(os.path.join(_TMP, "bucket", f"walkthroughs/{pk}/frame-000.jpg"))
+
+
+def test_without_the_grid_database():
+    with override_settings(PAKGRID_DB=None):
+        r = upload(client("ali"))
+    assert r.status_code == 201, r.content
+    wt = Walkthrough.objects.get(pk=r.json()["id"])
+    assert wt.pin_sub_cell == "" and wt.data["sub_cells"] == [] and r.json()["turns"] == ["turn right", "turn left"]
