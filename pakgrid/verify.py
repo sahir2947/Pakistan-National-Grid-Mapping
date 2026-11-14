@@ -1,5 +1,8 @@
 """Checks that a grid database matches the grid rules and its own checksum."""
 
+from __future__ import annotations
+
+import os
 from dataclasses import dataclass, field
 from itertools import zip_longest
 
@@ -15,18 +18,19 @@ from .store import SCHEMA_VERSION, SUB_RECORD, GridStore
 @dataclass
 class VerifyReport:
     ok: bool = True
-    checks: list = field(default_factory=list)
+    checks: list[tuple[str, bool, str, bool]] = field(default_factory=list)
     content_sha256: str | None = None   # recomputed from the stored records
     official_sha256: str | None = None  # the official value for this edition, if it is a complete build
     places_sha256: str | None = None    # recomputed from the stored places layer, if there is one
 
-    def add(self, name, passed, detail="", required=True):
+    def add(self, name: str, passed: bool, detail: str = "", required: bool = True) -> None:
         """Record a check; one with required=False is information and cannot fail the report."""
         self.checks.append((name, passed, detail, required))
         self.ok = self.ok and (passed or not required)
 
 
-def verify_database(path, full=False, expected_sha256=None):
+def verify_database(path: str | os.PathLike[str], full: bool = False,
+                    expected_sha256: str | None = None) -> VerifyReport:
     """Verify a database file.
 
     Always: grid version, layout against the grid rules, the stored border
@@ -120,7 +124,7 @@ def verify_database(path, full=False, expected_sha256=None):
     return report
 
 
-def _verify_places(report, store, meta, full):
+def _verify_places(report: VerifyReport, store: GridStore, meta: dict[str, str], full: bool) -> None:
     from .places import PLACES_VERSION, build_places_data, places_hash
     if "places_version" not in meta or not store.has_places():
         report.add("places layer", False, "not in this database; add it with `pakgrid build-places`",
