@@ -39,10 +39,15 @@ their centres, and the east/north metres.
 
 1. Tap along the road from one end to the other, then press **Done**.
 2. Give it a name (and an Urdu name), a kind, and optional details: one-way
-   (in the direction drawn), surface, allowed vehicles.
+   (in the direction drawn), surface, and what can drive through (tap the
+   largest vehicle that fits; untick any that cannot pass).
 3. The panel shows its length, the sub-cells it passes through (shaded) and
    the places it runs through, with the `user.add_road(...)` call that stores
    it with the library. **Download GeoJSON** saves the line.
+4. For a street that is already on the map, choose **Street already on the
+   map**: tap along the stretch, give its name and its ID in your map, and
+   answer what can drive through. The panel shows the `user.set_access(...)`
+   call that saves the answer.
 
 **Blocks** makes your own named blocks (project.md §7.9):
 

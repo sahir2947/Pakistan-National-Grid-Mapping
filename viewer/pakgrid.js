@@ -1581,6 +1581,31 @@
     return total;
   }
 
+  // -- Street access (same rules as pakgrid.access) --------------------------------
+  var VEHICLES = ["foot", "bicycle", "motorbike", "rickshaw", "car", "pickup", "truck"];
+  var VEHICLE_LABELS = { foot: "on foot", bicycle: "bicycle", motorbike: "motorbike", rickshaw: "rickshaw",
+                         car: "car", pickup: "pickup", truck: "truck" };
+  // Every vehicle up to and including `largest`, smallest first.
+  function vehiclesUpTo(largest) {
+    var k = VEHICLES.indexOf(largest);
+    if (k < 0) throw new Error("unknown vehicle " + largest);
+    return VEHICLES.slice(0, k + 1);
+  }
+  // The vehicles, checked, without repeats, smallest first.
+  function vehiclesList(vehicles) {
+    vehicles.forEach(function (v) { if (VEHICLES.indexOf(v) < 0) throw new Error("unknown vehicle " + v); });
+    if (!vehicles.length) throw new Error("give at least one vehicle");
+    return VEHICLES.filter(function (v) { return vehicles.indexOf(v) >= 0; });
+  }
+  // 'On foot only', 'Up to rickshaw size', 'All vehicles', or 'Only on foot, motorbike'.
+  function accessText(vehicles) {
+    var v = vehiclesList(vehicles), last = v[v.length - 1];
+    if (v.length === 1 && v[0] === "foot") return "On foot only";
+    if (v.length === VEHICLES.length) return "All vehicles";
+    if (v.join() === vehiclesUpTo(last).join()) return "Up to " + VEHICLE_LABELS[last] + " size";
+    return "Only " + v.map(function (x) { return VEHICLE_LABELS[x]; }).join(", ");
+  }
+
   Places.prototype.path = function (place) {
     var out = [];
     for (var p = place; p; p = this.byId[p.parentId]) out.push(p);
@@ -1594,6 +1619,7 @@
     formatDistance: formatDistance, NavigationSession: NavigationSession, cellId: cellId, subCellId: subCellId,
     pointInRings: pointInRings, Zone: Zone, geojsonGeometry: geojsonGeometry, PointIndex: PointIndex,
     BlockSet: BlockSet, codeMasks: codeMasks, lineLength: lineLength,
+    VEHICLES: VEHICLES, vehiclesUpTo: vehiclesUpTo, vehiclesList: vehiclesList, accessText: accessText,
     cellCode: cellCode, subCellCode: subCellCode
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

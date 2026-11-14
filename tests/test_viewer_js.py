@@ -757,3 +757,25 @@ def test_javascript_road_preview_matches_python():
                 pts.append(q)
         assert {int(k): v for k, v in js["masks"].items()} == line_masks(layout, pts), line
         assert js["length"] == pytest.approx(line_length_m(pts), abs=1e-6)
+
+
+_JS_ACCESS = """
+const P = require(process.argv[1] + '/pakgrid.js');
+const cases = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify({vehicles: P.VEHICLES,
+  upTo: P.VEHICLES.map((v) => P.vehiclesUpTo(v)),
+  text: cases.map((c) => [P.vehiclesList(c), P.accessText(c)])}));
+"""
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_javascript_street_access_matches_python():
+    """The viewer's vehicle question gives the same lists and text as pakgrid.access."""
+    from pakgrid.access import VEHICLES, access_text, up_to, vehicles_list
+    cases = [[v for k, v in enumerate(VEHICLES) if n >> k & 1] for n in range(1, 1 << len(VEHICLES))]
+    cases = [list(reversed(c)) for c in cases]           # given largest first: still sorted smallest first
+    got = json.loads(subprocess.run([NODE, "-e", _JS_ACCESS, str(VIEWER)], input=json.dumps(cases),
+                                    capture_output=True, encoding="utf-8", check=True).stdout)
+    assert got["vehicles"] == list(VEHICLES)
+    assert got["upTo"] == [list(up_to(v)) for v in VEHICLES]
+    assert got["text"] == [[list(vehicles_list(c)), access_text(c)] for c in cases]

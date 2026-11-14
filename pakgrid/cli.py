@@ -7,6 +7,7 @@ import os
 import sys
 
 from . import ids, spec
+from .access import VEHICLES
 from .errors import PakgridError
 
 DEFAULT_DB = os.environ.get("PAKGRID_DB", f"pakgrid_v{spec.GRID_VERSION}.sqlite")
@@ -193,8 +194,8 @@ def main(argv=None):
         a.add_argument("--local-name", help="the name in Urdu or another local script")
         a.add_argument("--oneway", action="store_true", default=None, help="one-way, in the direction drawn")
         a.add_argument("--surface", help="paved, unpaved, ...")
-        a.add_argument("--vehicles", nargs="+", choices=("car", "motorbike", "bicycle", "foot"),
-                       help="the vehicles allowed")
+        a.add_argument("--vehicles", nargs="+", choices=VEHICLES,
+                       help="what can drive through (see also the access action)")
         a.add_argument("--width-m", type=float)
         a.add_argument("--speed-kmh", type=float)
     a = act.add_parser("remove-road", help="remove a road (its history is kept)")
@@ -210,6 +211,18 @@ def main(argv=None):
     a.add_argument("--max-m", type=float, default=100.0)
     a = act.add_parser("roads-geojson", help="every road as GeoJSON lines")
     a.add_argument("-o", "--output", metavar="FILE")
+    a = act.add_parser("access", help="what can drive through a street: set, show at a pin, list, remove")
+    a.add_argument("what", choices=("set", "at", "list", "remove", "history", "geojson"))
+    a.add_argument("point", nargs="*", type=float, help="for at: LAT LON")
+    a.add_argument("--author", help="who gives the answer (set, remove)")
+    g = a.add_mutually_exclusive_group()
+    g.add_argument("--largest", choices=VEHICLES, help="everything up to this vehicle gets through")
+    g.add_argument("--vehicles", nargs="+", choices=VEHICLES, help="exactly these get through")
+    a.add_argument("--road", metavar="KEY", help="a user road's key")
+    a.add_argument("--line", metavar="FILE", help="any other street: JSON file of [[lat, lon], ...] along it")
+    a.add_argument("--source-id", help="that street's ID in another map, e.g. way/123")
+    a.add_argument("--name", help="that street's name")
+    a.add_argument("--street", metavar="KEY", help="for remove and history: note/<id>, a source ID or a road key")
     a = act.add_parser("remove", help="remove a locality (its history is kept)")
     a.add_argument("key")
     a.add_argument("--author", required=True)
@@ -483,6 +496,35 @@ def _user_places(args):
     return 0
 
 
+def _access_action(user, args):
+    from .userplaces import UserPlacesError
+    w = args.what
+    if w in ("set", "remove") and not args.author:
+        raise UserPlacesError(f"access {w} needs --author")
+    if w == "set":
+        line = None
+        if args.line:
+            with open(args.line, encoding="utf-8") as f:
+                line = json.load(f)
+        return user.set_access(args.vehicles, largest=args.largest, author=args.author, road=args.road, line=line,
+                               source_id=args.source_id, name=args.name).to_dict()
+    if w == "at":
+        if len(args.point) != 2:
+            raise UserPlacesError("access at needs LAT LON")
+        a = user.access_at(*args.point)
+        return {"access": a.to_dict() if a else None}
+    if w == "list":
+        return [n.to_dict() for n in user.access_notes()]
+    if w == "remove":
+        if not args.street:
+            raise UserPlacesError("access remove needs --street")
+        n = user.remove_access(args.street, author=args.author)
+        return n.to_dict() if n else {"cleared": args.street}
+    if w == "history":
+        return user.access_history(args.street)
+    return user.access_geojson()
+
+
 def _user_action(grid, user, args):
     a = args.action
     if a in ("add", "update"):
@@ -511,6 +553,8 @@ def _user_action(grid, user, args):
                                 details={**old.details, **details} if details else None).to_dict()
     if a == "remove-road":
         return user.remove_road(args.key, author=args.author).to_dict()
+    if a == "access":
+        return _access_action(user, args)
     if a == "roads":
         found = user.find_roads(args.text) if args.text else user.roads()
         return [{"key": r.key, "name": r.name, "kind": r.kind, "length_m": r.length_m, "sub_cells": r.sub_cell_count}

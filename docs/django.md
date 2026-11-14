@@ -486,6 +486,30 @@ From then on, `place` in a `locate` response near the street carries it:
 the label leads with it. Send `user_places.roads_geojson()` to the app to draw
 the streets.
 
+**What can drive through.** Ask the shop owner one question with a button per
+vehicle (`pakgrid.VEHICLES`), and save the answer on the street. For a street
+on the app's map, send its ID there (an OpenStreetMap way ID, say) and a few
+points along it:
+
+```python
+class StreetAccessSet(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):    # {"largest": "rickshaw", "source_id": "way/123", "name": "Gali 3", "line": [[lat, lon], ...]}
+        d = request.data        # or {"largest": "car", "road": "punjab/lahore/lahore-cantt/roads/street-7"}
+        try:
+            a = get_grid().user_places.set_access(
+                d.get("vehicles"), largest=d.get("largest"), author=request.user.username, road=d.get("road"),
+                line=d.get("line"), source_id=d.get("source_id"), name=d.get("name"))
+        except (UserPlacesError, InvalidIdError) as exc:
+            return Response({"error": str(exc)}, status=400)
+        return Response(a.to_dict(), status=201)
+```
+
+`place.access` in a `locate` response within 25 m of the street then carries
+the answer (`{"largest": "rickshaw", "text": "Up to rickshaw size", ...}`), so
+the rider app can warn a car driver before they turn in.
+
 **Your users' own blocks.** Let staff divide a city into territories in the
 app: they click cells or draw a shape, and name the block. Keep the block set's
 JSON in your database, and describe a block for the screen that shows it
