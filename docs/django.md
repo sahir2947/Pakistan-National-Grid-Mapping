@@ -570,7 +570,9 @@ ffmpeg cannot read; the video is kept so it can be retried) and `replaced`.
   process_walkthroughs` every minute. A job whose worker died is started again
   after 30 minutes.
 - `"thread"`: a thread in the web process (small sites).
-- `"sync"`: during the upload (development).
+- `"sync"`: during the upload, from the uploaded file itself: the video is
+  stored only if the photos fail (so it can be retried). Fast enough for 1–2
+  minute videos (a few seconds); keep the request timeout in mind.
 
 The job copies the video from your storage (local files or S3 via
 django-storages), takes each photo with ffmpeg, stores them under

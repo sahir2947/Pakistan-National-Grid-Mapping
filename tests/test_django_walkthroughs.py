@@ -179,7 +179,10 @@ def test_sync_job_auto_approve_and_replacing():
     with override_settings(PAKGRID_WALKTHROUGHS={"FFMPEG": "fake-ffmpeg", "JOB": "sync", "AUTO_APPROVE": True,
                                                  "CAN_VIEW": f"{__name__}.rider_can_view"}):
         a = upload(owner).json()
-        assert a["status"] == "live"                          # photos taken during the request
+        assert a["status"] == "live"                          # photos taken during the request ...
+        assert not Walkthrough.objects.get(pk=a["id"]).video  # ... from the upload: no video stored
+        assert not os.path.exists(media(f"walkthroughs/{a['id']}"))  or \
+            not any(n.startswith("video") for n in os.listdir(media(f"walkthroughs/{a['id']}")))
         b = upload(owner).json()
         assert Walkthrough.objects.get(pk=a["id"]).status == "replaced"
         assert client("rider2").get("/api/walkthroughs/for/shop-42/").json()["id"] == b["id"]

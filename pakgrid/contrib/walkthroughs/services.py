@@ -70,7 +70,10 @@ def parse_track(track, video_start=None):
 
 def create(user, *, video, track, pin, start=None, place_ref="", video_start=None, properties=None):
     """Make the walkthrough from the track (refusing a bad recording with WalkthroughError), store
-    it with its video, and start the photo job. Returns the Walkthrough record."""
+    it with its video, and start the photo job. Returns the Walkthrough record.
+
+    With JOB "sync" the photos are taken straight from the uploaded file, and the video is
+    stored only if that fails (so it can be retried) or KEEP_VIDEO is set."""
     place_ref = (place_ref or "").strip()
     if not can_upload(user, place_ref):
         raise PermissionDenied("you may not record a walkthrough for this address")
@@ -87,9 +90,14 @@ def create(user, *, video, track, pin, start=None, place_ref="", video_start=Non
     with transaction.atomic():
         wt = Walkthrough(owner=user if user and user.is_authenticated else None, place_ref=place_ref,
                          pin_sub_cell=data.data["pin_sub_cell"] or "", length_m=data.length_m, data=data.to_dict())
-        wt.video.save(getattr(video, "name", None) or "video.mp4", video, save=False)
+        sync = conf.get("JOB") == "sync"
+        if not sync or conf.get("KEEP_VIDEO"):
+            wt.video.save(getattr(video, "name", None) or "video.mp4", video, save=False)
         wt.save()
-        transaction.on_commit(lambda: start_job(wt.pk))
+        if sync:
+            transaction.on_commit(lambda: take_photos(wt.pk, upload=video))
+        else:
+            transaction.on_commit(lambda: start_job(wt.pk))
     return wt
 
 
@@ -116,10 +124,13 @@ def _in_thread(pk):
 
 # -- The photo job ---------------------------------------------------------------------
 
-def take_photos(pk):
+def take_photos(pk, upload=None):
     """Take a processing walkthrough's photos from its video with ffmpeg, store them, and move it
     to review (or live, with AUTO_APPROVE). Safe to run twice: only a 'processing' record is
-    taken, and claimed first. Returns the record (status 'failed', with `error`, if it failed)."""
+    taken, and claimed first. Returns the record (status 'failed', with `error`, if it failed).
+
+    `upload`: the uploaded video file itself, read instead of the stored video (JOB "sync").
+    If the photos then fail, it is stored, so the walkthrough can be retried."""
     with transaction.atomic():
         claimed = Walkthrough.objects.filter(pk=pk, status=Walkthrough.PROCESSING, photos_at__isnull=True) \
             .update(photos_at=timezone.now())
@@ -127,14 +138,21 @@ def take_photos(pk):
     if not claimed:
         return wt
     try:
-        if not wt.video:
+        if not wt.video and upload is None:
             raise WalkthroughError("the video is missing")
         data = WalkthroughData.from_dict(wt.data)
         with tempfile.TemporaryDirectory(prefix="pakgrid-walk-") as tmp:
-            src = os.path.join(tmp, "video" + (os.path.splitext(wt.video.name)[1] or ".mp4"))
-            with wt.video.open("rb") as f, open(src, "wb") as out:      # from any storage (local, S3, ...)
-                for chunk in f.chunks():
-                    out.write(chunk)
+            name = wt.video.name if wt.video else (getattr(upload, "name", None) or "video.mp4")
+            src = os.path.join(tmp, "video" + (os.path.splitext(name)[1].lower()[:8] or ".mp4"))
+            if upload is not None:
+                upload.seek(0)
+                with open(src, "wb") as out:
+                    for chunk in upload.chunks():
+                        out.write(chunk)
+            else:
+                with wt.video.open("rb") as f, open(src, "wb") as out:      # from any storage (local, S3, ...)
+                    for chunk in f.chunks():
+                        out.write(chunk)
             ffmpeg, timeout = conf.get("FFMPEG"), conf.get("FFMPEG_TIMEOUT_S")
             for cmd in data.ffmpeg_commands(src, tmp, conf.get("PHOTO_WIDTH"), conf.get("PHOTO_QUALITY")):
                 cmd[0] = ffmpeg
@@ -153,13 +171,21 @@ def take_photos(pk):
                 wt.save(update_fields=["status", "error"])
                 if wt.status == Walkthrough.LIVE:
                     _replace_others(wt)
-        if not conf.get("KEEP_VIDEO"):
+        if not conf.get("KEEP_VIDEO") and wt.video:
             wt.video.delete(save=False)
             wt.save(update_fields=["video"])
     except (OSError, subprocess.SubprocessError, WalkthroughError, ValueError) as exc:
         log.warning("walkthrough %s: photos failed: %s", pk, exc)
         wt.status, wt.error = Walkthrough.FAILED, str(exc)[:2000]
-        wt.save(update_fields=["status", "error"])
+        fields = ["status", "error"]
+        if upload is not None and not wt.video:
+            try:                                    # keep it, so the walkthrough can be retried
+                upload.seek(0)
+                wt.video.save(getattr(upload, "name", None) or "video.mp4", upload, save=False)
+                fields.append("video")
+            except OSError as keep:
+                log.warning("walkthrough %s: could not keep the video for a retry: %s", pk, keep)
+        wt.save(update_fields=fields)
     return wt
 
 
