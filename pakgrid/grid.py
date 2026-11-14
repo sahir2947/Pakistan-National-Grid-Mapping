@@ -1,14 +1,18 @@
 """The public `Grid` class: lookups against the grid database."""
 
+from __future__ import annotations
+
 import dataclasses
 import math
 import struct
 import threading
 from bisect import bisect_right
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, cast
 
 from . import geodesy, ids, navigate, spec
-from .address import address_from_point
+from .address import GridAddress, address_from_point
 from .boundary import FLAG_NAMES, OUTSIDE, Boundary, sub_flag
 from .checksums import official_checksum, official_places_checksum
 from .errors import GridMismatchError, IntegrityError, InvalidIdError, NotInDatabaseError, OutsideGridError
@@ -16,6 +20,21 @@ from .layout import SCALE, SUB, GridLayout, QuadrantLayout, to_e7
 from .places import PLACES_VERSION, locality_is_near
 from .store import SCHEMA_VERSION, GridStore
 from .userplaces import USER_ID_BASE
+
+if TYPE_CHECKING:
+    import os
+
+    from .access import StreetAccess
+    from .blocks import BlockSet
+    from .nearest import Neighbour, PointIndex
+    from .roads import RoadMatch
+    from .store import SubRecord
+    from .userplaces import UserLocality, UserPlaces
+    from .walkthrough import Walkthrough
+    from .zones import Zone
+
+Item = int | str        # an ID, or a readable code (which sets its own level)
+LatLon = tuple[float, float]
 
 MAX_CANDIDATE_RADIUS_M = 5000.0
 MAX_RADIUS_M = 50_000.0          # largest radius for Grid.cells_within
@@ -30,13 +49,13 @@ class Bounds:
     east: float
 
     @classmethod
-    def from_e7(cls, s, w, n, e):
+    def from_e7(cls, s: int, w: int, n: int, e: int) -> Bounds:
         return cls(s / SCALE, w / SCALE, n / SCALE, e / SCALE)
 
-    def contains(self, lat, lon):
+    def contains(self, lat: float, lon: float) -> bool:
         return self.south <= lat <= self.north and self.west <= lon <= self.east
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, float]:
         return dict(self.__dict__)
 
 
@@ -48,10 +67,10 @@ class Cell:
     row: int
     column: int
     bounds: Bounds
-    centroid: tuple
+    centroid: LatLon
     pakistan: str        # "inside", "border" or "outside"
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "code": self.code, "quadrant": self.quadrant, "row": self.row,
                 "column": self.column, "centroid": list(self.centroid), "bounds": self.bounds.to_dict(),
                 "pakistan": self.pakistan}
@@ -65,10 +84,10 @@ class SubCell:
     cell_code: str
     index: int
     bounds: Bounds
-    centroid: tuple
+    centroid: LatLon
     pakistan: str        # "inside", "border" or "outside"
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "code": self.code, "cell_id": self.cell_id, "cell_code": self.cell_code,
                 "index": self.index, "centroid": list(self.centroid), "bounds": self.bounds.to_dict(),
                 "pakistan": self.pakistan}
@@ -81,21 +100,21 @@ class Offset:
     north_m: float
 
     @property
-    def distance_m(self):
+    def distance_m(self) -> float:
         return math.hypot(self.east_m, self.north_m)
 
     @property
-    def bearing_deg(self):
+    def bearing_deg(self) -> float:
         return geodesy.bearing(self.east_m, self.north_m)
 
     @property
-    def text(self):
+    def text(self) -> str:
         """Short form such as 'W23 S18' (metres west/east, south/north)."""
         ew = "E" if self.east_m >= 0 else "W"
         ns = "N" if self.north_m >= 0 else "S"
         return f"{ew}{round(abs(self.east_m))} {ns}{round(abs(self.north_m))}"
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {"east_m": round(self.east_m, 1), "north_m": round(self.north_m, 1),
                 "distance_m": round(self.distance_m, 1), "bearing_deg": round(self.bearing_deg, 1),
                 "text": self.text}
@@ -109,7 +128,7 @@ class Nearby:
     distance_m: float           # from the point to the block's centroid (to its nearest edge with touching=True)
     bearing_deg: float          # compass bearing from the point to the block's centroid
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "code": self.code, "distance_m": round(self.distance_m, 1),
                 "bearing_deg": round(self.bearing_deg, 1)}
 
@@ -127,11 +146,11 @@ class Separation:
     north_m: float              # how far north (negative: south)
 
     @property
-    def text(self):
+    def text(self) -> str:
         """'3.2 km NE'"""
         return f"{navigate.format_distance(self.distance_m)} {self.compass_short}"
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {"from": self.from_code, "to": self.to_code, "distance_m": round(self.distance_m, 1),
                 "bearing_deg": round(self.bearing_deg, 1), "compass": self.compass,
                 "compass_short": self.compass_short, "east_m": round(self.east_m, 1),
@@ -158,12 +177,12 @@ class Place:
     area: bool = False          # True for a locality mapped as an outline, not a point
 
     @property
-    def user(self):
+    def user(self) -> bool:
         """True for a locality added by a user (see pakgrid.userplaces), not from the official sources."""
         return self.source_id.startswith("user/")
 
-    def to_dict(self):
-        out = {"id": self.id, "level": self.level, "key": self.key, "name": self.name,
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"id": self.id, "level": self.level, "key": self.key, "name": self.name,
                "parent_id": self.parent_id}
         if self.level == "locality":
             out.update(kind=self.kind, local_name=self.local_name, point=[self.lat, self.lon], user=self.user)
@@ -181,17 +200,17 @@ class PlaceTags:
     locality_distance_m: float | None = None   # from the locality's point to the sub-cell's centroid
     locality_direction: str | None = None      # 16-point compass direction of that, e.g. 'SE'
     osm_locality: Place | None = None          # the OpenStreetMap locality, also when a user one is shown
-    user_locality: object = None               # the UserLocality shown as `locality`, if any
-    street: object = None                      # the nearest user road (pakgrid.roads.RoadMatch), if any
-    access: object = None                      # what can drive through the street here (pakgrid.access.StreetAccess)
+    user_locality: UserLocality | None = None  # the UserLocality shown as `locality`, if any
+    street: RoadMatch | None = None            # the nearest user road (pakgrid.roads.RoadMatch), if any
+    access: StreetAccess | None = None         # what can drive through the street here (pakgrid.access.StreetAccess)
 
     @property
-    def street_text(self):
+    def street_text(self) -> str | None:
         """'Street 7' when on it (within 25 m), 'near Street 7, 40 m' within 100 m; None without one."""
         return self.street.text if self.street is not None else None
 
     @property
-    def locality_text(self):
+    def locality_text(self) -> str | None:
         """'Model Town', 'near Chak 25 (1.4 km SE)', or for a user locality its name and first
         reference, 'Gali 7 (500 m SW of Askari 2)'; None without a locality."""
         if not self.locality:
@@ -200,25 +219,25 @@ class PlaceTags:
             return self.user_locality.text
         if not self.near:
             return self.locality.name
-        return (f"near {self.locality.name} ({navigate.format_distance(self.locality_distance_m)} "
+        return (f"near {self.locality.name} ({navigate.format_distance(self.locality_distance_m or 0.0)} "
                 f"{self.locality_direction})")
 
     @property
-    def label(self):
+    def label(self) -> str:
         """'Lahore Cant, Lahore Cantt, Lahore, Punjab': street (a user road, where one is near),
         locality (where there is one), tehsil, district, province. A name the same as the one before
         it is said once ('Taxila, Rawalpindi, Punjab')."""
-        names = ([self.street_text] if self.street is not None else []) + \
-            ([self.locality_text] if self.locality else []) + [
+        names = [n for n in [self.street_text, self.locality_text] if n is not None] + [
             p.name for p in (self.tehsil, self.district, self.province) if p]
         return ", ".join(n for k, n in enumerate(names) if not k or n.lower() != names[k - 1].lower())
 
-    def to_dict(self):
-        def brief(p):
+    def to_dict(self) -> dict[str, Any]:
+        def brief(p: Place | None) -> dict[str, Any] | None:
             return {"id": p.id, "key": p.key, "name": p.name} if p else None
-        loc = None
-        if self.locality:
-            loc = dict(brief(self.locality), kind=self.locality.kind, local_name=self.locality.local_name,
+        loc: dict[str, Any] | None = None
+        b = brief(self.locality)
+        if self.locality and b is not None:
+            loc = dict(b, kind=self.locality.kind, local_name=self.locality.local_name,
                        near=self.near, text=self.locality_text,
                        distance_m=None if self.locality_distance_m is None else round(self.locality_distance_m),
                        direction=self.locality_direction, user=self.user_locality is not None)
@@ -241,32 +260,32 @@ class Location:
     edge_distance_m: float
     accuracy_m: float | None
     confident: bool | None   # None when no accuracy was given
-    candidates: tuple        # other sub-cell IDs within the accuracy radius, nearest first
+    candidates: tuple[int, ...]  # other sub-cell IDs within the accuracy radius, nearest first
     in_pakistan: bool        # the point itself, checked against the border line in border blocks
     place: PlaceTags | None = None   # the sub-cell's locality, tehsil, district and province (places layer)
 
     @property
-    def id(self):
+    def id(self) -> int:
         return self.sub_cell.id
 
     @property
-    def code(self):
+    def code(self) -> str:
         return self.sub_cell.code
 
     @property
-    def cell_id(self):
+    def cell_id(self) -> int:
         return self.sub_cell.cell_id
 
     @property
-    def cell_code(self):
+    def cell_code(self) -> str:
         return self.sub_cell.cell_code
 
     @property
-    def address(self):
+    def address(self) -> GridAddress:
         """The point as a grid address, e.g. '11-0140-0471-00 W23 S18' (see pakgrid.address)."""
         return address_from_point(self.lat, self.lon)
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {
             "grid_version": spec.GRID_VERSION,
             "address": self.address.text,
@@ -290,7 +309,7 @@ class Grid:
     from the database on demand.
     """
 
-    def __init__(self, store):
+    def __init__(self, store: GridStore) -> None:
         self.store = store
         self.meta = store.meta()
         version = int(self.meta.get("grid_version", -1))
@@ -301,33 +320,33 @@ class Grid:
             raise GridMismatchError(
                 f"database schema version {self.meta.get('schema_version')} is not {SCHEMA_VERSION}; "
                 "rebuild it with `pakgrid build`")
-        self._boundary = None
-        self._places = None
-        self._keys = None
-        self._place_index = None
+        self._boundary: Boundary | None = None
+        self._places: dict[int, Place] | None = None
+        self._keys: dict[str, Place] | None = None
+        self._place_index: PointIndex | None = None
         self._load_lock = threading.Lock()
-        self._user = None
-        self._has_places = None
+        self._user: UserPlaces | None = None
+        self._has_places: bool | None = None
         self.layout = _layout_from_store(store)
         if not self.layout.same_shape(GridLayout.from_spec()):
             raise GridMismatchError("database rows and columns do not match the grid rules of this library")
 
     @classmethod
-    def open(cls, path, user_places=None):
+    def open(cls, path: str | os.PathLike[str], user_places: str | os.PathLike[str] | None = None) -> Grid:
         """Open a grid database; with user_places, also attach that user places file."""
         grid = cls(GridStore(path))
         if user_places is not None:
             grid.attach_user_places(user_places)
         return grid
 
-    def close(self):
+    def close(self) -> None:
         if self._user is not None:
             self._user.close()
         self.store.close()
 
     # -- User places ---------------------------------------------------------
 
-    def attach_user_places(self, path):
+    def attach_user_places(self, path: str | os.PathLike[str]) -> UserPlaces:
         """Use a user places file (created if missing; see pakgrid.userplaces) for place lookups,
         and return it: add, change and remove localities through it."""
         from .userplaces import UserPlaces
@@ -339,25 +358,25 @@ class Grid:
         return self._user
 
     @property
-    def user_places(self):
+    def user_places(self) -> UserPlaces | None:
         """The attached UserPlaces, or None."""
         return self._user
 
-    def _user_place(self, loc):
+    def _user_place(self, loc: UserLocality) -> Place:
         """A user locality as a Place (level 'locality', source_id 'user/N')."""
         tehsil = self._key_map().get(loc.tehsil_key)
         return Place(loc.id, "locality", loc.key, loc.name, tehsil.id if tehsil else None, loc.name,
                      f"user/{loc.id - USER_ID_BASE}", loc.kind, loc.local_name, loc.lat, loc.lon, True)
 
-    def __enter__(self):
+    def __enter__(self) -> Grid:
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc: object) -> None:
         self.close()
 
     # -- Finding a location ---------------------------------------------
 
-    def locate(self, lat, lon, accuracy_m=None):
+    def locate(self, lat: float, lon: float, accuracy_m: float | None = None) -> Location:
         """The sub-cell containing a GPS point, with its offset and confidence.
 
         The point is rounded to 1e-7 degree (~1.1 cm). With accuracy_m (the
@@ -369,11 +388,11 @@ class Grid:
         cid = ids.cell_id(q, row, col)
         return self._locate_in(cid, self.store.sub_record(cid), lat, lon, lat_e7, lon_e7, accuracy_m)
 
-    def locate_many(self, points):
+    def locate_many(self, points: Iterable[Sequence[float]]) -> list[Location]:
         """`locate` for many points; each point is (lat, lon) or (lat, lon, accuracy_m)."""
         return [self.locate(*p) for p in points]
 
-    def in_pakistan(self, lat, lon):
+    def in_pakistan(self, lat: float, lon: float) -> bool:
         """True if the point is inside Pakistan's border; False outside it or outside the grid."""
         try:
             return self.locate(lat, lon).in_pakistan
@@ -385,7 +404,7 @@ class Grid:
             raise
 
     @property
-    def boundary(self):
+    def boundary(self) -> Boundary:
         """Pakistan's border, as stored in this database (loaded on first use)."""
         if self._boundary is None:
             self._boundary = Boundary.from_packed(
@@ -393,7 +412,8 @@ class Grid:
                 self.meta.get("boundary_license", ""), self.meta.get("boundary_attribution", ""))
         return self._boundary
 
-    def _locate_in(self, cid, record, lat, lon, lat_e7, lon_e7, accuracy_m):
+    def _locate_in(self, cid: int, record: SubRecord, lat: float, lon: float, lat_e7: int, lon_e7: int,
+                   accuracy_m: float | None) -> Location:
         lat_lines, lon_lines = record[0], record[1]
         # The stored boundaries have the final say.
         if not (lat_lines[0] <= lat_e7 <= lat_lines[SUB] and lon_lines[0] <= lon_e7 <= lon_lines[SUB]):
@@ -410,7 +430,8 @@ class Grid:
         edge = max(0.0, min((lat - b.south) * m_lat, (b.north - lat) * m_lat,
                             (lon - b.west) * m_lon, (b.east - lon) * m_lon))
 
-        confident, candidates = None, ()
+        confident: bool | None = None
+        candidates: tuple[int, ...] = ()
         if accuracy_m is not None:
             if not (accuracy_m >= 0 and math.isfinite(accuracy_m)):
                 raise ValueError(f"accuracy_m must be a non-negative number, got {accuracy_m!r}")
@@ -425,10 +446,10 @@ class Grid:
             place = self._with_street(place, lat, lon)
         return Location(lat, lon, sub, offset, edge, accuracy_m, confident, candidates, in_pk, place)
 
-    def _candidates(self, lat, lon, radius_m, own_id):
+    def _candidates(self, lat: float, lon: float, radius_m: float, own_id: int) -> tuple[int, ...]:
         m_lat, m_lon = geodesy.metres_per_degree(lat)
         dlat, dlon = radius_m / m_lat, radius_m / m_lon
-        found = []
+        found: list[tuple[float, int]] = []
         for q, i, j in self.layout.items_in_area(to_e7(lat - dlat), to_e7(lon - dlon),
                                                  to_e7(lat + dlat), to_e7(lon + dlon), "sub"):
             sid = GridLayout.item_id(q, i, j, "sub")
@@ -444,7 +465,7 @@ class Grid:
 
     # -- Lookup by ID ----------------------------------------------------
 
-    def cell(self, cell):
+    def cell(self, cell: Item) -> Cell:
         """A cell's boundaries and centroid, by ID or code such as '11-0140-0471'."""
         cid = self._resolve(cell, "cell")
         q, row, col = ids.split_cell_id(cid)
@@ -452,7 +473,7 @@ class Grid:
         return Cell(cid, ids.cell_code(cid), spec.QUADRANTS[q][0], row, col,
                     Bounds.from_e7(s, w, n, e), (clat / SCALE, clon / SCALE), FLAG_NAMES[flag])
 
-    def sub_cell(self, sub_cell):
+    def sub_cell(self, sub_cell: Item) -> SubCell:
         """A sub-cell's boundaries and centroid, by ID or code such as '11-0140-0471-00'."""
         sid = self._resolve(sub_cell, "sub")
         cid, sub = ids.split_sub_cell_id(sid)
@@ -461,17 +482,17 @@ class Grid:
     # -- Hierarchy and area ----------------------------------------------
 
     @staticmethod
-    def parent(sub_cell_id):
+    def parent(sub_cell_id: int) -> int:
         """The cell ID containing a sub-cell (no database access)."""
         return ids.parent(sub_cell_id)
 
-    def children(self, cell):
+    def children(self, cell: Item) -> list[SubCell]:
         """The 25 sub-cells of a cell, in order 0-24."""
         cid = self._resolve(cell, "cell")
         record = self.store.sub_record(cid)
         return [_sub_cell_from_record(cid, k, record) for k in range(SUB * SUB)]
 
-    def neighbours(self, item, level="cell"):
+    def neighbours(self, item: Item, level: str = "cell") -> list[int]:
         """IDs of the cells (or sub-cells) touching this one, including across quadrant lines.
 
         `item` is an ID or a code; a code sets the level by itself.
@@ -480,7 +501,8 @@ class Grid:
         q, i, j = self.layout.item_from_id(item_id, level)
         return sorted(GridLayout.item_id(*n, level) for n in self.layout.neighbours(q, i, j, level))
 
-    def cells_in_area(self, south, west, north, east, level="cell", pakistan_only=False):
+    def cells_in_area(self, south: float, west: float, north: float, east: float, level: str = "cell",
+                      pakistan_only: bool = False) -> list[int]:
         """IDs of all cells (or sub-cells) overlapping a latitude/longitude box, in ID order.
 
         With pakistan_only, only those inside Pakistan or on its border are returned.
@@ -494,7 +516,8 @@ class Grid:
 
     # -- Walkthroughs ---------------------------------------------------------------
 
-    def walkthrough(self, track, *, pin, author, start=None, properties=None):
+    def walkthrough(self, track: Iterable[Any], *, pin: Sequence[float], author: str,
+                    start: Sequence[float] | None = None, properties: dict[str, Any] | None = None) -> Walkthrough:
         """A walkthrough from a GPS track recorded with a phone video, walking from the road
         (start) to the door (pin): the path, the photos to take and their steps
         (pakgrid.walkthrough)."""
@@ -503,23 +526,24 @@ class Grid:
 
     # -- Blocks and describing areas ---------------------------------------------
 
-    def block_set(self, name="blocks"):
+    def block_set(self, name: str = "blocks") -> BlockSet:
         """A new, empty set of custom blocks (pakgrid.blocks.BlockSet); load a stored one with
         BlockSet.from_dict(data, grid)."""
         from .blocks import BlockSet
         return BlockSet(self, name)
 
-    def describe_zone(self, zone, references=()):
+    def describe_zone(self, zone: Zone | Mapping[int, int], references: Iterable[Any] = ()) -> dict[str, Any]:
         """An area's size, places and where it is (see pakgrid.describe): for a Zone or {cell ID: mask}.
 
         references: place keys or IDs of localities to give the distance and direction from.
         """
         from .describe import describe
-        return describe(self, zone.masks if hasattr(zone, "masks") else zone, references)
+        masks = zone.masks if hasattr(zone, "masks") else zone
+        return describe(self, cast("Mapping[int, int]", masks), references)
 
     # -- Nearest lookup (pakgrid.nearest) --------------------------------------
 
-    def point_index(self, points=()):
+    def point_index(self, points: Iterable[tuple[Any, float, float]] = ()) -> PointIndex:
         """A PointIndex for nearest searches over points kept in memory (riders, a shop list);
         `points` is an optional iterable of (id, lat, lon) to start with."""
         from .nearest import PointIndex
@@ -527,7 +551,8 @@ class Grid:
         index.add_many(points)
         return index
 
-    def nearest(self, lat, lon, fetch, k=5, max_m=None, where=None):
+    def nearest(self, lat: float, lon: float, fetch: Callable[[list[int]], Iterable[tuple[Any, float, float]]],
+                k: int = 5, max_m: float | None = None, where: Callable[[Any], bool] | None = None) -> list[Neighbour]:
         """The k nearest points stored outside the library (e.g. shops in your database, with
         their cell ID), nearest first: [Neighbour] whose `id` is the item fetch returned.
 
@@ -537,7 +562,7 @@ class Grid:
         from .nearest import search
         counter = [0]
 
-        def points_in(cell_ids):
+        def points_in(cell_ids: list[int]) -> list[tuple[int, Any, float, float]]:
             out = []
             for item, plat, plon in fetch(cell_ids):
                 counter[0] += 1
@@ -545,7 +570,8 @@ class Grid:
             return out
         return search(self, lat, lon, k, max_m, points_in, where)
 
-    def nearest_places(self, lat, lon, k=5, max_m=None, kind=None):
+    def nearest_places(self, lat: float, lon: float, k: int = 5, max_m: float | None = None,
+                       kind: str | Iterable[str] | None = None) -> list[Neighbour]:
         """The k nearest localities (official ones, by their point) to the pin, nearest first:
         [Neighbour] whose `id` is the Place. kind: only those of this kind ('town', 'village', ...)
         or kinds (a set)."""
@@ -554,30 +580,32 @@ class Grid:
             with self._load_lock:
                 if self._place_index is None:
                     self._place_index = self.point_index(
-                        (p.id, p.lat, p.lon) for p in table.values() if p.level == "locality")
+                        (p.id, p.lat, p.lon) for p in table.values()
+                        if p.level == "locality" and p.lat is not None and p.lon is not None)
         kinds = {kind} if isinstance(kind, str) else set(kind) if kind else None
         table = self._place_table()
         found = self._place_index.nearest(lat, lon, k, max_m,
                                           where=(lambda pid: table[pid].kind in kinds) if kinds else None)
-        return [type(n)(table[n.id], n.lat, n.lon, n.distance_m, n.bearing_deg) for n in found]
+        return [type(n)(table[cast(int, n.id)], n.lat, n.lon, n.distance_m, n.bearing_deg) for n in found]
 
     # -- GeoJSON ------------------------------------------------------------
 
-    def geojson(self, item, level="sub"):
+    def geojson(self, item: Item, level: str = "sub") -> dict[str, Any]:
         """A cell or sub-cell as a GeoJSON Feature: its box, with id, code, level, centroid
         ([lon, lat]) and border flag as properties, and its place where there is a places layer."""
         from .geojson import box_geometry, feature
         level, item_id = self._resolve_any(item, level)
-        block = self.cell(item_id) if level == "cell" else self.sub_cell(item_id)
+        block: Cell | SubCell = self.cell(item_id) if level == "cell" else self.sub_cell(item_id)
         b = block.bounds
-        props = {"id": block.id, "code": block.code, "level": level,
+        props: dict[str, Any] = {"id": block.id, "code": block.code, "level": level,
                  "centroid": [block.centroid[1], block.centroid[0]], "pakistan": block.pakistan}
         if self.has_places:
             tags = self.place(item_id, level)
             props["place"] = tags.label if tags else None
         return feature(box_geometry(b.south, b.west, b.north, b.east), props, block.code)
 
-    def cells_geojson(self, items, level="cell", merge=False, properties=None):
+    def cells_geojson(self, items: Sequence[Item], level: str = "cell", merge: bool = False,
+                      properties: dict[str, Any] | None = None) -> dict[str, Any]:
         """Many cells or sub-cells as GeoJSON: a FeatureCollection with one box Feature each
         (no database access), or with merge=True one Feature outlining them all."""
         from .geojson import box_geometry, feature, feature_collection
@@ -593,17 +621,18 @@ class Grid:
             out.append(feature(box_geometry(s, w, n, e), {"id": v, "code": code, "level": lv, **(properties or {})}, code))
         return feature_collection(out)
 
-    def place_geojson(self, place, properties=None):
+    def place_geojson(self, place: int | str | Place, properties: dict[str, Any] | None = None) -> dict[str, Any]:
         """A place (province, district, tehsil, locality or user locality) as a GeoJSON Feature:
         the exact outline of its sub-cells, with its id, key, name, level and parent as properties."""
         p = self.get_place(place)
-        props = {"id": p.id, "key": p.key, "name": p.name, "level": p.level, "parent_id": p.parent_id}
+        props: dict[str, Any] = {"id": p.id, "key": p.key, "name": p.name, "level": p.level, "parent_id": p.parent_id}
         if p.level == "locality":
             props.update(kind=p.kind, local_name=p.local_name, point=[p.lon, p.lat], user=p.user)
         props.update(properties or {})
         return self.zone(place=p).to_geojson(props)
 
-    def cells_within(self, lat, lon, radius_m, level="cell", pakistan_only=False, touching=False):
+    def cells_within(self, lat: float, lon: float, radius_m: float, level: str = "cell", pakistan_only: bool = False,
+                     touching: bool = False) -> list[Nearby]:
         """The cells (or sub-cells) within `radius_m` of a point, nearest first: [Nearby].
 
         A block counts when its centroid is within the radius; with touching=True, when any part
@@ -622,7 +651,7 @@ class Grid:
         # the search box: the radius in degrees at the point's latitude, plus 2% and a block, which
         # covers the change of scale across the box
         pad = 1.02 * radius_m + (1500 if level == "cell" else 300)
-        found = []
+        found: list[tuple[float, int, float]] = []
         for q, i, j in self.layout.items_in_area(to_e7(lat - pad / m_lat), to_e7(lon - pad / (m_lon * 0.98)),
                                                  to_e7(lat + pad / m_lat), to_e7(lon + pad / (m_lon * 0.98)), level):
             ql = self.layout.quadrants[q]
@@ -643,7 +672,7 @@ class Grid:
         code = ids.cell_code if level == "cell" else ids.sub_cell_code
         return [Nearby(item_id, code(item_id), d, b) for d, item_id, b in found]
 
-    def distance(self, a, b, level="cell"):
+    def distance(self, a: Item, b: Item, level: str = "cell") -> Separation:
         """Distance and direction from one cell or sub-cell to another, centroid to centroid.
 
         `a` and `b` are IDs (of `level`) or codes (which set their own level, so a cell and a
@@ -661,7 +690,9 @@ class Grid:
         return Separation(ca, cb, way.distance_m, way.bearing_deg, way.compass, way.compass_short,
                           (lon2 - lon1) * m_lon, (lat2 - lat1) * m_lat)
 
-    def zone(self, *, polygon=None, circle=None, cells=None, place=None, pakistan_only=False):
+    def zone(self, *, polygon: Any = None, circle: Sequence[Any] | None = None,
+             cells: Item | Iterable[Item] | None = None, place: int | str | Place | None = None,
+             pakistan_only: bool = False) -> Zone:
         """A custom zone (pakgrid.zones.Zone) made from exactly one of:
 
         polygon: rings of (lat, lon), or a GeoJSON Polygon/MultiPolygon/Feature; the sub-cells whose
@@ -678,13 +709,15 @@ class Grid:
                  if v is not None]
         if len(given) != 1:
             raise ZoneError("give exactly one of polygon, circle, cells or place")
-        masks = {}
+        masks: dict[int, int] = {}
         if polygon is not None:
             masks = polygon_masks(self.layout, rings_e7(polygon))
         elif circle is not None:
             if not isinstance(circle, (list, tuple)) or len(circle) not in (3, 4):
                 raise ZoneError("circle must be (lat, lon, radius_m) or (lat, lon, radius_m, touching)")
-            for n in self.cells_within(*circle[:3], level="sub", touching=bool(circle[3]) if len(circle) == 4 else False):
+            clat, clon, radius = circle[:3]
+            touching = bool(circle[3]) if len(circle) == 4 else False
+            for n in self.cells_within(clat, clon, radius, level="sub", touching=touching):
                 cid, sub = ids.split_sub_cell_id(n.id)
                 masks[cid] = masks.get(cid, 0) | 1 << sub
         elif cells is not None:
@@ -713,11 +746,12 @@ class Grid:
             masks = {c: m & (stored[c][0] | stored[c][1]) for c, m in masks.items() if c in stored}
         return make_zone(masks, self.layout)
 
-    def _place_masks(self, place):
+    def _place_masks(self, place: int | str | Place | None) -> dict[int, int]:
         """{cell ID: mask} of a place's sub-cells, read straight from the tag tables."""
         p = self.get_place(place)
         if p.user:
-            masks = {}
+            assert self._user is not None           # a user place comes from the attached file
+            masks: dict[int, int] = {}
             for s in self._user.sub_cells(p.id):
                 cid, sub = ids.split_sub_cell_id(s)
                 masks[cid] = masks.get(cid, 0) | 1 << sub
@@ -738,23 +772,23 @@ class Grid:
                 masks[cid] = m
         return masks
 
-    def pakistan_flags(self, items, level="cell"):
+    def pakistan_flags(self, items: Iterable[Item], level: str = "cell") -> dict[int, str]:
         """{ID: "inside" | "border" | "outside"} for many cells (or sub-cells) at once."""
-        items = [self._resolve(i, level) for i in items]
-        flags = self._flags(items, level)
-        return {i: FLAG_NAMES[flags.get(i, OUTSIDE)] for i in items}
+        resolved = [self._resolve(i, level) for i in items]
+        flags = self._flags(resolved, level)
+        return {i: FLAG_NAMES[flags.get(i, OUTSIDE)] for i in resolved}
 
-    def _flags(self, item_ids, level):
+    def _flags(self, item_ids: Iterable[int], level: str) -> dict[int, int]:
         """{ID: flag} read from the database in bulk; cells missing from it are left out
         (they are wholly outside in the Pakistan edition, otherwise an error)."""
-        item_ids = list(item_ids)
-        cids = item_ids if level == "cell" else sorted({ids.parent(s) for s in item_ids})
+        wanted = list(item_ids)
+        cids = wanted if level == "cell" else sorted({ids.parent(s) for s in wanted})
         if level == "cell":
             stored = self.store.cell_flags(cids)
         else:
             masks = self.store.sub_masks(cids)
             stored = {s: sub_flag(s & ids.SUB_MASK, *masks[ids.parent(s)])
-                      for s in item_ids if ids.parent(s) in masks}
+                      for s in wanted if ids.parent(s) in masks}
             cids = [c for c in cids if c not in masks]
         missing = [c for c in cids if c not in stored]
         if missing and not self.store.pakistan_edition:
@@ -764,12 +798,12 @@ class Grid:
 
     # -- Vectors ---------------------------------------------------------
 
-    def offset(self, item, lat, lon, level="sub"):
+    def offset(self, item: Item, lat: float, lon: float, level: str = "sub") -> Offset:
         """Vector from a sub-cell's (or cell's) centroid to a point."""
         clat, clon = self._centroid(item, level)
         return Offset(*geodesy.local_offset(clat, clon, lat, lon))
 
-    def from_offset(self, item, east_m, north_m, level="sub"):
+    def from_offset(self, item: Item, east_m: float, north_m: float, level: str = "sub") -> LatLon:
         """The GPS point `east_m` east and `north_m` north of a sub-cell's (or cell's) centroid."""
         clat, clon = self._centroid(item, level)
         return geodesy.apply_offset(clat, clon, east_m, north_m)
@@ -779,14 +813,14 @@ class Grid:
     # -- Places (province, district, tehsil, locality) ----------------------
 
     @property
-    def has_places(self):
+    def has_places(self) -> bool:
         """True if this database has the places layer of this library's places version."""
         if self._has_places is None:
             self._has_places = (self.meta.get("places_version") == str(PLACES_VERSION)
                                 and self.store.has_places())
         return self._has_places
 
-    def place(self, item, level="sub"):
+    def place(self, item: Item, level: str = "sub") -> PlaceTags | None:
         """The locality, tehsil, district and province of a sub-cell (or cell); None outside Pakistan.
 
         A cell's place is the tehsil, and the locality, most of its 25 sub-cells have; where a
@@ -794,7 +828,7 @@ class Grid:
         """
         level, item_id = self._resolve_any(item, level)
         q, i, j = self.layout.item_from_id(item_id, level)
-        def centroid():
+        def centroid() -> tuple[int, int]:
             return self.layout.quadrants[q].item_centroid_e7(i, j, level)
         if level == "cell":
             tags = self._tags(item_id, None, centroid)
@@ -806,7 +840,7 @@ class Grid:
         lat_e7, lon_e7 = centroid()
         return self._with_street(tags, lat_e7 / SCALE, lon_e7 / SCALE)
 
-    def _with_street(self, tags, lat, lon):
+    def _with_street(self, tags: PlaceTags, lat: float, lon: float) -> PlaceTags:
         """The tags with the nearest user road within 100 m of (lat, lon), and what can drive
         through the street there (pakgrid.access), if any."""
         if self._user is None or not self._user.has_access:
@@ -817,7 +851,7 @@ class Grid:
             return tags
         return dataclasses.replace(tags, street=match, access=access)
 
-    def places(self, level=None):
+    def places(self, level: str | None = None) -> list[Place]:
         """All places, or those of one level ("province", "district", "tehsil", "locality"), by ID."""
         found = self._place_table().values()
         if level is None:
@@ -826,7 +860,7 @@ class Grid:
             raise ValueError(f"level must be one of {PLACE_LEVELS}, got {level!r}")
         return [p for p in found if p.level == level]
 
-    def find_places(self, text, level=None):
+    def find_places(self, text: str, level: str | None = None) -> list[Place]:
         """Places whose name (or local name) contains `text`, or whose key is `text` (case-insensitive);
         user localities, if a user places file is attached, come last."""
         t = text.strip().lower()
@@ -837,7 +871,7 @@ class Grid:
             found += [self._user_place(loc) for loc in self._user.find(text)]
         return found
 
-    def get_place(self, place):
+    def get_place(self, place: int | str | Place | None) -> Place:
         """A Place by ID, key ('punjab/rawalpindi/taxila') or Place."""
         table = self._place_table()
         if isinstance(place, Place):
@@ -853,7 +887,7 @@ class Grid:
                 pass
         raise InvalidIdError(f"no such place: {place!r} (use a place ID, or a key such as 'punjab/lahore')")
 
-    def cells_in_place(self, place, level="cell"):
+    def cells_in_place(self, place: int | str | Place, level: str = "cell") -> list[int]:
         """IDs of the cells (or sub-cells) in a place, in ID order.
 
         level="cell": cells whose main tehsil (for a locality: main locality) is in the place.
@@ -864,6 +898,7 @@ class Grid:
         if level not in ("cell", "sub"):
             raise ValueError(f"level must be 'cell' or 'sub', got {level!r}")
         if p.user:
+            assert self._user is not None           # a user place comes from the attached file
             subs = self._user.sub_cells(p.id)
             if level == "sub":
                 return subs
@@ -877,7 +912,7 @@ class Grid:
         rows = self.store.cells_with_tags(tags, layer)
         if level == "cell":
             return sorted(cid for cid, _, _ in rows)
-        out = []
+        out: list[int] = []
         for cid, tag, subs in rows:
             if subs is None:            # the 25 sub-cell IDs of a cell are consecutive
                 first = ids.sub_cell_id(cid, 0)
@@ -888,7 +923,7 @@ class Grid:
         out.sort()
         return out
 
-    def _key_map(self):
+    def _key_map(self) -> dict[str, Place]:
         if self._keys is None:
             table = self._place_table()
             with self._load_lock:
@@ -896,21 +931,22 @@ class Grid:
                     self._keys = {p.key: p for p in table.values()}
         return self._keys
 
-    def _within(self, place, ancestor):
+    def _within(self, place: Place, ancestor: Place) -> bool:
         table = self._place_table()
-        while place is not None:
-            if place.id == ancestor.id:
+        p: Place | None = place
+        while p is not None:
+            if p.id == ancestor.id:
                 return True
-            place = table.get(place.parent_id)
+            p = table.get(p.parent_id) if p.parent_id is not None else None
         return False
 
-    def _place_table(self):
+    def _place_table(self) -> dict[int, Place]:
         if self._places is not None:
             return self._places
         with self._load_lock:           # threads arriving together load the table once
             return self._load_place_table()
 
-    def _load_place_table(self):
+    def _load_place_table(self) -> dict[int, Place]:
         if self._places is None:
             if not self.has_places:
                 found = self.meta.get("places_version")
@@ -925,7 +961,7 @@ class Grid:
                 for r in self.store.places_rows()}
         return self._places
 
-    def _tags(self, cid, sub, centroid):
+    def _tags(self, cid: int, sub: int | None, centroid: Callable[[], tuple[int, int]]) -> PlaceTags | None:
         """PlaceTags of a cell (sub=None: its main tags) or one of its sub-cells.
 
         centroid() gives the block's centroid in 1e-7 degree; it is needed only for a point locality.
@@ -942,8 +978,8 @@ class Grid:
         if not tehsil:
             return None                       # this sub-cell lies outside Pakistan
         t = table[tehsil]
-        d = table.get(t.parent_id)
-        p = table.get(d.parent_id) if d else None
+        d = table.get(t.parent_id) if t.parent_id is not None else None
+        p = table.get(d.parent_id) if d and d.parent_id is not None else None
         row = self.store.cell_place(cid, "locality")
         locality = 0
         if row is not None:
@@ -956,21 +992,21 @@ class Grid:
                     else self._user.at_sub_cells([ids.sub_cell_id(cid, sub)]).get(ids.sub_cell_id(cid, sub)))
             if user is not None:
                 return PlaceTags(t, d, p, self._user_place(user), osm_locality=osm, user_locality=user)
-        if osm is None or osm.area:
+        if osm is None or osm.area or osm.lat is None or osm.lon is None:
             return PlaceTags(t, d, p, osm, osm_locality=osm)
         lat_e7, lon_e7 = centroid()
-        near = locality_is_near(osm.kind, osm.area, lat_e7, lon_e7, to_e7(osm.lat), to_e7(osm.lon))
+        near = locality_is_near(cast(str, osm.kind), osm.area, lat_e7, lon_e7, to_e7(osm.lat), to_e7(osm.lon))
         way = navigate.direction(osm.lat, osm.lon, lat_e7 / SCALE, lon_e7 / SCALE)
         return PlaceTags(t, d, p, osm, near, way.distance_m, way.compass_short, osm_locality=osm)
 
     # -- Readable codes --------------------------------------------------
 
     @staticmethod
-    def to_text(item_id, level="sub"):
+    def to_text(item_id: int, level: str = "sub") -> str:
         """'11-0140-0471-00' from a sub-cell ID, or '11-0140-0471' from a cell ID with level='cell'."""
         return ids.cell_code(item_id) if level == "cell" else ids.sub_cell_code(item_id)
 
-    def from_text(self, code):
+    def from_text(self, code: str) -> int:
         """Integer ID from a readable code, checked against the grid."""
         level, item_id = ids.parse_code(code)
         self.layout.item_from_id(item_id, level)
@@ -978,7 +1014,7 @@ class Grid:
 
     # -- Info ------------------------------------------------------------
 
-    def info(self):
+    def info(self) -> dict[str, Any]:
         return {
             "grid_version": spec.GRID_VERSION,
             "datum": spec.DATUM,
@@ -1021,7 +1057,7 @@ class Grid:
 
     # -- Helpers ---------------------------------------------------------
 
-    def _resolve(self, item, level):
+    def _resolve(self, item: Item, level: str) -> int:
         got_level, item_id = self._resolve_any(item, level)
         if got_level != level:
             raise InvalidIdError(f"{item!r} is a {got_level} code, expected a {level} code")
@@ -1029,26 +1065,26 @@ class Grid:
         return item_id
 
     @staticmethod
-    def _resolve_any(item, level):
+    def _resolve_any(item: Item, level: str) -> tuple[str, int]:
         if isinstance(item, str):
             return ids.parse_code(item)
         if level not in ("cell", "sub"):
             raise ValueError(f"level must be 'cell' or 'sub', got {level!r}")
         return level, item
 
-    def _centroid(self, item, level):
+    def _centroid(self, item: Item, level: str) -> LatLon:
         level, _ = self._resolve_any(item, level)
         return (self.cell(item) if level == "cell" else self.sub_cell(item)).centroid
 
 
-def _point_e7(lat, lon):
+def _point_e7(lat: float, lon: float) -> tuple[int, int]:
     for name, v in (("lat", lat), ("lon", lon)):
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
             raise ValueError(f"{name} must be a finite number, got {v!r}")
     return to_e7(lat), to_e7(lon)
 
 
-def _sub_cell_from_record(cid, sub, record):
+def _sub_cell_from_record(cid: int, sub: int, record: SubRecord) -> SubCell:
     lat_lines, lon_lines, centroids, inside_mask, border_mask = record
     sr, sc = ids.split_sub_index(sub)
     sid = ids.sub_cell_id(cid, sub)
@@ -1058,8 +1094,8 @@ def _sub_cell_from_record(cid, sub, record):
                    (clat / SCALE, clon / SCALE), FLAG_NAMES[sub_flag(sub, inside_mask, border_mask)])
 
 
-def _layout_from_store(store):
-    ncols = {q: [] for q in spec.QUADRANTS}
+def _layout_from_store(store: GridStore) -> GridLayout:
+    ncols: dict[int, list[int]] = {q: [] for q in spec.QUADRANTS}
     for q, row, _s, _n, n in store.rows():
         ncols[q].append(n)
     quads = []

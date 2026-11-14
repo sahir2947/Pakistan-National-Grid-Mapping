@@ -28,10 +28,19 @@ PAKGRID_WALKTHROUGHS   a dict of any of:
                   that expire (e.g. django-storages' S3 storage with querystring auth)
 """
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from threading import Lock
+from typing import TYPE_CHECKING, Any
 
 from django.conf import settings
 from django.utils.module_loading import import_string
+
+if TYPE_CHECKING:
+    from django.core.files.storage import Storage
+
+    from pakgrid import Grid
 
 DEFAULTS = {
     "JOB": "command", "CAN_UPLOAD": None, "CAN_MANAGE": None, "CAN_VIEW": None, "AUTO_APPROVE": False,
@@ -41,24 +50,24 @@ DEFAULTS = {
 JOBS = ("command", "celery", "thread", "sync")
 
 
-def get(name):
+def get(name: str) -> Any:
     value = {**DEFAULTS, **getattr(settings, "PAKGRID_WALKTHROUGHS", {})}[name]
     if name == "JOB" and value not in JOBS:
         raise ValueError(f"PAKGRID_WALKTHROUGHS['JOB'] must be one of {', '.join(JOBS)}, not {value!r}")
     return value
 
 
-def hook(name):
+def hook(name: str) -> Callable[..., Any] | None:
     """The function named by a CAN_* setting, or None."""
     path = get(name)
     return import_string(path) if isinstance(path, str) else path
 
 
 _grid_lock = Lock()
-_grids = {}
+_grids: dict[str, Grid] = {}
 
 
-def get_grid():
+def get_grid() -> Grid | None:
     """The app's Grid: PAKGRID_GRID's function, or PAKGRID_DB opened once per process; None
     when neither is set (walkthroughs are then made without the grid)."""
     fn = getattr(settings, "PAKGRID_GRID", None)
@@ -74,7 +83,7 @@ def get_grid():
         return _grids[path]
 
 
-def get_storage():
+def get_storage() -> Storage:
     """The storage for videos and photos (STORAGE, or Django's default storage)."""
     from django.core.files.storage import default_storage
     value = get("STORAGE")

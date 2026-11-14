@@ -14,6 +14,10 @@
 Walkthroughs the user may not see answer 404, so their existence is not given away.
 """
 
+from __future__ import annotations
+
+from typing import Any, Literal, cast, overload
+
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -26,7 +30,7 @@ from . import services
 from .models import Walkthrough
 
 
-def _summary(wt, request):
+def _summary(wt: Walkthrough, request: Any) -> dict[str, Any]:
     d = wt.data
     out = {"id": str(wt.pk), "place_ref": wt.place_ref, "status": wt.status, "status_text": wt.get_status_display(),
            "error": wt.error or None, "length_m": wt.length_m, "duration_s": d.get("duration_s"),
@@ -37,7 +41,13 @@ def _summary(wt, request):
     return out
 
 
-def _number(data, key, required=True):
+@overload
+def _number(data: Any, key: str) -> float: ...
+@overload
+def _number(data: Any, key: str, required: Literal[True]) -> float: ...
+@overload
+def _number(data: Any, key: str, required: bool) -> float | None: ...
+def _number(data: Any, key: str, required: bool = True) -> float | None:
     v = data.get(key)
     if v in (None, ""):
         if required:
@@ -49,7 +59,7 @@ def _number(data, key, required=True):
         raise WalkthroughError(f"{key} must be a number, got {v!r}") from None
 
 
-def _managed(request, pk):
+def _managed(request: Any, pk: Any) -> Walkthrough:
     wt = get_object_or_404(Walkthrough, pk=pk)
     if not services.can_manage(request.user, wt):
         raise _NotFound()
@@ -63,7 +73,7 @@ class _NotFound(Exception):
 class _Base(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
-    def handle_exception(self, exc):
+    def handle_exception(self, exc: Exception) -> Response:
         if isinstance(exc, _NotFound):
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         if isinstance(exc, services.PermissionDenied):
@@ -76,7 +86,7 @@ class _Base(APIView):
 class WalkthroughListCreate(_Base):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
-    def get(self, request):
+    def get(self, request: Any) -> Response:
         qs = Walkthrough.objects.all()
         if request.GET.get("place_ref"):
             qs = qs.filter(place_ref=request.GET["place_ref"])
@@ -84,7 +94,7 @@ class WalkthroughListCreate(_Base):
             qs = qs.filter(owner=request.user)
         return Response([_summary(wt, request) for wt in qs[:200] if services.can_manage(request.user, wt)])
 
-    def post(self, request):
+    def post(self, request: Any) -> Response:
         d = request.data
         start = (_number(d, "start_lat", False), _number(d, "start_lon", False))
         track = request.FILES.get("track_file") or d.get("track")
@@ -92,19 +102,19 @@ class WalkthroughListCreate(_Base):
             raise WalkthroughError("send the GPS track as track (JSON or GPX text) or track_file")
         wt = services.create(request.user, video=request.FILES.get("video"), track=track,
                              pin=(_number(d, "pin_lat"), _number(d, "pin_lon")),
-                             start=start if None not in start else None, place_ref=d.get("place_ref", ""),
+                             start=cast("tuple[float, float]", start) if None not in start else None, place_ref=d.get("place_ref", ""),
                              video_start=d.get("video_start") or None)
         wt.refresh_from_db()
         return Response(_summary(wt, request), status=status.HTTP_201_CREATED)
 
 
 class WalkthroughDetail(_Base):
-    def get(self, request, pk):
+    def get(self, request: Any, pk: Any) -> Response:
         wt = _managed(request, pk)
         return Response({**_summary(wt, request),
                          **services.payload(wt, request.build_absolute_uri)})
 
-    def delete(self, request, pk):
+    def delete(self, request: Any, pk: Any) -> Response:
         services.delete(request.user, _managed(request, pk))
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -112,7 +122,7 @@ class WalkthroughDetail(_Base):
 class WalkthroughReview(_Base):
     action = None
 
-    def post(self, request, pk):
+    def post(self, request: Any, pk: Any) -> Response:
         wt = _managed(request, pk)
         note = request.data.get("note", "") if hasattr(request.data, "get") else ""
         if self.action == "approve":
@@ -126,7 +136,7 @@ class WalkthroughReview(_Base):
 
 
 class RiderWalkthrough(_Base):
-    def get(self, request, place_ref):
+    def get(self, request: Any, place_ref: str) -> Response:
         wt = services.live_for(place_ref)
         if wt is None or not services.can_view(request.user, wt):
             raise _NotFound()

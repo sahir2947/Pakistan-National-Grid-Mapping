@@ -29,22 +29,32 @@ Everything uses exact arithmetic on the grid's 1e-7 degree coordinates (no
 trigonometry), so the layer is identical on every platform.
 """
 
+from __future__ import annotations
+
 import functools
 import gzip
 import hashlib
 import json
 import math
+import os
 import re
+import sqlite3
 import struct
 from array import array
 from bisect import bisect_left, bisect_right
 from collections import Counter
 from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Sequence
 from importlib import resources
+from typing import Any
 
 from . import geodesy, ids, spec
 from .boundary import Boundary, row_flags
-from .layout import SCALE, SUB, to_e7
+from .layout import SCALE, SUB, GridLayout, to_e7
+
+Ring = list[tuple[int, int]]    # (lon_e7, lat_e7) vertices
+TagRows = dict[int, Any]        # fine row -> array of sub-cell tags (0 = none)
+Progress = Callable[[str], None]
 
 PLACES_VERSION = 2
 LEVELS = ("province", "district", "tehsil", "locality")
@@ -96,7 +106,7 @@ _LON_SCALE = 0.85           # longitude scale for nearest-boundary distances (se
 _KEEP_UPPER = {"I", "II", "III", "IV", "V", "FR"}
 
 
-def clean_name(raw):
+def clean_name(raw: str) -> str:
     """Display name from a source name: 'D.I.KHAN' -> 'D.I. Khan', 'BABA_KOT' -> 'Baba Kot'."""
     name = re.sub(r"_+", " ", raw).strip()
     name = re.sub(r"\s*\bSUB-$", " SUB-TEHSIL", name)         # the source cuts 'SUB-TEHSIL' short
@@ -105,9 +115,9 @@ def clean_name(raw):
     name = re.sub(r"\s+", " ", name)
     if any(c.islower() for c in name):
         return name                                            # already in mixed case
-    out = []
+    out: list[str] = []
     for word in name.split(" "):
-        parts = []
+        parts: list[str] = []
         for part in re.split(r"(-|\(|\))", word):
             if part in _KEEP_UPPER or re.fullmatch(r"(?:[A-Z]\.)+", part) or not part.isalpha():
                 parts.append(part)
@@ -117,12 +127,12 @@ def clean_name(raw):
     return " ".join(out)
 
 
-def _tidy(name):
+def _tidy(name: str) -> str:
     """A locality name for display: 'QUID_e-AZAM  COLONY' -> 'QUID e-AZAM COLONY'."""
     return re.sub(r"[_\s]+", " ", name).strip() or name
 
 
-def _slug(name):
+def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
@@ -134,12 +144,13 @@ class _Unit:
     name: str
     source_name: str
     source_id: str
-    rings: list             # rings of (lon_e7, lat_e7)
+    rings: list[Ring]       # rings of (lon_e7, lat_e7)
     area: int               # twice the absolute shoelace area, in (1e-7 degree)^2, for ordering
 
 
-def _decode_ring(flat):
-    pts, x, y = [], 0, 0
+def _decode_ring(flat: Sequence[int]) -> Ring:
+    pts: Ring = []
+    x, y = 0, 0
     for k in range(0, len(flat), 2):
         x += flat[k]
         y += flat[k + 1]
@@ -147,7 +158,7 @@ def _decode_ring(flat):
     return pts
 
 
-def _ring_area(rings):
+def _ring_area(rings: Iterable[Ring]) -> int:
     """Twice the absolute shoelace area (outer rings minus holes, by orientation), for ordering."""
     total = 0
     for pts in rings:
@@ -163,20 +174,21 @@ class _Locality:
     name: str               # Latin-script name, for display (underscores and extra spaces removed)
     source_name: str        # the name as in the source
     local_name: str | None  # name in Urdu or another local script, where given
-    point: tuple | None     # (lon_e7, lat_e7) for a point locality
-    rings: list | None      # rings of (lon_e7, lat_e7) for an area locality
+    point: tuple[int, int] | None     # (lon_e7, lat_e7) for a point locality
+    rings: list[Ring] | None          # rings of (lon_e7, lat_e7) for an area locality
 
 
-def _load_sources():
-    raw = json.loads(gzip.decompress(resources.files("pakgrid").joinpath("data", DATA_FILE).read_bytes()))
-    tehsils = []
+def _load_sources() -> tuple[Any, list[tuple[_Unit, str, str, str, str]], list[_Locality]]:
+    data = resources.files("pakgrid").joinpath("data").joinpath(DATA_FILE).read_bytes()
+    raw = json.loads(gzip.decompress(data))
+    tehsils: list[tuple[_Unit, str, str, str, str]] = []
     for i, (pcode, name, dpcode, dname, ppcode, pname, rings) in enumerate(raw["tehsils"]):
         pts = [_decode_ring(r) for r in rings]
         tehsils.append((_Unit(i, clean_name(name), name, pcode, pts, _ring_area(pts)), dpcode, dname, ppcode, pname))
-    localities = []
+    localities: list[_Locality] = []
     for i, (osm_id, kind, name, local, shape, coords) in enumerate(raw["localities"]):
         if shape == "point":
-            localities.append(_Locality(i, osm_id, kind, _tidy(name), name, local, tuple(coords), None))
+            localities.append(_Locality(i, osm_id, kind, _tidy(name), name, local, (coords[0], coords[1]), None))
         else:
             localities.append(_Locality(i, osm_id, kind, _tidy(name), name, local, None,
                                         [_decode_ring(r) for r in coords]))
@@ -186,13 +198,13 @@ def _load_sources():
 class PolygonLayer:
     """Non-overlapping units (polygons with holes, even-odd rule), queried one latitude at a time."""
 
-    def __init__(self, units, tags, typecode="H"):
+    def __init__(self, units: Sequence[_Unit], tags: Sequence[int], typecode: str = "H") -> None:
         # Smaller units first: where two source polygons overlap slightly, the smaller (inner) one wins.
         self.typecode = typecode
         order = sorted(range(len(units)), key=lambda k: (units[k].area, units[k].source_id))
-        self._edges = []                  # (x1, y1, x2, y2, tag) in degrees
-        self._rank = {}
-        self._bands = {}
+        self._edges: list[tuple[float, float, float, float, int]] = []   # (x1, y1, x2, y2, tag) in degrees
+        self._rank: dict[int, int] = {}
+        self._bands: dict[int, list[int]] = {}
         for rank, k in enumerate(order):
             self._rank[tags[k]] = rank
             for ring in units[k].rings:
@@ -204,9 +216,9 @@ class PolygonLayer:
                     for b in range((min(ay, by) - 1) // _BAND, (max(ay, by) + 1) // _BAND + 1):
                         self._bands.setdefault(b, []).append(e)
 
-    def crossings(self, lat):
+    def crossings(self, lat: float) -> dict[int, list[float]]:
         """{tag: sorted longitudes where the unit's boundary crosses latitude `lat`}."""
-        out = {}
+        out: dict[int, list[float]] = {}
         for e in self._bands.get(int(lat * SCALE) // _BAND, ()):
             x1, y1, x2, y2, tag = self._edges[e]
             if (y1 <= lat) != (y2 <= lat):
@@ -215,15 +227,15 @@ class PolygonLayer:
             xs.sort()
         return out
 
-    def intervals(self, lat):
+    def intervals(self, lat: float) -> list[tuple[float, float, int]]:
         """[(west, east, tag)] stretches of latitude `lat` inside each unit, sorted by west."""
-        out = []
+        out: list[tuple[float, float, int]] = []
         for tag, xs in self.crossings(lat).items():
             out += [(xs[k], xs[k + 1], tag) for k in range(0, len(xs) - 1, 2)]
         out.sort()
         return out
 
-    def scan(self, lat, centres):
+    def scan(self, lat: float, centres: Sequence[float]) -> array[int]:
         """Tag of the unit containing each point (lat, centres[j]); 0 where none. `centres` is sorted."""
         tags = array(self.typecode, bytes(array(self.typecode).itemsize * len(centres)))
         hit = self.crossings(lat)
@@ -241,10 +253,10 @@ class PolygonLayer:
                             tags[j] = tag
         return tags
 
-    def at(self, lat, lon):
+    def at(self, lat: float, lon: float) -> int:
         return self.scan(lat, [lon])[0]
 
-    def nearest(self, lat, lon, max_deg=0.5):
+    def nearest(self, lat: float, lon: float, max_deg: float = 0.5) -> int:
         """Tag of the unit whose boundary is nearest the point (within `max_deg`), or 0.
 
         Distances use degrees with longitude scaled by a fixed 0.85 (cos 31.8°, mid-Pakistan): exact
@@ -260,9 +272,9 @@ class PolygonLayer:
                 return tag
             r *= 4
 
-    def _nearest_within(self, lat, lon, max_deg):
-        best = None
-        seen = set()
+    def _nearest_within(self, lat: float, lon: float, max_deg: float) -> int:
+        best: tuple[float, int] | None = None
+        seen: set[int] = set()
         k = _LON_SCALE
         for b in range(int((lat - max_deg) * SCALE) // _BAND, int((lat + max_deg) * SCALE) // _BAND + 1):
             for e in self._bands.get(b, ()):
@@ -285,10 +297,10 @@ class PolygonLayer:
 
 @dataclass
 class PlacesData:
-    places: list            # (id, level, key, name, parent, source_name, source_id, kind, local_name,
-                            #  lat_e7, lon_e7, area)
-    cells: list             # (cell ID, tehsil, subs blob or None), in ID order
-    localities: list        # (cell ID, locality or 0, subs blob or None), in ID order
+    places: list[tuple[Any, ...]]   # (id, level, key, name, parent, source_name, source_id, kind,
+                                    #  local_name, lat_e7, lon_e7, area)
+    cells: list[tuple[int, int, bytes | None]]       # (cell ID, tehsil, subs blob or None), in ID order
+    localities: list[tuple[int, int, bytes | None]]  # (cell ID, locality or 0, subs blob or None), in ID order
     filled_sub_cells: int   # sub-cells tagged from their neighbours (no tehsil polygon at the centroid)
     nearest_sub_cells: int  # sub-cells tagged with the nearest tehsil (islands the tehsils leave out)
     untagged_sub_cells: int  # sub-cells touching Pakistan that could not be tagged (none in a full build)
@@ -302,18 +314,20 @@ _TOWN_AREAS = {"city", "town"}
 
 @dataclass
 class _Sources:
-    units: dict             # place ID -> (level, name, source_name, source_id, parent ID)
+    units: dict[int, tuple[int, str, str, str, int | None]]   # place ID -> (level, name, source_name,
+                                                              #  source_id, parent ID)
     tehsils: PolygonLayer
     areas: PolygonLayer     # named areas other than whole towns and cities
     towns: PolygonLayer     # town and city outlines
-    localities: dict        # place ID -> _Locality
-    points: dict            # latitude bucket -> [(lat_e7, lon_e7, reach in m, limit, place ID)]
+    localities: dict[int, _Locality]    # place ID -> _Locality
+    points: dict[int, list[tuple[int, int, int, int, int]]]   # latitude bucket -> [(lat_e7, lon_e7, reach
+                                                              #  in m, limit, place ID)]
 
 
 _BUCKET = 1_000_000         # point locality latitude buckets, in 1e-7 degree (0.1 degree; > any reach)
 
 
-def _limit(reach_m):
+def _limit(reach_m: int) -> int:
     """Largest D2 = (85 dx)^2 + (100 dy)^2 (dx, dy in 1e-7 degree) within `reach_m` metres.
 
     That distance in metres is sqrt(D2) * 111000 / 1e9 (_M_PER_DEG_LAT, _M_PER_DEG_LON), so the
@@ -322,13 +336,14 @@ def _limit(reach_m):
     return (reach_m * 10 ** 9) ** 2 // 111_000 ** 2
 
 
-def _in_limit(kind):
+def _in_limit(kind: str) -> int:
     """Largest D2 (as in _limit) at which a sub-cell is *in* a point locality rather than near it."""
     k = 1 if kind in _TOWN_AREAS else 4
     return (LOCALITY_REACH_M[kind] * 10 ** 9) ** 2 // (k * 111_000 ** 2)
 
 
-def locality_is_near(kind, area, lat_e7, lon_e7, point_lat_e7, point_lon_e7):
+def locality_is_near(kind: str, area: int | bool, lat_e7: int, lon_e7: int, point_lat_e7: int,
+                     point_lon_e7: int) -> bool:
     """True when a sub-cell (centroid at lat_e7, lon_e7) tagged with a locality is *near* it, not in it.
 
     A sub-cell is in an area locality; in a city or town point locality anywhere within its
@@ -341,7 +356,7 @@ def locality_is_near(kind, area, lat_e7, lon_e7, point_lat_e7, point_lon_e7):
     return d2 > _in_limit(kind)
 
 
-def _inner_point(rings, layer, tag):
+def _inner_point(rings: Sequence[Ring], layer: PolygonLayer, tag: int) -> tuple[int, int]:
     """(lat_e7, lon_e7) inside an area: the middle of its longest stretch at its middle latitude."""
     ys = [y for r in rings for _, y in r]
     lat = (min(ys) + max(ys)) // 2
@@ -353,24 +368,25 @@ def _inner_point(rings, layer, tag):
 
 
 @functools.lru_cache(maxsize=1)
-def _sources():
+def _sources() -> _Sources:
     """The packaged sources, place IDs and polygon layers (loaded once per process).
 
     Place IDs: provinces, then districts, then tehsils, then localities, each sorted by name then
     source ID.
     """
     _, tehsils, localities = _load_sources()
-    provinces, districts = {}, {}
+    provinces: dict[str, str] = {}
+    districts: dict[str, tuple[str, str]] = {}
     for _, dpcode, dname, ppcode, pname in tehsils:
         provinces[ppcode] = pname
         districts[dpcode] = (dname, ppcode)
     order = ([(1, clean_name(n), n, pc) for pc, n in provinces.items()]
              + [(2, clean_name(n), n, pc) for pc, (n, _) in districts.items()]
              + [(3, u.name, u.source_name, u.source_id) for u, *_ in tehsils])
-    pid = {}
+    pid: dict[str, int] = {}
     for level, name, _, source_id in sorted(order, key=lambda r: (r[0], r[1].lower(), r[3])):
         pid[source_id] = len(pid) + 1
-    units = {}
+    units: dict[int, tuple[int, str, str, str, int | None]] = {}
     for level, name, source_name, source_id in order:
         parent = (None if level == 1 else pid[districts[source_id][1]] if level == 2
                   else pid[next(t[1] for t in tehsils if t[0].source_id == source_id)])
@@ -381,13 +397,13 @@ def _sources():
     lid = {loc.index: first + k for k, loc in enumerate(
         sorted(localities, key=lambda loc: (loc.name.lower(), loc.source_id)))}
     by_id = {lid[loc.index]: loc for loc in localities}
-    layers = []
+    layers: list[PolygonLayer] = []
     for town in (False, True):
         areas = [loc for loc in localities if loc.rings and (loc.kind in _TOWN_AREAS) == town]
-        layers.append(PolygonLayer([_Unit(loc.index, loc.name, loc.source_name, loc.source_id, loc.rings,
-                                          _ring_area(loc.rings)) for loc in areas],
+        layers.append(PolygonLayer([_Unit(loc.index, loc.name, loc.source_name, loc.source_id, loc.rings or [],
+                                          _ring_area(loc.rings or [])) for loc in areas],
                                    [lid[loc.index] for loc in areas], "I"))
-    points = {}
+    points: dict[int, list[tuple[int, int, int, int, int]]] = {}
     for i, loc in sorted(by_id.items()):
         if loc.point:
             reach = LOCALITY_REACH_M[loc.kind]
@@ -396,15 +412,17 @@ def _sources():
     return _Sources(units, t_layer, layers[0], layers[1], by_id, points)
 
 
-def _locality_point(src, i):
+def _locality_point(src: _Sources, i: int) -> tuple[int, int]:
     """(lat_e7, lon_e7) of a locality: its point, or a point inside its area."""
     loc = src.localities[i]
     if loc.point:
         return loc.point[1], loc.point[0]
-    return _inner_point(loc.rings, src.towns if loc.kind in _TOWN_AREAS else src.areas, i)
+    return _inner_point(loc.rings or [], src.towns if loc.kind in _TOWN_AREAS else src.areas, i)
 
 
-def build_places_data(layout, boundary=None, quadrants=None, rows=None, progress=None, on_rows=None):
+def build_places_data(layout: GridLayout, boundary: Boundary | None = None, quadrants: Any = None,
+                      rows: Any = None, progress: Progress | None = None,
+                      on_rows: Callable[[int, TagRows, TagRows], None] | None = None) -> PlacesData:
     """Compute the places layer for the given part of the grid (all of it by default).
 
     on_rows(q, tags, localities), if given, is called once per quadrant with {fine row: array of
@@ -417,21 +435,28 @@ def build_places_data(layout, boundary=None, quadrants=None, rows=None, progress
     src = _sources()
     t_layer = src.tehsils
 
-    cells, loc_cells, filled, nearest, untagged, located = [], [], 0, 0, 0, 0
+    cells: list[tuple[int, int, bytes | None]] = []
+    loc_cells: list[tuple[int, int, bytes | None]] = []
+    filled, nearest, untagged, located = 0, 0, 0, 0
     for q in qs:
         if progress:
             progress(f"places, quadrant {spec.QUADRANTS[q][0]}")
         ql = layout.quadrants[q]
         lats = [ql.fine_lat(i) for i in range(SUB * ql.nrows + 1)]
         row_range = [r for r in (row_sel if row_sel is not None else range(ql.nrows)) if 0 <= r < ql.nrows]
-        tags, flags, edges, clats, clons = {}, {}, {}, {}, {}      # per fine row i
+        tags: TagRows = {}          # per fine row i
+        flags: dict[int, bytearray] = {}
+        edges: dict[int, Any] = {}
+        clats: dict[int, int] = {}
+        clons: dict[int, Any] = {}
         for row in row_range:
             lons = array("d", (ql.fine_lon(row, j) for j in range(SUB * ql.ncols[row] + 1)))
             centres = array("d", ((lons[j] + lons[j + 1]) / 2 for j in range(len(lons) - 1)))
             clon = array("q", (to_e7(c) for c in centres))       # the stored centroid longitudes
             for i in range(row * SUB, (row + 1) * SUB):
                 clats[i], clons[i] = to_e7(geodesy.band_centroid_lat(lats[i], lats[i + 1])), clon
-                f = row_flags(*boundary.band(lats[i], lats[i + 1]), lons, centres)
+                touched, crossings = boundary.band(lats[i], lats[i + 1])
+                f = row_flags(touched, crossings, lons, centres)
                 t = t_layer.scan(clats[i] / SCALE, [c / SCALE for c in clon])
                 for m in _OUTSIDE_RUN.finditer(f):
                     t[m.start():m.end()] = array("H", bytes(2 * (m.end() - m.start())))
@@ -449,7 +474,9 @@ def build_places_data(layout, boundary=None, quadrants=None, rows=None, progress
         if on_rows:
             on_rows(q, tags, locs)
         for row in row_range:
-            for layer, out, typecode, packer in ((tags, cells, "H", _SUBS), (locs, loc_cells, "I", _LSUBS)):
+            parts: tuple[tuple[TagRows, list[tuple[int, int, bytes | None]], str, struct.Struct], ...] = (
+                (tags, cells, "H", _SUBS), (locs, loc_cells, "I", _LSUBS))
+            for layer, out, typecode, packer in parts:
                 rt = [layer[row * SUB + sr] for sr in range(SUB)]
                 zero = array(typecode, bytes(array(typecode).itemsize * SUB))
                 for col in range(ql.ncols[row]):
@@ -471,7 +498,8 @@ def build_places_data(layout, boundary=None, quadrants=None, rows=None, progress
     return PlacesData(_places_table(), cells, loc_cells, filled, nearest, untagged, located)
 
 
-def _tag_localities(src, lat, clon, tehsils, flags):
+def _tag_localities(src: _Sources, lat: int, clon: Sequence[int], tehsils: Sequence[int],
+                    flags: bytes | bytearray) -> array[int]:
     """Locality tags of one fine row of sub-cells (centroids at lat_e7, clon[j]); 0 = none.
 
     Only sub-cells with a tehsil (and a border flag `flags` other than outside) are tagged. In order: the smallest named area containing the
@@ -487,7 +515,7 @@ def _tag_localities(src, lat, clon, tehsils, flags):
     best = array("I", bytes(4 * n))
     b0 = lat // _BUCKET
     cands = [p for b in (b0 - 1, b0, b0 + 1) for p in src.points.get(b, ())]
-    pd = {}                         # place ID -> (lon_e7, (100 dy)^2, reach^2)
+    pd: dict[int, tuple[int, int, int]] = {}    # place ID -> (lon_e7, (100 dy)^2, reach^2)
     for py, px, reach, limit, i in cands:
         dy2 = (100 * (lat - py)) ** 2
         if dy2 > limit:
@@ -513,7 +541,7 @@ def _tag_localities(src, lat, clon, tehsils, flags):
             lhs, rhs = d_new * cr2, d_cur * r2
             if lhs < rhs or (lhs == rhs and i < cur):
                 best[j] = i
-    towns = None
+    towns: array[int] | None = None
     for m in _INSIDE_RUN.finditer(flags):
         for j in range(m.start(), m.end()):
             if not out[j] and tehsils[j]:
@@ -530,7 +558,7 @@ def _tag_localities(src, lat, clon, tehsils, flags):
     return out
 
 
-def _main_tag(block, skip_zero=True):
+def _main_tag(block: Sequence[int], skip_zero: bool = True) -> int:
     """The tag most of a cell's sub-cells have (ties: the centre sub-cell's, else the smallest)."""
     counts = Counter(b for b in block if b or not skip_zero)
     best = max(counts.values())
@@ -538,14 +566,15 @@ def _main_tag(block, skip_zero=True):
     return block[12] if block[12] in tied else min(tied)
 
 
-def _fill_gaps(tags, flags, edges):
+def _fill_gaps(tags: TagRows, flags: dict[int, bytearray],
+               edges: dict[int, Any]) -> tuple[int, set[tuple[int, int]]]:
     """Tag sub-cells that touch Pakistan but lie outside every tehsil polygon, from their neighbours.
 
     Repeated in rounds: in each round, every untagged sub-cell with tagged neighbours (left, right,
     and the sub-cells above and below its centre) takes the most common neighbour tag (ties: the
     smallest). The result does not depend on processing order.
     """
-    gaps = set()
+    gaps: set[tuple[int, int]] = set()
     for i, f in flags.items():
         t = tags[i]
         for m in _INSIDE_RUN.finditer(f):
@@ -554,10 +583,10 @@ def _fill_gaps(tags, flags, edges):
                 gaps.update((i, j) for j in range(a, b) if not t[j])
     filled = 0
     while gaps:
-        new = {}
+        new: dict[tuple[int, int], int] = {}
         for i, j in gaps:
             t = tags[i]
-            near = []
+            near: list[int] = []
             if j > 0:
                 near.append(t[j - 1])
             if j + 1 < len(t):
@@ -566,9 +595,9 @@ def _fill_gaps(tags, flags, edges):
             centre = (lons[j] + lons[j + 1]) / 2
             for k in (i - 1, i + 1):
                 if k in tags:
-                    m = bisect_right(edges[k], centre) - 1
-                    if 0 <= m < len(tags[k]):
-                        near.append(tags[k][m])
+                    pos = bisect_right(edges[k], centre) - 1
+                    if 0 <= pos < len(tags[k]):
+                        near.append(tags[k][pos])
             counts = Counter(x for x in near if x)
             if counts:
                 best = max(counts.values())
@@ -583,7 +612,7 @@ def _fill_gaps(tags, flags, edges):
 
 
 @functools.lru_cache(maxsize=1)
-def _places_table():
+def _places_table() -> list[tuple[Any, ...]]:
     """Rows of the places table, in ID order:
 
     (id, level, key, name, parent, source_name, source_id, kind, local_name, lat, lon, area)
@@ -594,7 +623,7 @@ def _places_table():
     area is 1 for a locality mapped as an outline (0 for a point).
     """
     src = _sources()
-    rows = [[i, level, None, name, parent, source_name, source_id, None, None, None, None, None]
+    rows: list[list[Any]] = [[i, level, None, name, parent, source_name, source_id, None, None, None, None, None]
             for i, (level, name, source_name, source_id, parent) in sorted(src.units.items())]
     for i, loc in sorted(src.localities.items()):
         lat, lon = _locality_point(src, i)
@@ -603,7 +632,7 @@ def _places_table():
             rows.append([i, 4, None, loc.name, parent, loc.source_name, loc.source_id, loc.kind,
                          loc.local_name, lat, lon, 0 if loc.point else 1])
     by_id = {r[0]: r for r in rows}
-    used = set()
+    used: set[str] = set()
     for r in rows:                                   # keys: 'punjab/lahore/lahore-city/model-town'
         part = _slug(r[3]) or _slug(r[6])
         key = part if r[4] is None else by_id[r[4]][2] + "/" + part
@@ -617,7 +646,7 @@ def _places_table():
 
 # -- Map viewer data -----------------------------------------------------------------------
 
-def viewer_data(layout=None, progress=None):
+def viewer_data(layout: GridLayout | None = None, progress: Progress | None = None) -> dict[str, Any]:
     """The places layer for the map viewer (viewer/places.js): places, and every sub-cell's tags.
 
     Each fine row of sub-cells that has any tag is stored as runs [tag, count, tag, count, ...]
@@ -625,23 +654,24 @@ def viewer_data(layout=None, progress=None):
     ("locality_rows"). Each place is [id, level, last part of its key, name, parent, extent
     [s, w, n, e]], and a locality adds [kind, local name, lat_e7, lon_e7, area].
     """
-    from .layout import GridLayout
-    layout = layout or GridLayout.from_spec()
-    out_rows = ([dict() for _ in layout.quadrants], [dict() for _ in layout.quadrants])
-    extent = {}
+    grid = layout or GridLayout.from_spec()
+    out_rows: tuple[list[dict[int, list[int]]], list[dict[int, list[int]]]] = (
+        [{} for _ in grid.quadrants], [{} for _ in grid.quadrants])
+    extent: dict[int, list[float]] = {}
 
-    def grow(tag, s, w, n, e):
+    def grow(tag: int, s: float, w: float, n: float, e: float) -> None:
         b = extent.get(tag)
         extent[tag] = [s, w, n, e] if b is None else [min(b[0], s), min(b[1], w), max(b[2], n), max(b[3], e)]
 
-    def keep(q, tags, localities):
-        ql = layout.quadrants[q]
+    def keep(q: int, tags: TagRows, localities: TagRows) -> None:
+        ql = grid.quadrants[q]
         for layer, rows_out in ((tags, out_rows[0]), (localities, out_rows[1])):
             for i in sorted(layer):
                 t = layer[i]
                 if not t.count(0) < len(t):
                     continue
-                runs, start = [], 0
+                runs: list[int] = []
+                start = 0
                 for j in range(1, len(t) + 1):
                     if j == len(t) or t[j] != t[start]:
                         runs += [t[start], j - start]
@@ -652,13 +682,13 @@ def viewer_data(layout=None, progress=None):
                         start = j
                 rows_out[q][i] = runs
 
-    data = build_places_data(layout, progress=progress, on_rows=keep)
+    data = build_places_data(grid, progress=progress, on_rows=keep)
     table = {p[0]: list(p) for p in data.places}
     for pid in sorted(table, reverse=True):          # tehsils, then districts: they make their parents'
         p = table[pid]
         if p[1] in (2, 3) and pid in extent:
             grow(p[4], *extent[pid])
-    places = []
+    places: list[list[Any]] = []
     for pid, p in sorted(table.items()):
         b = extent.get(pid)
         row = [pid, p[1], p[2].rsplit("/", 1)[-1], p[3], p[4], [round(x, 5) for x in b] if b else None]
@@ -678,7 +708,8 @@ def viewer_data(layout=None, progress=None):
 
 # -- Storing -----------------------------------------------------------------------------
 
-def places_hash(places, cells, localities):
+def places_hash(places: Iterable[Sequence[Any]], cells: Iterable[tuple[int, int, bytes | None]],
+                localities: Iterable[tuple[int, int, bytes | None]]) -> str:
     h = hashlib.sha256(b"pakgrid-places-v2")
     for p in places:
         h.update(json.dumps(p, ensure_ascii=False, separators=(",", ":")).encode())
@@ -692,7 +723,7 @@ def places_hash(places, cells, localities):
     return h.hexdigest()
 
 
-def write_places(db, data, coverage):
+def write_places(db: sqlite3.Connection, data: PlacesData, coverage: str) -> dict[str, Any]:
     """Write (or replace) the places layer in an open, writable grid database."""
     for table in ("cell_localities", "cell_places", "places"):
         db.execute(f"DROP TABLE IF EXISTS {table}")
@@ -720,9 +751,8 @@ def write_places(db, data, coverage):
     return meta
 
 
-def build_places(path, progress=None):
+def build_places(path: str | os.PathLike[str], progress: Progress | None = None) -> dict[str, Any]:
     """Build (or rebuild) the places layer inside an existing grid database file."""
-    import sqlite3
     from .grid import _layout_from_store
     from .store import GridStore
     store = GridStore(path)

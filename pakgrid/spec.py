@@ -44,7 +44,7 @@ QUADRANTS = {
 }
 
 
-def quadrant_bounds(q):
+def quadrant_bounds(q: int) -> tuple[float, float, float, float]:
     """Return (south, north, west, east) in degrees for quadrant number q."""
     if q not in QUADRANTS:
         raise ValueError(f"quadrant must be 0-3, got {q!r}")

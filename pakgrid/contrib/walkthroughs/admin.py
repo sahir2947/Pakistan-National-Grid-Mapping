@@ -1,6 +1,11 @@
 """The Django admin for walkthroughs: each with its photos and steps, and actions to approve
 or reject several at once."""
 
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
 from django.contrib import admin
 from django.utils.html import format_html_join
 
@@ -27,20 +32,20 @@ class WalkthroughAdmin(admin.ModelAdmin):
     actions = ["approve", "reject"]
 
     @admin.display(description="Steps")
-    def steps(self, obj):
+    def steps(self, obj: Walkthrough) -> str:
         return format_html_join("", "<div>{}. {} ({} s)</div>",
                                 ((f["index"], f.get("text", ""), f["t_s"]) for f in obj.data.get("frames", [])))
 
     @admin.action(description="Approve: go live")
-    def approve(self, request, queryset):
+    def approve(self, request: Any, queryset: Any) -> None:
         self._review(request, queryset.filter(status=Walkthrough.REVIEW), services.approve, "approved")
 
     @admin.action(description="Reject")
-    def reject(self, request, queryset):
+    def reject(self, request: Any, queryset: Any) -> None:
         self._review(request, queryset.filter(status__in=[Walkthrough.REVIEW, Walkthrough.LIVE]), services.reject,
                      "rejected")
 
-    def _review(self, request, queryset, step, done):
+    def _review(self, request: Any, queryset: Any, step: Callable[[Any, Walkthrough], Any], done: str) -> None:
         n = 0
         for wt in queryset:
             try:

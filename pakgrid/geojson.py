@@ -16,15 +16,25 @@ its south-westernmost corner; polygons and holes in order of that corner), so th
 always gives the same GeoJSON, in Python and in viewer/pakgrid.js.
 """
 
+from __future__ import annotations
+
 from collections import defaultdict
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 from . import ids
-from .layout import SCALE, SUB
+from .layout import SCALE, SUB, GridLayout
+
+Point = tuple[int, int]          # (lon_e7, lat_e7)
+Ring = list[Point]
+Edge = tuple[Point, Point, str]  # start, end, direction (N, E, S, W)
+Pieces = dict[int, list[tuple[int, int, int]]]   # coordinate -> [(a, b, sign)]
 
 # runs of set bits in a 5-bit sub-row pattern: [(first column, end column), ...]
-_RUNS = []
+_RUNS: list[tuple[tuple[int, int], ...]] = []
 for _p in range(32):
-    _r, _k = [], 0
+    _r: list[tuple[int, int]] = []
+    _k = 0
     while _k < SUB:
         if _p >> _k & 1:
             _s = _k
@@ -39,15 +49,15 @@ _LEFT = {"E": "N", "N": "W", "W": "S", "S": "E"}        # the left turn from eac
 _RIGHT = {v: k for k, v in _LEFT.items()}
 
 
-def _blocks(layout, masks):
+def _blocks(layout: GridLayout, masks: Mapping[int, int]) -> list[tuple[int, int, int, int]]:
     """[(south, north, west, east)] in 1e-7 degree: maximal runs of sub-cells along each row."""
-    runs = defaultdict(list)                               # (q, fine row) -> [(j0, j1)]
+    runs: defaultdict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)   # (q, fine row) -> [(j0, j1)]
     for c, m in masks.items():
         q, row, col = ids.split_cell_id(c)
         for sr in range(SUB):
             for a, b in _RUNS[m >> (sr * SUB) & 31]:
                 runs[(q, row * SUB + sr)].append((col * SUB + a, col * SUB + b))
-    out = []
+    out: list[tuple[int, int, int, int]] = []
     for (q, i), rs in runs.items():
         ql = layout.quadrants[q]
         row = i // SUB
@@ -64,17 +74,18 @@ def _blocks(layout, masks):
     return out
 
 
-def _net_segments(lines):
+def _net_segments(lines: Pieces) -> list[tuple[int, int, int, int]]:
     """{coordinate: [(a, b, sign)]} -> [(coordinate, a, b, net)]: the parts of each line where the
     signed pieces do not cancel, maximal (consecutive parts with the same net joined)."""
-    out = []
+    out: list[tuple[int, int, int, int]] = []
     for c, pieces in lines.items():
-        delta = defaultdict(int)
+        delta: defaultdict[int, int] = defaultdict(int)
         for a, b, sign in pieces:
             delta[a] += sign
             delta[b] -= sign
         xs = sorted(delta)
-        net, run = 0, None                       # run: [start, end, net] being built
+        net = 0
+        run: list[int] | None = None             # [start, end, net] being built
         for k in range(len(xs) - 1):
             net += delta[xs[k]]
             a, b = xs[k], xs[k + 1]
@@ -89,7 +100,7 @@ def _net_segments(lines):
     return out
 
 
-def outline_rings(layout, masks):
+def outline_rings(layout: GridLayout, masks: Mapping[int, int]) -> list[Ring]:
     """Closed rings [(lon_e7, lat_e7), ...] outlining the sub-cells of {cell ID: mask}: outer rings
     anticlockwise, holes clockwise (the inside always on the left).
 
@@ -99,22 +110,24 @@ def outline_rings(layout, masks):
     so every ring is simple (polygons may touch each other, or a hole its outer ring, at a point,
     as GeoJSON allows).
     """
-    horizontal, vertical = defaultdict(list), defaultdict(list)
+    horizontal: Pieces = defaultdict(list)
+    vertical: Pieces = defaultdict(list)
     for s, n, w, e in _blocks(layout, masks):
         horizontal[s].append((w, e, 1))        # bottom edge, inside above: runs east
         horizontal[n].append((w, e, -1))       # top edge: runs west
         vertical[e].append((s, n, 1))          # east edge, inside to the west: runs north
         vertical[w].append((s, n, -1))         # west edge: runs south
-    edges = []                                 # (start, end, direction)
+    edges: list[Edge] = []                     # (start, end, direction)
     for y, a, b, net in _net_segments(horizontal):
         edges.append(((a, y), (b, y), "E") if net > 0 else ((b, y), (a, y), "W"))
     for x, a, b, net in _net_segments(vertical):
         edges.append(((x, a), (x, b), "N") if net > 0 else ((x, b), (x, a), "S"))
     edges.sort()
-    leaving = defaultdict(list)
+    leaving: defaultdict[Point, list[tuple[str, int]]] = defaultdict(list)
     for k, (start, _, d) in enumerate(edges):
         leaving[start].append((d, k))
-    rings, used = [], [False] * len(edges)
+    rings: list[Ring] = []
+    used = [False] * len(edges)
     for k0 in range(len(edges)):
         if used[k0]:
             continue
@@ -128,10 +141,10 @@ def outline_rings(layout, masks):
     return rings
 
 
-def _split(ring):
+def _split(ring: Ring) -> list[Ring]:
     """Split a closed ring that passes through a vertex twice (where a hole touches the outer edge
     at a corner) into simple loops; each keeps its direction, so outer edges and holes stay apart."""
-    seen = {}
+    seen: dict[Point, int] = {}
     for k, p in enumerate(ring[:-1]):
         if p in seen:
             i = seen[p]
@@ -140,7 +153,7 @@ def _split(ring):
     return [ring]
 
 
-def _leftmost(options, d):
+def _leftmost(options: Sequence[tuple[str, int]], d: str) -> int:
     """The edge turning most to the left from direction d (left, then straight, then right)."""
     for want in (_LEFT[d], d, _RIGHT[d]):
         for od, k in options:
@@ -149,7 +162,7 @@ def _leftmost(options, d):
     raise AssertionError("the outline is not closed")       # cannot happen
 
 
-def _simplify(ring):
+def _simplify(ring: Ring) -> Ring:
     """Drop the points where the outline goes straight on; start at the south-westernmost corner."""
     pts = ring[:-1]
     keep = []
@@ -163,11 +176,11 @@ def _simplify(ring):
     return keep + [keep[0]]
 
 
-def _signed_area2(ring):
+def _signed_area2(ring: Ring) -> int:
     return sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(ring, ring[1:]))
 
 
-def _inside(px2, py2, ring):
+def _inside(px2: int, py2: int, ring: Ring) -> bool:
     """Even-odd test of the point (px2 / 2, py2 / 2) against a rectilinear ring (doubled
     coordinates, so the midpoint of an edge stays an integer): only its vertical edges count."""
     inside = False
@@ -177,19 +190,20 @@ def _inside(px2, py2, ring):
     return inside
 
 
-def polygons(rings):
+def polygons(rings: Iterable[Ring]) -> list[list[Ring]]:
     """Group rings into polygons: [[outer ring, hole, ...], ...], in canonical order."""
-    outers, holes = [], []
+    outers: list[Ring] = []
+    holes: list[Ring] = []
     for r in rings:
         (outers if _signed_area2(r) > 0 else holes).append(r)
     boxes = [(min(x for x, _ in r), min(y for _, y in r), max(x for x, _ in r), max(y for _, y in r))
              for r in outers]
     areas = [_signed_area2(r) for r in outers]
-    members = [[] for _ in outers]
+    members: list[list[Ring]] = [[] for _ in outers]
     for h in holes:
         (x1, y1), (x2, y2) = h[0], h[1]
         px2, py2 = x1 + x2, y1 + y2              # the midpoint of its first edge, doubled
-        best = None
+        best: int | None = None
         for k, r in enumerate(outers):
             b = boxes[k]
             if 2 * b[0] <= px2 <= 2 * b[2] and 2 * b[1] <= py2 <= 2 * b[3] and _inside(px2, py2, r):
@@ -198,17 +212,18 @@ def polygons(rings):
         if best is None:
             raise AssertionError("a hole outside every outer ring")   # cannot happen
         members[best].append(h)
-    key = lambda r: (r[0][1], r[0][0])           # noqa: E731
+    def key(r: Ring) -> tuple[int, int]:
+        return (r[0][1], r[0][0])
     out = [[r] + sorted(m, key=key) for r, m in zip(outers, members)]
     out.sort(key=lambda p: key(p[0]))
     return out
 
 
-def _coords(ring):
+def _coords(ring: Ring) -> list[list[float]]:
     return [[x / SCALE, y / SCALE] for x, y in ring]
 
 
-def geometry(layout, masks):
+def geometry(layout: GridLayout, masks: Mapping[int, int]) -> dict[str, Any] | None:
     """GeoJSON geometry (Polygon or MultiPolygon) of the sub-cells in {cell ID: mask}, or None if
     there are none."""
     polys = polygons(outline_rings(layout, masks))
@@ -219,18 +234,19 @@ def geometry(layout, masks):
     return {"type": "MultiPolygon", "coordinates": [[_coords(r) for r in p] for p in polys]}
 
 
-def box_geometry(south, west, north, east):
+def box_geometry(south: float, west: float, north: float, east: float) -> dict[str, Any]:
     """GeoJSON Polygon of a latitude/longitude box (degrees), anticlockwise from its south-west corner."""
     return {"type": "Polygon", "coordinates": [[[west, south], [east, south], [east, north], [west, north],
                                                 [west, south]]]}
 
 
-def feature(geom, properties=None, feature_id=None):
-    f = {"type": "Feature", "geometry": geom, "properties": dict(properties or {})}
+def feature(geom: dict[str, Any] | None, properties: Mapping[str, Any] | None = None,
+            feature_id: Any = None) -> dict[str, Any]:
+    f: dict[str, Any] = {"type": "Feature", "geometry": geom, "properties": dict(properties or {})}
     if feature_id is not None:
         f["id"] = feature_id
     return f
 
 
-def feature_collection(features):
+def feature_collection(features: Iterable[dict[str, Any]]) -> dict[str, Any]:
     return {"type": "FeatureCollection", "features": list(features)}

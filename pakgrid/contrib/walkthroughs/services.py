@@ -1,13 +1,17 @@
 """The walkthrough steps as plain functions: usable from the API views, the admin, a Celery task,
 a management command or your own code."""
 
+from __future__ import annotations
+
 import json
 import logging
 import os
 import subprocess
 import tempfile
 import threading
-from datetime import timedelta
+from collections.abc import Callable, Sequence
+from datetime import datetime, timedelta
+from typing import Any
 
 from django.core.files import File
 from django.db import close_old_connections, transaction
@@ -29,19 +33,19 @@ class PermissionDenied(Exception):
 
 # -- Permissions ----------------------------------------------------------------------
 
-def can_upload(user, place_ref):
+def can_upload(user: Any, place_ref: str) -> bool:
     fn = conf.hook("CAN_UPLOAD")
     return bool(fn(user, place_ref)) if fn else bool(user and user.is_authenticated)
 
 
-def can_manage(user, wt):
+def can_manage(user: Any, wt: Walkthrough) -> bool:
     fn = conf.hook("CAN_MANAGE")
     if fn:
         return bool(fn(user, wt))
     return bool(user and user.is_authenticated and (user.is_staff or wt.owner_id == user.pk))
 
 
-def can_view(user, wt):
+def can_view(user: Any, wt: Walkthrough) -> bool:
     """For a live walkthrough: CAN_VIEW, or else whoever can manage it."""
     fn = conf.hook("CAN_VIEW")
     return bool(fn(user, wt)) if fn else can_manage(user, wt)
@@ -49,7 +53,7 @@ def can_view(user, wt):
 
 # -- Upload ----------------------------------------------------------------------------
 
-def parse_track(track, video_start=None):
+def parse_track(track: Any, video_start: datetime | str | None = None) -> list[Any]:
     """Readings from a list, JSON text, or GPX text (or bytes / an uploaded file of either)."""
     if hasattr(track, "read"):
         track = track.read()
@@ -68,7 +72,9 @@ def parse_track(track, video_start=None):
     return track
 
 
-def create(user, *, video, track, pin, start=None, place_ref="", video_start=None, properties=None):
+def create(user: Any, *, video: Any, track: Any, pin: Sequence[float], start: Sequence[float] | None = None,
+           place_ref: str = "", video_start: datetime | str | None = None,
+           properties: dict[str, Any] | None = None) -> Walkthrough:
     """Make the walkthrough from the track (refusing a bad recording with WalkthroughError), store
     it with its video, and start the photo job. Returns the Walkthrough record.
 
@@ -84,7 +90,7 @@ def create(user, *, video, track, pin, start=None, place_ref="", video_start=Non
         raise WalkthroughError(f"the video is {video.size / 1048576:.0f} MB; at most {limit} MB is allowed")
     props = {**(properties or {}), **({"place_ref": place_ref} if place_ref else {})}
     grid = conf.get_grid()
-    args = dict(pin=pin, start=start, author=user.get_username() if user else "unknown", properties=props)
+    args: dict[str, Any] = dict(pin=pin, start=start, author=user.get_username() if user else "unknown", properties=props)
     track = parse_track(track, video_start)
     data = grid.walkthrough(track, **args) if grid is not None else build_walkthrough(track, **args)
     with transaction.atomic():
@@ -101,7 +107,7 @@ def create(user, *, video, track, pin, start=None, place_ref="", video_start=Non
     return wt
 
 
-def start_job(pk):
+def start_job(pk: Any) -> None:
     """Run the photo job as PAKGRID_WALKTHROUGHS['JOB'] says."""
     job = conf.get("JOB")
     if job == "sync":
@@ -114,7 +120,7 @@ def start_job(pk):
     # "command": process_walkthroughs picks it up
 
 
-def _in_thread(pk):
+def _in_thread(pk: Any) -> None:
     close_old_connections()
     try:
         take_photos(pk)
@@ -124,7 +130,7 @@ def _in_thread(pk):
 
 # -- The photo job ---------------------------------------------------------------------
 
-def take_photos(pk, upload=None):
+def take_photos(pk: Any, upload: Any = None) -> Walkthrough:
     """Take a processing walkthrough's photos from its video with ffmpeg, store them, and move it
     to review (or live, with AUTO_APPROVE). Safe to run twice: only a 'processing' record is
     taken, and claimed first. Returns the record (status 'failed', with `error`, if it failed).
@@ -194,7 +200,7 @@ def take_photos(pk, upload=None):
     return wt
 
 
-def retry(wt):
+def retry(wt: Walkthrough) -> Walkthrough:
     """Put a failed walkthrough back to processing (its video must still be there) and start the job."""
     if wt.status != Walkthrough.FAILED or not wt.video:
         raise WalkthroughError("only a failed walkthrough that still has its video can be retried")
@@ -204,7 +210,7 @@ def retry(wt):
     return wt
 
 
-def process_pending(limit=None, stale_minutes=30):
+def process_pending(limit: int | None = None, stale_minutes: float | None = 30) -> list[Walkthrough]:
     """Take the photos of every walkthrough still processing (the 'command' job). A job that
     started more than stale_minutes ago and never finished (its worker died) is started again.
     Returns the records."""
@@ -219,7 +225,7 @@ def process_pending(limit=None, stale_minutes=30):
 
 # -- Review ----------------------------------------------------------------------------
 
-def approve(user, wt, note=""):
+def approve(user: Any, wt: Walkthrough, note: str = "") -> Walkthrough:
     """The owner approves the photos: the walkthrough goes live, replacing the address's live one."""
     if not can_manage(user, wt):
         raise PermissionDenied("you may not approve this walkthrough")
@@ -232,7 +238,7 @@ def approve(user, wt, note=""):
     return wt
 
 
-def reject(user, wt, note=""):
+def reject(user: Any, wt: Walkthrough, note: str = "") -> Walkthrough:
     if not can_manage(user, wt):
         raise PermissionDenied("you may not reject this walkthrough")
     if wt.status not in (Walkthrough.REVIEW, Walkthrough.LIVE):
@@ -242,13 +248,13 @@ def reject(user, wt, note=""):
     return wt
 
 
-def delete(user, wt):
+def delete(user: Any, wt: Walkthrough) -> None:
     if not can_manage(user, wt):
         raise PermissionDenied("you may not delete this walkthrough")
     wt.delete()                                     # its photos and video files go too
 
 
-def _replace_others(wt):
+def _replace_others(wt: Walkthrough) -> None:
     if wt.place_ref:
         Walkthrough.objects.filter(place_ref=wt.place_ref, status=Walkthrough.LIVE).exclude(pk=wt.pk) \
             .update(status=Walkthrough.REPLACED)
@@ -256,12 +262,12 @@ def _replace_others(wt):
 
 # -- For riders --------------------------------------------------------------------------
 
-def live_for(place_ref):
+def live_for(place_ref: str) -> Walkthrough | None:
     """The address's live walkthrough, or None."""
     return Walkthrough.objects.filter(place_ref=place_ref, status=Walkthrough.LIVE).order_by("-reviewed_at", "-created_at").first()
 
 
-def payload(wt, url=lambda u: u):
+def payload(wt: Walkthrough, url: Callable[[str], str] = lambda u: u) -> dict[str, Any]:
     """The walkthrough's JSON for the app, each frame with its photo's `url` (url() can make it
     absolute, e.g. request.build_absolute_uri)."""
     photos = {p.index: p.image.url for p in wt.photos.all()}

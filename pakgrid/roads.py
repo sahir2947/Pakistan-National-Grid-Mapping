@@ -34,17 +34,31 @@ How a road is made:
 Existing roads (from OpenStreetMap) are not part of this; renaming them is not possible yet.
 """
 
+from __future__ import annotations
+
 import json
 import math
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
+from collections.abc import Callable, Iterable, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from . import geodesy, ids, navigate
 from .access import VEHICLES
 from .errors import InvalidIdError
 from .layout import SCALE, SUB, to_e7
 from .zones import _set_run, make_zone
+
+if TYPE_CHECKING:
+    import sqlite3
+
+    from .grid import Grid, Place
+    from .layout import GridLayout
+
+LineE7 = list[tuple[int, int]]          # (lat_e7, lon_e7) points
+LatLon = tuple[float, float]
 
 MAX_POINTS = 5_000
 MAX_ROAD_KM = 300.0
@@ -81,10 +95,10 @@ class UserRoad:
     local_name: str | None
     kind: str
     tehsil_key: str
-    line: tuple                 # ((lat, lon), ...)
+    line: tuple[LatLon, ...]    # ((lat, lon), ...)
     length_m: float
     sub_cell_count: int
-    details: dict               # oneway, surface, vehicles, width_m, speed_kmh, ... (all optional)
+    details: dict[str, Any]     # oneway, surface, vehicles, width_m, speed_kmh, ... (all optional)
     created_by: str
     created_at: str
     updated_by: str
@@ -93,10 +107,10 @@ class UserRoad:
     removed_at: str | None = None
 
     @property
-    def removed(self):
+    def removed(self) -> bool:
         return self.removed_at is not None
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "key": self.key, "name": self.name, "local_name": self.local_name, "kind": self.kind,
                 "tehsil_key": self.tehsil_key, "line": [list(p) for p in self.line], "length_m": self.length_m,
                 "sub_cells": self.sub_cell_count, "details": self.details,
@@ -104,7 +118,7 @@ class UserRoad:
                 "updated_by": self.updated_by, "updated_at": self.updated_at,
                 "removed_by": self.removed_by, "removed_at": self.removed_at}
 
-    def to_geojson(self):
+    def to_geojson(self) -> dict[str, Any]:
         """The road as a GeoJSON LineString Feature ([lon, lat]), with its key, name, kind and details."""
         return {"type": "Feature", "id": self.key,
                 "geometry": {"type": "LineString", "coordinates": [[lon, lat] for lat, lon in self.line]},
@@ -121,17 +135,17 @@ class RoadMatch:
     lon: float
 
     @property
-    def on(self):
+    def on(self) -> bool:
         return self.distance_m <= STREET_ON_M
 
     @property
-    def text(self):
+    def text(self) -> str:
         """'Street 7', or 'near Street 7, 40 m'"""
         if self.on:
             return self.road.name
         return f"near {self.road.name}, {navigate.format_distance(self.distance_m)}"
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {"key": self.road.key, "name": self.road.name, "local_name": self.road.local_name,
                 "kind": self.road.kind, "vehicles": self.road.details.get("vehicles"),
                 "distance_m": round(self.distance_m, 1), "on": self.on,
@@ -140,7 +154,7 @@ class RoadMatch:
 
 # -- Geometry ------------------------------------------------------------------------------
 
-def line_e7(line, error):
+def line_e7(line: Any, error: Callable[[str], Exception]) -> LineE7:
     """[(lat_e7, lon_e7), ...] from [(lat, lon), ...] or a GeoJSON LineString / Feature, without
     repeated points. `error` is the exception class to raise."""
     if isinstance(line, dict):
@@ -149,7 +163,7 @@ def line_e7(line, error):
         if line.get("type") != "LineString":
             raise error("a GeoJSON road must be a LineString")
         line = [(p[1], p[0]) for p in line["coordinates"]]
-    pts = []
+    pts: LineE7 = []
     for p in line:
         if not (isinstance(p, (list, tuple)) and len(p) == 2
                 and all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in p)):
@@ -166,18 +180,18 @@ def line_e7(line, error):
     return pts
 
 
-def line_length_m(pts):
+def line_length_m(pts: Sequence[tuple[int, int]]) -> float:
     return sum(navigate.direction(a[0] / SCALE, a[1] / SCALE, b[0] / SCALE, b[1] / SCALE).distance_m
                for a, b in zip(pts, pts[1:]))
 
 
-def line_masks(layout, pts):
+def line_masks(layout: GridLayout, pts: Sequence[tuple[int, int]]) -> dict[int, int]:
     """{cell ID: mask} of every sub-cell whose (closed) box the line [(lat_e7, lon_e7), ...] touches.
 
     Each segment is clipped to each row of sub-cells it crosses, and the columns its stretch of
     longitude covers in that row are taken: exact, and in proportion to the sub-cells touched.
     """
-    masks = defaultdict(int)
+    masks: defaultdict[int, int] = defaultdict(int)
     for (y1, x1), (y2, x2) in zip(pts, pts[1:]):
         ymin, ymax, xmin, xmax = min(y1, y2), max(y1, y2), min(x1, x2), max(x1, x2)
         for ql in layout.quadrants:
@@ -191,6 +205,8 @@ def line_masks(layout, pts):
                 lo, hi = max(lats[i], ymin), min(lats[i + 1], ymax)
                 if lo > hi:
                     continue
+                a: float
+                b: float
                 if y1 == y2:
                     a, b = xmin, xmax
                 else:
@@ -207,11 +223,12 @@ def line_masks(layout, pts):
     return dict(masks)
 
 
-def _cols(ql, row, a, b):
+def _cols(ql: Any, row: int, a: float, b: float) -> tuple[int, int]:
     """First and last sub-cell column of the row whose closed span [west, east] meets [a, b]."""
     m5 = SUB * ql.ncols[row]
     w, e = ql.west_e7, ql.east_e7
-    edge = lambda j: ql.fine_lon_e7(row, j)            # noqa: E731
+    def edge(j: int) -> int:
+        return int(ql.fine_lon_e7(row, j))
     j0 = min(max(int((a - w) * m5 // (e - w)), 0), m5 - 1)
     while j0 > 0 and edge(j0) >= a:                    # the column's east edge must reach a
         j0 -= 1
@@ -225,11 +242,11 @@ def _cols(ql, row, a, b):
     return j0, j1
 
 
-def _subs_near(layout, lat, lon, r):
+def _subs_near(layout: GridLayout, lat: float, lon: float, r: float) -> list[int]:
     """IDs of the sub-cells with any part within r metres of the pin (no centroids worked out)."""
     m_lat, m_lon = geodesy.metres_per_degree(lat)
     pad = 1.02 * r + 300
-    out = []
+    out: list[int] = []
     for q, i, j in layout.items_in_area(to_e7(lat - pad / m_lat), to_e7(lon - pad / m_lon),
                                         to_e7(lat + pad / m_lat), to_e7(lon + pad / m_lon), "sub"):
         s, w, n, e = (v / SCALE for v in layout.quadrants[q].item_bounds_e7(i, j, "sub"))
@@ -239,11 +256,12 @@ def _subs_near(layout, lat, lon, r):
     return out
 
 
-def nearest_on_line(line, lat, lon):
+def nearest_on_line(line: Sequence[LatLon], lat: float, lon: float) -> tuple[float, LatLon, float]:
     """(distance_m, nearest point (lat, lon), distance along the line in metres) from a pin to a line."""
     m_lat, m_lon = geodesy.metres_per_degree(lat)
     px, py = lon * m_lon, lat * m_lat
-    best, along = None, 0.0
+    best: tuple[float, LatLon, float] | None = None
+    along = 0.0
     for (a_lat, a_lon), (b_lat, b_lon) in zip(line, line[1:]):
         ax, ay, bx, by = a_lon * m_lon, a_lat * m_lat, b_lon * m_lon, b_lat * m_lat
         dx, dy = bx - ax, by - ay
@@ -254,16 +272,18 @@ def nearest_on_line(line, lat, lon):
         if best is None or d < best[0]:
             best = (d, (qy / m_lat, qx / m_lon), along + t * seg)
         along += seg
+    assert best is not None, "a line has at least two points"
     return best
 
 
-def crossings(line_a, line_b):
+def crossings(line_a: Sequence[LatLon], line_b: Sequence[LatLon]) -> list[tuple[float, LatLon]]:
     """[(along_a_m, (lat, lon))] where two lines cross (proper or touching), in planar metres."""
     ref = line_a[0][0]
     m_lat, m_lon = geodesy.metres_per_degree(ref)
     pa = [(lon * m_lon, lat * m_lat) for lat, lon in line_a]
     pb = [(lon * m_lon, lat * m_lat) for lat, lon in line_b]
-    out, along = [], 0.0
+    out: list[tuple[float, LatLon]] = []
+    along = 0.0
     for (ax, ay), (bx, by) in zip(pa, pa[1:]):
         rx, ry = bx - ax, by - ay
         seg = math.hypot(rx, ry)
@@ -286,7 +306,20 @@ def crossings(line_a, line_b):
 class RoadsMixin:
     """The road methods of UserPlaces (see the module docstring)."""
 
-    def add_road(self, name, *, author, line, kind="street", local_name=None, details=None):
+    if TYPE_CHECKING:       # provided by UserPlaces
+        grid: Grid
+        _has_roads: bool | None
+
+        @property
+        def _db(self) -> sqlite3.Connection: ...
+        def _writing(self, db: sqlite3.Connection) -> AbstractContextManager[sqlite3.Connection]: ...
+        def _one(self, sql: str, args: Sequence[Any]) -> tuple[Any, ...] | None: ...
+        def _places_version(self) -> int: ...
+        def _in_pakistan(self, subs: Iterable[int]) -> dict[int, int]: ...
+        def _tehsil_and_centre(self, subs: Iterable[int] | dict[int, int]) -> tuple[Place, tuple[int, int]]: ...
+
+    def add_road(self, name: str, *, author: str, line: Any, kind: str = "street", local_name: str | None = None,
+                 details: dict[str, Any] | None = None) -> UserRoad:
         """Add a road drawn as `line`. Returns the new UserRoad."""
         from .userplaces import _check_text, _now, _slug
         author = _check_text(author, "author")
@@ -304,20 +337,23 @@ class RoadsMixin:
                            (key, name, local_name, kind, tehsil.key, json.dumps([[y / SCALE, x / SCALE] for y, x in pts]),
                             round(length, 1), len(subs), json.dumps(details, ensure_ascii=False),
                             author, now, author, now, self._places_version())).lastrowid
+            assert n is not None                    # an INSERT always gives its row ID
             db.executemany("INSERT INTO road_cells VALUES (?, ?)", [(n, s) for s in subs])
             road = self._get_road(n)
             self._log_road(n, author, "add", road)
         self._has_roads = True
         return road
 
-    def update_road(self, road, *, author, name=None, local_name=None, kind=None, line=None, details=None):
+    def update_road(self, road: str | int | UserRoad, *, author: str, name: str | None = None,
+                    local_name: str | None = None, kind: str | None = None, line: Any = None,
+                    details: dict[str, Any] | None = None) -> UserRoad:
         """Change a road's name, local name, kind, line or details (replaced). Its key stays the same."""
         from .userplaces import UserPlacesError, _check_text, _now
         author = _check_text(author, "author")
         old = self.get_road(road)
         if old.removed:
             raise UserPlacesError(f"{old.key} was removed; add it again instead")
-        fields = {}
+        fields: dict[str, Any] = {}
         if name is not None:
             fields["name"] = _check_text(name, "name")
         if local_name is not None:
@@ -340,7 +376,7 @@ class RoadsMixin:
             self._log_road(old.id, author, "update", road)
         return road
 
-    def remove_road(self, road, *, author):
+    def remove_road(self, road: str | int | UserRoad, *, author: str) -> UserRoad:
         """Remove a road: lookups stop showing it; its record and history are kept."""
         from .userplaces import _check_text, _now
         author = _check_text(author, "author")
@@ -352,7 +388,7 @@ class RoadsMixin:
             self._log_road(r.id, author, "remove", r)
         return r
 
-    def get_road(self, road):
+    def get_road(self, road: str | int | UserRoad) -> UserRoad:
         """A UserRoad by key, ID or UserRoad (removed ones too)."""
         if isinstance(road, UserRoad):
             road = road.id
@@ -366,48 +402,49 @@ class RoadsMixin:
             raise InvalidIdError(f"no such user road: {road!r}")
         return self._road_from_row(row)
 
-    def roads(self, include_removed=False):
+    def roads(self, include_removed: bool = False) -> list[UserRoad]:
         """All user roads, in the order they were added."""
         rows = self._db.execute(f"SELECT {_ROAD_COLUMNS} FROM roads"
                                 + ("" if include_removed else " WHERE removed_at IS NULL") + " ORDER BY id").fetchall()
         return [self._road_from_row(r) for r in rows]
 
-    def find_roads(self, text):
+    def find_roads(self, text: str) -> list[UserRoad]:
         """Roads whose name or local name contains `text`, or whose key is `text`."""
         t = text.strip().lower()
         return [r for r in self.roads() if t in r.name.lower() or t == r.key or (r.local_name and t in r.local_name)]
 
-    def road_sub_cells(self, road):
+    def road_sub_cells(self, road: str | int | UserRoad) -> list[int]:
         """IDs of the sub-cells a road passes through, in ID order."""
         r = self.get_road(road)
         return [s for (s,) in self._db.execute("SELECT sub_cell FROM road_cells WHERE road = ? ORDER BY sub_cell", (r.id,))]
 
-    def road_history(self, road=None):
+    def road_history(self, road: str | int | UserRoad | None = None) -> list[dict[str, Any]]:
         """Every change to roads, oldest first: dicts of at, author, action, key and the road after it."""
-        sql, args = ("SELECT h.at, h.author, h.action, r.key, h.data FROM road_history h JOIN roads r ON r.id = h.road", ())
+        sql = "SELECT h.at, h.author, h.action, r.key, h.data FROM road_history h JOIN roads r ON r.id = h.road"
+        args: tuple[Any, ...] = ()
         if road is not None:
             sql, args = sql + " WHERE h.road = ?", (self.get_road(road).id,)
         return [{"at": at, "author": who, "action": action, "key": key, "road": json.loads(data)}
                 for at, who, action, key, data in self._db.execute(sql + " ORDER BY h.id", args).fetchall()]
 
-    def roads_in(self, sub_cell_ids):
+    def roads_in(self, sub_cell_ids: Iterable[int]) -> list[UserRoad]:
         """The roads passing through any of these sub-cells, in the order they were added."""
-        found = set()
-        sub_cell_ids = list(sub_cell_ids)
-        for k in range(0, len(sub_cell_ids), 900):
-            chunk = sub_cell_ids[k:k + 900]
+        found: set[int] = set()
+        wanted = list(sub_cell_ids)
+        for k in range(0, len(wanted), 900):
+            chunk = wanted[k:k + 900]
             found.update(n for (n,) in self._db.execute(
                 "SELECT DISTINCT c.road FROM road_cells c JOIN roads r ON r.id = c.road WHERE r.removed_at IS NULL "
                 f"AND c.sub_cell IN ({','.join('?' * len(chunk))})", chunk).fetchall())
         return [self._get_road(n) for n in sorted(found)]
 
-    def nearest_road(self, lat, lon, max_m=STREET_MAX_M):
+    def nearest_road(self, lat: float, lon: float, max_m: float = STREET_MAX_M) -> RoadMatch | None:
         """The road nearest the pin within max_m (at most 1 km), as a RoadMatch, or None."""
         if not self.has_roads:
             return None
         max_m = min(float(max_m), 1000.0)
         subs = _subs_near(self.grid.layout, lat, lon, max_m)
-        best = None
+        best: RoadMatch | None = None
         for road in self.roads_in(subs):
             d, (plat, plon), _ = nearest_on_line(road.line, lat, lon)
             if d <= max_m and (best is None or (d, road.id) < (best.distance_m, best.road.id)):
@@ -415,21 +452,21 @@ class RoadsMixin:
         return best
 
     @property
-    def has_roads(self):
+    def has_roads(self) -> bool:
         if getattr(self, "_has_roads", None) is None:
             self._has_roads = self._one("SELECT 1 FROM roads WHERE removed_at IS NULL LIMIT 1", ()) is not None
-        return self._has_roads
+        return bool(self._has_roads)
 
-    def junctions(self, road):
+    def junctions(self, road: str | int | UserRoad) -> list[dict[str, Any]]:
         """Where a road meets other user roads, in order along it: dicts of the other road's key and
         name, the point, how far along this road, and 'crosses' or 'meets' (an end within
         JUNCTION_SNAP_M)."""
         r = self.get_road(road)
-        out = {}
+        out: dict[tuple[int, int], dict[str, Any]] = {}
         for other in self.roads_in(self._near_subs(r)):
             if other.id == r.id:
                 continue
-            found = [(a, p, "crosses") for a, p in crossings(r.line, other.line)]
+            found: list[tuple[float, LatLon, str]] = [(a, p, "crosses") for a, p in crossings(r.line, other.line)]
             for end in (r.line[0], r.line[-1]):            # this road's ends near the other road
                 d, p, _ = nearest_on_line(other.line, *end)
                 if d <= JUNCTION_SNAP_M:
@@ -443,19 +480,19 @@ class RoadsMixin:
                 if key not in out or (how == "crosses" and out[key]["how"] == "meets"):
                     out[key] = {"key": other.key, "name": other.name, "point": list(point),
                                 "along_m": round(along, 1), "how": how}
-        merged = []
+        merged: list[dict[str, Any]] = []
         for j in sorted(out.values(), key=lambda j: (j["along_m"], j["key"])):
             if merged and merged[-1]["key"] == j["key"] and abs(merged[-1]["along_m"] - j["along_m"]) <= JUNCTION_SNAP_M:
                 continue                                    # the same junction found twice
             merged.append(j)
         return merged
 
-    def describe_road(self, road, references=()):
+    def describe_road(self, road: str | int | UserRoad, references: Iterable[Any] = ()) -> dict[str, Any]:
         """A road's full description: name, kind, details, length, ends, sub-cells, places (as
         Grid.describe_zone), junctions with other user roads, and a label."""
         r = self.get_road(road)
         subs = self.road_sub_cells(r)
-        masks = {}
+        masks: dict[int, int] = {}
         for s in subs:
             c, k = ids.split_sub_cell_id(s)
             masks[c] = masks.get(c, 0) | 1 << k
@@ -469,28 +506,28 @@ class RoadsMixin:
                 "references": area["references"], "outside_pakistan_sub_cells": area["outside_pakistan_sub_cells"],
                 "junctions": self.junctions(r), "label": ", ".join(names)}
 
-    def roads_geojson(self):
+    def roads_geojson(self) -> dict[str, Any]:
         """Every road as a GeoJSON FeatureCollection of LineStrings."""
         return {"type": "FeatureCollection", "features": [r.to_geojson() for r in self.roads()]}
 
     # -- Internals --------------------------------------------------------------------
 
-    def _ensure_road_tables(self, db):
+    def _ensure_road_tables(self, db: sqlite3.Connection) -> None:
         with self._writing(db):
             db.executescript(ROADS_SCHEMA)
 
-    def _road_kind(self, kind):
+    def _road_kind(self, kind: str) -> str:
         from .userplaces import _check_text
         return _check_text(kind, "kind").lower()
 
-    def _road_details(self, details):
+    def _road_details(self, details: object) -> dict[str, Any]:
         from .userplaces import UserPlacesError
         if details is None:
             return {}
         if not isinstance(details, dict):
             raise UserPlacesError("details must be a dict, e.g. {'oneway': True, 'surface': 'paved'}")
         out = dict(details)
-        checks = {"oneway": lambda v: isinstance(v, bool),
+        checks: dict[str, Callable[[Any], Any]] = {"oneway": lambda v: isinstance(v, bool),
                   "surface": lambda v: isinstance(v, str) and v.strip(),
                   "vehicles": lambda v: isinstance(v, (list, tuple)) and all(x in VEHICLES for x in v),
                   "width_m": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v < 200,
@@ -506,7 +543,7 @@ class RoadsMixin:
             raise UserPlacesError("details must be JSON-ready (text, numbers, true/false, lists)") from None
         return {k: v for k, v in out.items() if v is not None}
 
-    def _road_shape(self, line):
+    def _road_shape(self, line: Any) -> tuple[LineE7, list[int], Place, float]:
         """(points e7, sub-cell IDs, tehsil Place, length in metres) of a drawn line."""
         from .userplaces import UserPlacesError
         pts = line_e7(line, UserPlacesError)
@@ -521,30 +558,32 @@ class RoadsMixin:
         tehsil, _ = self._tehsil_and_centre(in_pk)
         return pts, subs, tehsil, length
 
-    def _near_subs(self, road):
+    def _near_subs(self, road: UserRoad) -> list[int]:
         """The road's sub-cells and their neighbours (for junctions drawn a little apart)."""
         subs = set(self.road_sub_cells(road))
         for s in list(subs):
             subs.update(self.grid.neighbours(s, level="sub"))
         return sorted(subs)
 
-    def _free_road_key(self, base):
+    def _free_road_key(self, base: str) -> str:
         key, n = base, 2
         while self._one("SELECT 1 FROM roads WHERE key = ?", (key,)) is not None:
             key, n = f"{base}-{n}", n + 1
         return key
 
-    def _log_road(self, n, author, action, road):
+    def _log_road(self, n: int, author: str, action: str, road: UserRoad) -> None:
         from .userplaces import _now
         self._db.execute("INSERT INTO road_history (road, at, author, action, data) VALUES (?,?,?,?,?)",
                          (n, _now(), author, action, json.dumps(road.to_dict(), ensure_ascii=False)))
         if action == "remove":
             self._has_roads = None
 
-    def _get_road(self, n):
-        return self._road_from_row(self._one(f"SELECT {_ROAD_COLUMNS} FROM roads WHERE id = ?", (n,)))
+    def _get_road(self, n: int) -> UserRoad:
+        row = self._one(f"SELECT {_ROAD_COLUMNS} FROM roads WHERE id = ?", (n,))
+        assert row is not None, f"no user road {n}"
+        return self._road_from_row(row)
 
     @staticmethod
-    def _road_from_row(r):
+    def _road_from_row(r: Sequence[Any]) -> UserRoad:
         return UserRoad(r[0], r[1], r[2], r[3], r[4], r[5], tuple(tuple(p) for p in json.loads(r[6])), r[7], r[8],
                         json.loads(r[9]), r[10], r[11], r[12], r[13], r[14], r[15])

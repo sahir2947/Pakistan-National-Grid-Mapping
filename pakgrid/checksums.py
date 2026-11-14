@@ -11,6 +11,11 @@ border flags, and the border itself), not the file's bytes, which can differ
 between SQLite versions.
 """
 
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
 # (grid version, edition) -> content SHA-256 of a complete build
 OFFICIAL = {
     (1, "full"): "f8da541f3865862a18ac25dded339c2a84eeea4b5ff26e59d27676a4309e0109",
@@ -18,16 +23,16 @@ OFFICIAL = {
 }
 
 
-def official_checksum(meta):
+def official_checksum(meta: Mapping[str, Any]) -> str | None:
     """The official content checksum for a database's grid version and edition,
     or None if it is a partial build (some quadrants or rows) or unknown."""
     if meta.get("coverage") != "full":
         return None
     try:
-        version = int(meta.get("grid_version"))
-    except (TypeError, ValueError):
+        version = int(meta["grid_version"])
+    except (KeyError, TypeError, ValueError):
         return None
-    return OFFICIAL.get((version, meta.get("edition")))
+    return OFFICIAL.get((version, str(meta.get("edition"))))
 
 
 # places version -> content SHA-256 of the places layer of a complete build. The same for the full
@@ -38,11 +43,11 @@ OFFICIAL_PLACES = {
 }
 
 
-def official_places_checksum(meta):
+def official_places_checksum(meta: Mapping[str, Any]) -> str | None:
     """The official checksum of a database's places layer, or None (partial build, no layer, unknown)."""
     if meta.get("coverage") != "full" or "places_version" not in meta:
         return None
     try:
         return OFFICIAL_PLACES.get(int(meta["places_version"]))
-    except ValueError:
+    except (TypeError, ValueError):
         return None

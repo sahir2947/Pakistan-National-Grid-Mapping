@@ -48,5 +48,11 @@ jobs:
       - name: Lint
         run: python -m pyflakes pakgrid tests
 
+      - name: Type check
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
+        run: |
+          python -m pip install mypy==2.4.1
+          python -m mypy
+
       - name: Test
         run: python -m pytest -q

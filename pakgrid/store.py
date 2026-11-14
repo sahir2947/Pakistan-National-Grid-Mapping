@@ -19,17 +19,25 @@ after the app was loaded) opens fresh connections rather than reusing the
 parent's, as SQLite requires.
 """
 
+from __future__ import annotations
+
 import os
 import sqlite3
 import struct
 import threading
 import weakref
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from .errors import NotInDatabaseError
 
 SCHEMA_VERSION = 2
 SUB_RECORD = struct.Struct("<62i")
+
+# (lat lines, lon lines, centroids, inside_mask, border_mask) of one cell's sub-cells
+SubRecord = tuple[tuple[int, ...], tuple[int, ...], tuple[tuple[int, int], ...], int, int]
+Row = tuple[Any, ...]
 
 SCHEMA = """
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -52,7 +60,7 @@ CREATE TABLE boundary (ring INTEGER PRIMARY KEY, coords BLOB NOT NULL);
 """
 
 
-def unpack_sub_record(blob, inside_mask=0, border_mask=0):
+def unpack_sub_record(blob: bytes, inside_mask: int = 0, border_mask: int = 0) -> SubRecord:
     """(lat_lines, lon_lines, centroids, inside_mask, border_mask) from a sub-cell row."""
     v = SUB_RECORD.unpack(blob)
     return v[0:6], v[6:12], tuple(zip(v[12::2], v[13::2])), inside_mask, border_mask
@@ -61,15 +69,15 @@ def unpack_sub_record(blob, inside_mask=0, border_mask=0):
 class _Connection:
     """One thread's connection; closed when its thread ends (and the holder is collected)."""
 
-    def __init__(self, uri):
+    def __init__(self, uri: str) -> None:
         self.pid = os.getpid()
         self.db = sqlite3.connect(uri, uri=True, check_same_thread=False)
 
-    def close(self):
+    def close(self) -> None:
         if self.pid == os.getpid():     # never close a connection inherited through fork
             self.db.close()
 
-    def __del__(self):
+    def __del__(self) -> None:
         try:
             self.close()
         except Exception:               # e.g. at interpreter shutdown
@@ -79,20 +87,20 @@ class _Connection:
 class GridStore:
     """Read-only access to a grid database file, safe to share between threads and forked processes."""
 
-    def __init__(self, path):
-        path = Path(path)
-        if not path.is_file():
-            raise FileNotFoundError(f"grid database not found: {path}")
-        self.path = path
-        self._uri = f"{path.resolve().as_uri()}?mode=ro&immutable=1"
+    def __init__(self, path: str | os.PathLike[str]) -> None:
+        file = Path(path)
+        if not file.is_file():
+            raise FileNotFoundError(f"grid database not found: {file}")
+        self.path = file
+        self._uri = f"{file.resolve().as_uri()}?mode=ro&immutable=1"
         self._local = threading.local()
-        self._open = weakref.WeakSet()
+        self._open: weakref.WeakSet[_Connection] = weakref.WeakSet()
         self._lock = threading.Lock()
         self._closed = False
         self.pakistan_edition = self.meta().get("edition") == "pakistan"
 
     @property
-    def _db(self):
+    def _db(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
         if conn is None or conn.pid != os.getpid():
             if self._closed:
@@ -102,7 +110,7 @@ class GridStore:
                 self._open.add(conn)
         return conn.db
 
-    def close(self):
+    def close(self) -> None:
         """Close every thread's connection; the store cannot be used afterwards."""
         self._closed = True
         with self._lock:
@@ -110,52 +118,54 @@ class GridStore:
         for conn in conns:
             conn.close()
 
-    def meta(self):
+    def meta(self) -> dict[str, str]:
         return dict(self._db.execute("SELECT key, value FROM meta"))
 
-    def quadrants(self):
+    def quadrants(self) -> list[Row]:
         return self._db.execute(
             "SELECT q, code, name, south, west, north, east, nrows, ncells FROM quadrants ORDER BY q").fetchall()
 
-    def rows(self):
+    def rows(self) -> list[Row]:
         return self._db.execute("SELECT q, row, south, north, ncols FROM rows ORDER BY q, row").fetchall()
 
-    def boundary_rings(self):
+    def boundary_rings(self) -> list[bytes]:
         return [blob for (blob,) in self._db.execute("SELECT coords FROM boundary ORDER BY ring")]
 
-    def _missing(self, cid):
+    def _missing(self, cid: int) -> NotInDatabaseError:
         why = ("it lies wholly outside Pakistan and this is the Pakistan edition"
                if self.pakistan_edition else "it was not included in this build")
         return NotInDatabaseError(f"cell {cid} is not in this database ({self.path.name}): {why}")
 
-    def cell(self, cid):
+    def cell(self, cid: int) -> Row:
         """(south, west, north, east, centroid_lat, centroid_lon, pakistan flag)."""
         row = self._db.execute(
             "SELECT south, west, north, east, centroid_lat, centroid_lon, pakistan FROM cells WHERE id = ?",
             (cid,)).fetchone()
         if row is None:
             raise self._missing(cid)
-        return row
+        return tuple(row)
 
-    def sub_record(self, cid):
+    def sub_record(self, cid: int) -> SubRecord:
         row = self._db.execute(
             "SELECT record, inside_mask, border_mask FROM sub_cells WHERE id = ?", (cid,)).fetchone()
         if row is None:
             raise self._missing(cid)
         return unpack_sub_record(*row)
 
-    def cell_flags(self, cids):
+    def cell_flags(self, cids: Iterable[int]) -> dict[int, int]:
         """{cell ID: pakistan flag} for the given cells that are stored."""
-        out, cids = {}, list(cids)
+        out: dict[int, int] = {}
+        cids = list(cids)
         for k in range(0, len(cids), 900):
             chunk = cids[k:k + 900]
             out.update(self._db.execute(
                 f"SELECT id, pakistan FROM cells WHERE id IN ({','.join('?' * len(chunk))})", chunk))
         return out
 
-    def sub_masks(self, cids):
+    def sub_masks(self, cids: Iterable[int]) -> dict[int, tuple[int, int]]:
         """{cell ID: (inside_mask, border_mask)} for the given cells that are stored."""
-        out, cids = {}, list(cids)
+        out: dict[int, tuple[int, int]] = {}
+        cids = list(cids)
         for k in range(0, len(cids), 900):
             chunk = cids[k:k + 900]
             for cid, inside, border in self._db.execute(
@@ -166,11 +176,11 @@ class GridStore:
 
     # -- Places layer (see pakgrid.places) ----------------------------------------
 
-    def has_places(self):
+    def has_places(self) -> bool:
         return self._db.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cell_places'").fetchone() is not None
 
-    def places_rows(self):
+    def places_rows(self) -> list[Row]:
         """All (id, level, key, name, parent, source_name, source_id, kind, local_name, lat, lon, area), by ID."""
         return self._db.execute(
             "SELECT id, level, key, name, parent, source_name, source_id, kind, local_name, lat, lon, area "
@@ -179,39 +189,40 @@ class GridStore:
     # The two tag tables: cell_places (tehsils) and cell_localities, each (id, tag, subs).
     _TAG_TABLES = {"tehsil": ("cell_places", "tehsil"), "locality": ("cell_localities", "locality")}
 
-    def cell_place(self, cid, layer="tehsil"):
+    def cell_place(self, cid: int, layer: str = "tehsil") -> Row | None:
         """(tag, subs blob or None) for a cell in the tehsil or locality layer, or None if it has none."""
         table, col = self._TAG_TABLES[layer]
         return self._db.execute(f"SELECT {col}, subs FROM {table} WHERE id = ?", (cid,)).fetchone()
 
-    def cells_with_tags(self, tags, layer="tehsil"):
+    def cells_with_tags(self, tags: Iterable[int], layer: str = "tehsil") -> list[Row]:
         """(cell ID, tag, subs) for cells whose main tehsil (or locality) is one of `tags`."""
         table, col = self._TAG_TABLES[layer]
-        out, tags = [], list(tags)
+        out: list[Row] = []
+        tags = list(tags)
         for k in range(0, len(tags), 900):
             chunk = tags[k:k + 900]
             out += self._db.execute(f"SELECT id, {col}, subs FROM {table} WHERE {col} IN "
                                     f"({','.join('?' * len(chunk))})", chunk).fetchall()
         return out
 
-    def split_cells(self, layer="tehsil"):
+    def split_cells(self, layer: str = "tehsil") -> list[Row]:
         """(cell ID, tag, subs) for cells whose sub-cells have different tehsils (or localities)."""
         table, col = self._TAG_TABLES[layer]
         return self._db.execute(f"SELECT id, {col}, subs FROM {table} WHERE subs IS NOT NULL").fetchall()
 
-    def iter_cell_places(self, layer="tehsil"):
+    def iter_cell_places(self, layer: str = "tehsil") -> sqlite3.Cursor:
         """All (cell ID, tag, subs) of the tehsil (or locality) layer, in ID order."""
         table, col = self._TAG_TABLES[layer]
         return self._db.execute(f"SELECT id, {col}, subs FROM {table} ORDER BY id")
 
-    def has_cell(self, cid):
+    def has_cell(self, cid: int) -> bool:
         return self._db.execute("SELECT 1 FROM cells WHERE id = ?", (cid,)).fetchone() is not None
 
-    def iter_cells(self):
+    def iter_cells(self) -> sqlite3.Cursor:
         """All (id, south, west, north, east, centroid_lat, centroid_lon, pakistan) in ID order."""
         return self._db.execute(
             "SELECT id, south, west, north, east, centroid_lat, centroid_lon, pakistan FROM cells ORDER BY id")
 
-    def iter_sub_blobs(self):
+    def iter_sub_blobs(self) -> sqlite3.Cursor:
         """All (cell ID, packed record, inside_mask, border_mask) in ID order."""
         return self._db.execute("SELECT id, record, inside_mask, border_mask FROM sub_cells ORDER BY id")
