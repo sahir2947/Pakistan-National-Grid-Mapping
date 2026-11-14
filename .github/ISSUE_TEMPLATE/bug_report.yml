@@ -1,0 +1,66 @@
+name: Bug report
+description: Something in pakgrid gives a wrong answer, an error, or does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug. Please **do not** report a security problem here: see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: |
+        The exact call or command. Give GPS points as `lat, lon` with all their digits, and any
+        codes or IDs involved (for example `11-0140-0471-00`).
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error output
+      description: The full error message or traceback, if there is one.
+      render: text
+  - type: input
+    id: pakgrid-version
+    attributes:
+      label: pakgrid version
+      description: "`python -c \"import pakgrid; print(pakgrid.__version__)\"`"
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version and operating system
+      placeholder: Python 3.12, Ubuntu 24.04
+    validations:
+      required: true
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part of pakgrid
+      options:
+        - Grid, cells and sub-cells
+        - Grid addresses
+        - Navigation
+        - Places
+        - User localities, roads or street access
+        - Zones, blocks, radius search or nearest
+        - GeoJSON
+        - Walkthroughs
+        - Walkthrough Django app
+        - Command line
+        - Map viewer
+        - Building or verifying the database
+        - Documentation
+        - Something else
+    validations:
+      required: true
