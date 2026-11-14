@@ -510,50 +510,82 @@ class StreetAccessSet(APIView):
 the answer (`{"largest": "rickshaw", "text": "Up to rickshaw size", ...}`), so
 the rider app can warn a car driver before they turn in.
 
-**Walkthroughs.** The shop app uploads the video and the GPS track it
-recorded with it (`[{"t": 0.0, "lat": ..., "lon": ..., "accuracy": 6}, ...]`,
-`t` in seconds into the video). Make the walkthrough at once, so a bad
-recording is refused while the owner is still there, and take the photos in a
-background job (ffmpeg must be installed on the worker)
-([project.md §5.10](../project.md#510-walkthroughs-photos-from-the-road-to-the-door)):
+**Walkthroughs.** pakgrid ships a ready Django app for them
+(`pakgrid.contrib.walkthroughs`): the upload, the photo job, the owner's
+approval and delivery to riders
+([project.md §5.10](../project.md#510-walkthroughs-photos-from-the-road-to-the-door)).
+Install it with `pip install "pakgrid[django]"`, put ffmpeg on the machine
+that takes the photos (`apt-get install ffmpeg`), and add:
 
 ```python
-from pakgrid import WalkthroughError
+# settings.py
+INSTALLED_APPS += ["rest_framework", "pakgrid.contrib.walkthroughs"]
+PAKGRID_GRID = "shop.grid.get_grid"              # your shared Grid (or PAKGRID_DB = "/srv/pakgrid/...sqlite")
+PAKGRID_WALKTHROUGHS = {
+    "JOB": "celery",                             # or "command" (cron), "thread", "sync"
+    "CAN_UPLOAD": "shop.walkthroughs.can_upload",
+    "CAN_VIEW": "shop.walkthroughs.rider_can_view",
+}
 
-class WalkthroughUpload(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, shop_id):     # multipart: video, track (JSON text), pin_lat, pin_lon, start_lat, start_lon
-        shop = get_object_or_404(Shop, id=shop_id, owner=request.user)
-        d = request.data
-        try:
-            wt = get_grid().walkthrough(json.loads(d["track"]), pin=(float(d["pin_lat"]), float(d["pin_lon"])),
-                                        start=(float(d["start_lat"]), float(d["start_lon"])),
-                                        author=request.user.username, properties={"shop": shop.id})
-        except (WalkthroughError, KeyError, ValueError) as exc:
-            return Response({"error": str(exc)}, status=400)
-        w = Walkthrough.objects.create(shop=shop, data=wt.to_dict(), video=d["video"],
-                                       pin_sub_cell=wt.data["pin_sub_cell"], approved=False)
-        take_photos.delay(w.id)             # Celery, RQ, ...
-        return Response({"id": w.id, "length_m": wt.length_m, "photos": len(wt.frames)}, status=201)
-
-
-@shared_task
-def take_photos(walkthrough_id):
-    w = Walkthrough.objects.get(id=walkthrough_id)
-    wt = pakgrid.Walkthrough.from_dict(w.data)
-    with tempfile.TemporaryDirectory() as out:
-        for cmd in wt.ffmpeg_commands(w.video.path, out):
-            subprocess.run(cmd, check=True)
-        for f in wt.frames:                  # to your storage, e.g. S3, under the walkthrough
-            w.photos.create(index=f["index"], image=File(open(os.path.join(out, f["image"]), "rb"), f["image"]))
-    w.video.delete()                         # keep only the photos
+# urls.py
+urlpatterns += [path("api/", include("pakgrid.contrib.walkthroughs.urls"))]
 ```
 
-Send a rider the walkthrough's JSON with each photo's URL when an order is
-assigned (only to riders with an active order to that address, and only once
-the owner has approved it), so it works with a weak signal at the door. The
-rider app runs the rider rule on the phone: a Dart port of
+then `python manage.py migrate`. Your app decides who may do what, with two
+small functions. Here `place_ref` is your own reference for the address; a
+shop ID is used below:
+
+```python
+# shop/walkthroughs.py
+def can_upload(user, place_ref):              # only the shop's owner records its walkthrough
+    return Shop.objects.filter(id=place_ref, owner=user).exists()
+
+
+def rider_can_view(user, walkthrough):        # only a rider with an active order to that shop
+    return Order.objects.filter(shop_id=walkthrough.place_ref, rider=user,
+                                status__in=["assigned", "picked_up"]).exists()
+```
+
+**The API:**
+
+| Call | What it does |
+|---|---|
+| `POST walkthroughs/` | The shop app uploads, as multipart: `video`, the GPS `track` (JSON text `[{"t": 0.0, "lat": ..., "lon": ..., "accuracy": 6}, ...]`, `t` in seconds into the video; or GPX, or a `track_file`), `pin_lat`, `pin_lon`, `start_lat`, `start_lon` (the road point), `place_ref`. The walkthrough is made at once, so a bad recording is refused (400, with the reason) while the owner is still there. Answers `201` with `status: "processing"`, the length, the number of photos and the turns |
+| `GET walkthroughs/<id>/` | The owner's review screen: the status, and the walkthrough JSON with each photo's `url` |
+| `POST walkthroughs/<id>/approve/` · `reject/` | The owner approves (`live`, replacing the address's previous live walkthrough) or rejects, with an optional `note` |
+| `POST walkthroughs/<id>/retry/` · `DELETE walkthroughs/<id>/` | Retry a failed photo job · delete it with its photos |
+| `GET walkthroughs/?place_ref=` | The walkthroughs the user may manage (staff: all) |
+| `GET walkthroughs/for/<place_ref>/` | **For the rider app**, when an order is assigned: the live walkthrough's JSON with each photo's `url`. Download the photos then, so it works with a weak signal at the door |
+
+Anything a user may not see answers 404, so a walkthrough's existence is not
+given away. Its ID is a random UUID.
+
+**Statuses:** `processing` (photos being taken) → `review` (waiting for the
+owner) → `live`; or `rejected`, `failed` (with the `error`, e.g. a video
+ffmpeg cannot read; the video is kept so it can be retried) and `replaced`.
+
+**The photo job** runs as `JOB` says:
+- `"celery"`: the task `pakgrid.walkthroughs.take_photos`.
+- `"command"` (the default): a cron job runs `python manage.py
+  process_walkthroughs` every minute. A job whose worker died is started again
+  after 30 minutes.
+- `"thread"`: a thread in the web process (small sites).
+- `"sync"`: during the upload (development).
+
+The job copies the video from your storage (local files or S3 via
+django-storages), takes each photo with ffmpeg, stores them under
+`walkthroughs/<id>/frame-NNN.jpg`, and deletes the video unless `KEEP_VIDEO`
+is set.
+
+**Other settings:** `AUTO_APPROVE` (no owner review), `PHOTO_WIDTH` (1280),
+`PHOTO_QUALITY` (3), `MAX_VIDEO_MB` (200), `FFMPEG`, `FFMPEG_TIMEOUT_S`, and
+`CAN_MANAGE` (who may review, delete and retry: by default the uploader and
+staff). The Django admin lists walkthroughs with their photos and steps, and
+can approve or reject several at once. The steps are also plain functions
+(`pakgrid.contrib.walkthroughs.services`: `create`, `take_photos`, `approve`,
+`reject`, `live_for`, `payload`) for your own views.
+
+The rider app runs the rider rule on the phone: a Dart port of
 [conformance/WALKTHROUGH.md](../conformance/WALKTHROUGH.md), checked with
 `walkthrough.json`.
 

@@ -905,8 +905,8 @@ same photo and words; the viewer's JavaScript passes it.
 **Limits of GPS:** in narrow galis between tall buildings, phone GPS can
 drift 5–10 m. The walkthrough still has every photo in order, but a turn may
 be placed a few metres off or an extra turn found; riders can always swipe.
-An owner's review of the photos before the walkthrough goes live (stage 2)
-catches these.
+The owner's review of the photos before the walkthrough goes live catches
+these.
 
 **Command line and viewer:** `pakgrid walkthrough build --track track.json
 --pin LAT LON --start LAT LON --author A -o wt.json --video walk.mp4
@@ -915,11 +915,28 @@ ffmpeg). The viewer's **Walk** tool loads the walkthrough and the photos or
 the video (taking the photos in the browser), and taps on the map act as a
 rider's GPS.
 
-**Privacy:** street videos show people, homes and number plates. The library
-stores no media. Recommended in the app: only riders with an active order to
-the address see its walkthrough, the owner approves it first, and the video
-is deleted once the photos are taken. Blurring faces and plates is planned as
-an optional backend step (stage 3).
+**In a Django backend:** the optional app `pakgrid.contrib.walkthroughs`
+(`pip install "pakgrid[django]"`) does the rest:
+- the upload API, refusing a bad recording at once;
+- the photo job (Celery, cron, a thread, or in the request), storing the
+  photos in Django's storage and deleting the video;
+- the owner's approval (a new live walkthrough replaces the address's old one);
+- `GET walkthroughs/for/<place_ref>/` for riders, with each photo's URL;
+- the Django admin.
+
+Your app says who may record and who may see, with two small functions. See
+[docs/django.md](docs/django.md).
+
+**Privacy:** street videos show people, homes and number plates. pakgrid's
+core library stores no media. The Django app's defaults follow the
+recommendations:
+- a walkthrough goes live only after the owner approves it;
+- only users your `CAN_VIEW` rule allows see it (set it to riders with an
+  active order to the address); until then, only its owner and staff;
+- the video is deleted once the photos are taken;
+- IDs are random, and anything a user may not see answers 404.
+
+Blurring faces and plates is planned as an optional backend step (stage 3).
 
 ---
 
@@ -950,6 +967,7 @@ pakgrid/
 ├── blocks.py     Custom blocks: named groups of cells (§7.9)
 ├── describe.py   An area's size, places and where it is (§7.9)
 ├── data/         Pakistan's border and the places sources (places-v2.json.gz)
+├── contrib/walkthroughs/  Optional Django app for walkthroughs (§5.10; needs pakgrid[django])
 └── cli.py        Command-line tools
 scripts/          make_places_data.py: makes data/places-v2.json.gz from the source downloads
 tests/            Gap/overlap, round-trip, uniqueness, determinism and accuracy tests
@@ -961,7 +979,8 @@ tests/            Gap/overlap, round-trip, uniqueness, determinism and accuracy 
   nothing about databases; `grid` knows nothing about ellipsoid formulas.
 - **No dependencies.** Pure Python 3.10+ with the standard library (`math`,
   `sqlite3`, `struct`). `pyproj` is used only in tests to cross-check the
-  geodesy.
+  geodesy. The optional Django app in `contrib/` needs Django and Django REST
+  framework (`pakgrid[django]`); nothing else imports it.
 - **Deterministic.** Building twice produces byte-identical files. Every row
   and column count is far from a rounding boundary, so floating-point
   differences between platforms cannot change the layout. Centroids could, in
