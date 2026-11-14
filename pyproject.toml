@@ -15,13 +15,14 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7", "pyproj>=3"]
+django = ["Django>=4.2", "djangorestframework>=3.14"]
+test = ["pytest>=7", "pyproj>=3", "Django>=4.2", "djangorestframework>=3.14"]
 
 [project.scripts]
 pakgrid = "pakgrid.cli:main"
 
-[tool.setuptools]
-packages = ["pakgrid"]
+[tool.setuptools.packages.find]
+include = ["pakgrid*"]
 
 [tool.setuptools.package-data]
 pakgrid = ["data/*.geojson.gz", "data/*.json.gz", "data/*.md"]

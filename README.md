@@ -250,7 +250,9 @@ once, with the phone's GPS. The library cleans the track and picks the photos
 to take from the video, every 5 m and at each turn, each with a step such as
 `In 25 m, turn right`. Riders then see the photo that matches where they are
 standing. The rider rule runs on the phone, and comes with a conformance file
-for the Flutter port (project.md §5.10).
+for the Flutter port. An optional Django app (`pip install "pakgrid[django]"`)
+handles the upload, the photo job, the owner's approval and delivery to riders
+(project.md §5.10, docs/django.md).
 
 **Border flags:** every cell and sub-cell is flagged `inside`, `border` or
 `outside` Pakistan, using the geoBoundaries / OpenStreetMap border (including
