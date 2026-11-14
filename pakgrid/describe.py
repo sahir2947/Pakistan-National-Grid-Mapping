@@ -24,17 +24,25 @@ Rules:
   each; None when the area is wholly outside Pakistan.
 """
 
+from __future__ import annotations
+
 import struct
 from collections import Counter
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any
 
 from . import ids, navigate
-from .layout import SCALE, SUB
+from .layout import SCALE, SUB, GridLayout
+
+if TYPE_CHECKING:
+    from .grid import Grid, Place
 
 CITY_KINDS = ("city", "town")
 
 
-def _where(place, lat, lon):
+def _where(place: Place, lat: float, lon: float) -> dict[str, Any]:
     """{key, name, kind, distance_m, bearing_deg, direction, text}: from the place's point to (lat, lon)."""
+    assert place.lat is not None and place.lon is not None    # a locality: it has a point
     way = navigate.direction(place.lat, place.lon, lat, lon)
     return {"id": place.id, "key": place.key, "name": place.name, "kind": place.kind,
             "distance_m": round(way.distance_m, 1), "bearing_deg": round(way.bearing_deg, 1),
@@ -42,9 +50,9 @@ def _where(place, lat, lon):
             "text": f"{navigate.format_distance(way.distance_m)} {way.compass_short} of {place.name}"}
 
 
-def centre_of(layout, masks):
+def centre_of(layout: GridLayout, masks: Mapping[int, int]) -> tuple[int, int]:
     """(lat_e7, lon_e7): the sub-cell centroid nearest the average of the area's centroids."""
-    cents = []
+    cents: list[tuple[int, int]] = []
     for c, m in masks.items():
         q, row, col = ids.split_cell_id(c)
         ql = layout.quadrants[q]
@@ -56,7 +64,7 @@ def centre_of(layout, masks):
     return min(cents, key=lambda c: ((c[0] - my) ** 2 + (0.85 * (c[1] - mx)) ** 2, c))
 
 
-def _tags(row, layer):
+def _tags(row: tuple[Any, ...] | None, layer: str) -> tuple[int, ...]:
     """The 25 sub-cell tags of a cell from its (main tag, subs) row; zeros if it has none."""
     if row is None:
         return (0,) * (SUB * SUB)
@@ -64,9 +72,11 @@ def _tags(row, layer):
     return struct.unpack("<25H" if layer == "tehsil" else "<25I", subs) if subs else (main,) * (SUB * SUB)
 
 
-def tag_counts(grid, masks):
+def tag_counts(grid: Grid, masks: Mapping[int, int]) -> tuple[Counter[int], Counter[int], int]:
     """(Counter tehsil ID -> sub-cells, Counter locality ID -> sub-cells, sub-cells outside Pakistan)."""
-    tehsils, localities, outside = Counter(), Counter(), 0
+    tehsils: Counter[int] = Counter()
+    localities: Counter[int] = Counter()
+    outside = 0
     user = grid.user_places
     for c, m in masks.items():
         bits = [k for k in range(SUB * SUB) if m >> k & 1]
@@ -90,33 +100,36 @@ def tag_counts(grid, masks):
     return tehsils, localities, outside
 
 
-def nearest_place(grid, lat, lon, kinds=None):
+def nearest_place(grid: Grid, lat: float, lon: float, kinds: Iterable[str] | None = None) -> Place | None:
     """The nearest official locality (of these kinds) at any distance: the fast search within its
     49 km reach, else every locality measured (for areas far from any town, in desert or mountains)."""
-    near = grid.nearest_places(lat, lon, k=1, kind=set(kinds) if kinds else None)
+    wanted = set(kinds) if kinds else None
+    near = grid.nearest_places(lat, lon, k=1, kind=wanted)
     if near:
-        return near[0].id
-    best = None
+        found: Place = near[0].id
+        return found
+    best: tuple[float, int, Place] | None = None
     for p in grid._place_table().values():
-        if p.level == "locality" and (not kinds or p.kind in kinds):
+        if p.level == "locality" and p.lat is not None and p.lon is not None \
+                and (not wanted or p.kind in wanted):
             d = navigate.direction(lat, lon, p.lat, p.lon).distance_m
             if best is None or (d, p.id) < best[:2]:
                 best = (d, p.id, p)
     return best[2] if best else None
 
 
-def describe(grid, masks, references=()):
+def describe(grid: Grid, masks: Mapping[int, int], references: Iterable[Any] = ()) -> dict[str, Any]:
     """The description of an area given as {cell ID: mask} (see the module docstring)."""
     from .zones import make_zone
-    zone = make_zone(masks, grid.layout)
+    zone = make_zone(dict(masks), grid.layout)
     if zone.empty:
         raise ValueError("the area has no sub-cells")
     clat_e7, clon_e7 = centre_of(grid.layout, zone.masks)
     clat, clon = clat_e7 / SCALE, clon_e7 / SCALE
     size = {"sub_cells": zone.sub_cell_count, "cells": zone.cell_count,
             "whole_cells": len(zone.cells(full_only=True)), "area_km2": round(zone.area_km2, 6),
-            "centre": [clat, clon], "bounds": [round(v, 7) for v in zone.bounds()]}
-    out = {"size": size, "places": None, "city": None, "nearest_locality": None, "references": [],
+            "centre": [clat, clon], "bounds": [round(v, 7) for v in zone.bounds() or ()]}
+    out: dict[str, Any] = {"size": size, "places": None, "city": None, "nearest_locality": None, "references": [],
            "outside_pakistan_sub_cells": None, "label": None}
     if not grid.has_places:
         return out
@@ -124,15 +137,16 @@ def describe(grid, masks, references=()):
     tehsils, localities, outside = tag_counts(grid, zone.masks)
     out["outside_pakistan_sub_cells"] = outside
 
-    def place(pid):
+    def place(pid: int) -> Place:
         return table[pid] if pid in table else grid.get_place(pid)       # user localities by ID
 
-    def ranked(counter):
+    def ranked(counter: Counter[int]) -> list[dict[str, Any]]:
         return [{"id": p.id, "key": p.key, "name": p.name, "sub_cells": n,
                  **({"kind": p.kind, "user": p.user} if p.level == "locality" else {})}
                 for p, n in sorted(((place(i), n) for i, n in counter.items()), key=lambda x: (-x[1], x[0].id))]
 
-    districts, provinces = Counter(), Counter()
+    districts: Counter[int] = Counter()
+    provinces: Counter[int] = Counter()
     for t, n in tehsils.items():
         d = table[t].parent_id
         districts[d] += n
@@ -159,7 +173,7 @@ def describe(grid, masks, references=()):
             raise ValueError(f"{p.key} is a {p.level}; a reference must be a locality (it has a point)")
         out["references"].append(_where(p, clat, clon))
 
-    names = []
+    names: list[str] = []
     if localities:
         names.append(ranked(localities)[0]["name"])
     elif out["nearest_locality"] and tehsils:

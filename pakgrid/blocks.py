@@ -27,12 +27,19 @@ Rules:
 - describe() reports a block's cell codes, size, places and where it is (pakgrid.describe).
 """
 
+from __future__ import annotations
+
 import re
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any
 
 from . import ids, spec
 from .errors import OutsideGridError, PakgridError
 from .layout import SUB, to_e7
-from .zones import FULL, Zone, make_zone
+from .zones import FULL, Masks, Zone, make_zone
+
+if TYPE_CHECKING:
+    from .grid import Grid
 
 BLOCKSET_VERSION = 1
 
@@ -41,47 +48,52 @@ class BlockError(PakgridError, ValueError):
     """A block cannot be made or changed as asked (overlap, unknown code, bad data, ...)."""
 
 
-def _text(value, what, required=True):
-    if value is None and not required:
-        return None
+def _text(value: object, what: str) -> str:
+    """A required text: spaces collapsed; empty or not a string is refused."""
     if not isinstance(value, str) or not value.strip():
         raise BlockError(f"{what} must be a non-empty string, got {value!r}")
     return re.sub(r"\s+", " ", value).strip()
 
 
+def _optional_text(value: object, what: str) -> str | None:
+    """As _text, but None stays None."""
+    return None if value is None else _text(value, what)
+
+
 class Block:
     """One block of a set: a code, a name, free properties and its sub-cells (a Zone)."""
 
-    def __init__(self, code, name, zone, properties):
+    def __init__(self, code: str, name: str | None, zone: Zone, properties: Mapping[str, Any] | None) -> None:
         self.code = code
         self.name = name
         self.zone = zone
         self.properties = dict(properties or {})
 
     @property
-    def sub_cell_count(self):
+    def sub_cell_count(self) -> int:
         return self.zone.sub_cell_count
 
-    def contains(self, lat, lon):
+    def contains(self, lat: float, lon: float) -> bool:
         return self.zone.contains(lat, lon)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Block({self.code!r}, {self.name!r}, {self.zone.sub_cell_count:,} sub-cells)"
 
 
 class BlockSet:
     """A named set of non-overlapping blocks (see the module docstring)."""
 
-    def __init__(self, grid, name="blocks"):
+    def __init__(self, grid: Grid, name: str = "blocks") -> None:
         self.grid = grid
         self.name = _text(name, "the block set's name")
-        self._blocks = {}                       # code -> Block, in the order added
-        self._owner = {}                        # cell ID -> {code: mask}
+        self._blocks: dict[str, Block] = {}                 # code -> Block, in the order added
+        self._owner: dict[int, dict[str, int]] = {}         # cell ID -> {code: mask}
 
     # -- Building ---------------------------------------------------------------------
 
-    def add(self, code, *, name=None, cells=None, polygon=None, circle=None, place=None, properties=None,
-            take=False, pakistan_only=False):
+    def add(self, code: str, *, name: str | None = None, cells: Iterable[Any] | None = None, polygon: Any = None,
+            circle: Any = None, place: Any = None, properties: Mapping[str, Any] | None = None,
+            take: bool = False, pakistan_only: bool = False) -> Block:
         """Add a block made from any of cells, polygon, circle and place (at least one). Returns it."""
         code = _text(code, "code")
         if code in self._blocks:
@@ -90,11 +102,12 @@ class BlockSet:
         if not masks:
             raise BlockError("the block would have no sub-cells")
         self._claim(code, masks, take)
-        block = Block(code, _text(name, "name", required=False), make_zone(masks, self.grid.layout), properties)
+        block = Block(code, _optional_text(name, "name"), make_zone(masks, self.grid.layout), properties)
         self._blocks[code] = block
         return block
 
-    def add_cells(self, code, cells=None, *, polygon=None, circle=None, place=None, take=False, pakistan_only=False):
+    def add_cells(self, code: str, cells: Iterable[Any] | None = None, *, polygon: Any = None, circle: Any = None,
+                  place: Any = None, take: bool = False, pakistan_only: bool = False) -> Block:
         """Add cells or sub-cells (or a polygon's, circle's or place's) to an existing block."""
         block = self.get(code)
         masks = self._masks(cells, polygon, circle, place, pakistan_only)
@@ -104,7 +117,8 @@ class BlockSet:
         block.zone = block.zone | make_zone(masks, self.grid.layout)
         return block
 
-    def remove_cells(self, code, cells=None, *, polygon=None, circle=None, place=None):
+    def remove_cells(self, code: str, cells: Iterable[Any] | None = None, *, polygon: Any = None,
+                     circle: Any = None, place: Any = None) -> Block:
         """Take cells or sub-cells away from a block. A block cannot become empty (remove it instead)."""
         block = self.get(code)
         masks = self._masks(cells, polygon, circle, place, False)
@@ -116,7 +130,7 @@ class BlockSet:
         self._claim(block.code, rest.masks, False)
         return block
 
-    def toggle(self, code, cell, take=False):
+    def toggle(self, code: str, cell: str | int, take: bool = False) -> bool:
         """For a click on the map: add the cell or sub-cell to the block if it is not in it, else
         take it away. Returns True if it was added."""
         block = self.get(code)
@@ -128,7 +142,8 @@ class BlockSet:
         self.add_cells(code, [cell], take=take)
         return True
 
-    def update(self, code, *, name=None, properties=None, new_code=None):
+    def update(self, code: str, *, name: str | None = None, properties: Mapping[str, Any] | None = None,
+               new_code: str | None = None) -> Block:
         """Change a block's name, properties (replaced) or code."""
         block = self.get(code)
         if name is not None:
@@ -146,7 +161,7 @@ class BlockSet:
             self._claim(new_code, block.zone.masks, False)
         return block
 
-    def remove(self, code):
+    def remove(self, code: str) -> None:
         """Remove a block from the set."""
         block = self.get(code)
         self._release(block.code, block.zone)
@@ -154,23 +169,23 @@ class BlockSet:
 
     # -- Reading ------------------------------------------------------------------------
 
-    def get(self, code):
+    def get(self, code: str) -> Block:
         try:
             return self._blocks[code]
         except (KeyError, TypeError):
             raise BlockError(f"no block {code!r} in this set") from None
 
-    def blocks(self):
+    def blocks(self) -> list[Block]:
         """All blocks, in the order they were added."""
         return list(self._blocks.values())
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._blocks)
 
-    def __contains__(self, code):
+    def __contains__(self, code: object) -> bool:
         return code in self._blocks
 
-    def block_at(self, lat, lon):
+    def block_at(self, lat: float, lon: float) -> str | None:
         """The code of the block holding the pin, or None."""
         try:
             q, row, col, sr, sc = self.grid.layout.locate_e7(to_e7(lat), to_e7(lon))
@@ -182,7 +197,7 @@ class BlockSet:
                 return code
         return None
 
-    def block_of(self, item):
+    def block_of(self, item: str | int) -> str | None | dict[str, int]:
         """The code of the block holding a sub-cell (ID or code), or for a cell code the blocks
         holding any part of it, as {code: sub-cells}."""
         level, item_id = ids.parse_code(item) if isinstance(item, str) else ("sub", item)
@@ -194,13 +209,13 @@ class BlockSet:
             return None
         return {code: bin(m).count("1") for code, m in self._owner.get(item_id, {}).items()}
 
-    def describe(self, code, references=()):
+    def describe(self, code: str, references: Iterable[Any] = ()) -> dict[str, Any]:
         """A block's full description: code, name, properties, cell codes, size, places, city,
         nearest locality and directions (see pakgrid.describe)."""
         block = self.get(code)
         if block.zone.empty:
             raise BlockError(f"block {block.code!r} has no sub-cells")
-        out = {"code": block.code, "name": block.name, "properties": block.properties}
+        out: dict[str, Any] = {"code": block.code, "name": block.name, "properties": block.properties}
         out.update(self.grid.describe_zone(block.zone, references))
         out["cell_codes"] = block.zone.codes()             # whole cells as cell codes, the rest as sub-cell codes
         out["whole_cells"] = [ids.cell_code(c) for c in block.zone.cells(full_only=True)]
@@ -210,14 +225,14 @@ class BlockSet:
 
     # -- Storing ------------------------------------------------------------------------
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         """JSON-ready data for the whole set (store it anywhere; load it with from_dict)."""
         return {"blockset_version": BLOCKSET_VERSION, "grid_version": spec.GRID_VERSION, "name": self.name,
                 "blocks": [{"code": b.code, "name": b.name, "properties": b.properties, "zone": b.zone.to_dict()}
                            for b in self._blocks.values()]}
 
     @classmethod
-    def from_dict(cls, data, grid):
+    def from_dict(cls, data: Mapping[str, Any], grid: Grid) -> BlockSet:
         if data.get("blockset_version") != BLOCKSET_VERSION or data.get("grid_version") != spec.GRID_VERSION:
             raise BlockError(f"not block set version {BLOCKSET_VERSION} data for grid version {spec.GRID_VERSION}")
         out = cls(grid, data.get("name") or "blocks")
@@ -227,10 +242,10 @@ class BlockSet:
             if code in out._blocks:
                 raise BlockError(f"block {code!r} appears twice")
             out._claim(code, zone.masks, False)
-            out._blocks[code] = Block(code, _text(b.get("name"), "name", required=False), zone, b.get("properties"))
+            out._blocks[code] = Block(code, _optional_text(b.get("name"), "name"), zone, b.get("properties"))
         return out
 
-    def to_geojson(self):
+    def to_geojson(self) -> dict[str, Any]:
         """A FeatureCollection: each block's outline, with its code, name, properties and size."""
         from .geojson import feature_collection
         feats = []
@@ -242,20 +257,22 @@ class BlockSet:
 
     # -- Internals ----------------------------------------------------------------------
 
-    def _masks(self, cells, polygon, circle, place, pakistan_only):
+    def _masks(self, cells: Iterable[Any] | None, polygon: Any, circle: Any, place: Any,
+               pakistan_only: bool) -> Masks:
         sources = [(k, v) for k, v in (("cells", cells), ("polygon", polygon), ("circle", circle), ("place", place))
                    if v is not None]
         if not sources:
             raise BlockError("give cells, a polygon, a circle or a place")
-        zone = None
+        zone: Zone | None = None
         for k, v in sources:
             z = self.grid.zone(**{k: v}, pakistan_only=pakistan_only)
             zone = z if zone is None else zone | z
+        assert zone is not None
         return dict(zone.masks)
 
-    def _claim(self, code, masks, take):
+    def _claim(self, code: str, masks: Masks, take: bool) -> None:
         """Record that `code` owns these sub-cells, refusing (or with take, moving) any another block owns."""
-        clashes = {}
+        clashes: dict[str, int] = {}
         for c, m in masks.items():
             for other, om in self._owner.get(c, {}).items():
                 if other != code and om & m:
@@ -273,7 +290,7 @@ class BlockSet:
             owners = self._owner.setdefault(c, {})
             owners[code] = owners.get(code, 0) | m
 
-    def _release(self, code, zone):
+    def _release(self, code: str, zone: Zone) -> None:
         for c in zone.masks:
             owners = self._owner.get(c)
             if owners and code in owners:

@@ -25,13 +25,23 @@ max_m limits how far to look (at most MAX_NEAREST_M); fewer than k come back if 
 enough within it. `where` keeps only the points it accepts (open shops, free riders).
 """
 
+from __future__ import annotations
+
 import math
 import threading
+from collections.abc import Callable, Hashable, Iterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from . import geodesy, ids, navigate
 from .errors import OutsideGridError
-from .layout import SCALE, to_e7
+from .layout import SCALE, GridLayout, to_e7
+
+if TYPE_CHECKING:
+    from .grid import Grid
+
+# points_in(cell IDs) -> [(seq, ID, lat, lon)]: the points in those cells; seq orders ties
+PointsIn = Callable[[list[int]], Iterable[tuple[int, Any, float, float]]]
 
 MAX_NEAREST_M = 49_000.0        # the furthest a search looks (Grid.cells_within reaches 50 km)
 _FIRST_RADIUS_M = 1_000.0
@@ -51,27 +61,27 @@ class Neighbour:
     bearing_deg: float          # compass bearing from the pin to the point
 
     @property
-    def direction(self):
+    def direction(self) -> str:
         """16-point compass direction from the pin, e.g. 'NE'."""
         return navigate._COMPASS_16[round(self.bearing_deg / 22.5) % 16]
 
     @property
-    def text(self):
+    def text(self) -> str:
         """'170 m WNW'"""
         return f"{navigate.format_distance(self.distance_m)} {self.direction}"
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "lat": self.lat, "lon": self.lon, "distance_m": round(self.distance_m, 1),
                 "bearing_deg": round(self.bearing_deg, 1), "direction": self.direction, "text": self.text}
 
 
-def _check_point(lat, lon):
+def _check_point(lat: object, lon: object) -> None:
     for name, v in (("lat", lat), ("lon", lon)):
         if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v in (float("inf"), float("-inf")):
             raise ValueError(f"{name} must be a finite number, got {v!r}")
 
 
-def _check_query(k, max_m):
+def _check_query(k: object, max_m: object) -> float:
     if isinstance(k, bool) or not isinstance(k, int) or k < 1:
         raise ValueError(f"k must be a whole number of at least 1, got {k!r}")
     if max_m is None:
@@ -81,13 +91,13 @@ def _check_query(k, max_m):
     return float(max_m)
 
 
-def _cells_near(layout, lat, lon, r):
+def _cells_near(layout: GridLayout, lat: float, lon: float, r: float) -> list[int]:
     """IDs of the cells with any part within r metres of the pin: the cells
     Grid.cells_within(..., touching=True) finds, without working out their centroids."""
     lat, lon = to_e7(lat) / SCALE, to_e7(lon) / SCALE
     m_lat, m_lon = geodesy.metres_per_degree(lat)
     pad = 1.02 * r + 1500
-    out = []
+    out: list[int] = []
     for q, i, j in layout.items_in_area(to_e7(lat - pad / m_lat), to_e7(lon - pad / (m_lon * 0.98)),
                                         to_e7(lat + pad / m_lat), to_e7(lon + pad / (m_lon * 0.98)), "cell"):
         s, w, n, e = (v / SCALE for v in layout.quadrants[q].item_bounds_e7(i, j, "cell"))
@@ -96,29 +106,31 @@ def _cells_near(layout, lat, lon, r):
     return out
 
 
-def search(grid, lat, lon, k, max_m, points_in, where=None):
+def search(grid: Grid, lat: float, lon: float, k: int, max_m: float | None, points_in: PointsIn,
+           where: Callable[[Any], bool] | None = None) -> list[Neighbour]:
     """The k nearest points to (lat, lon) within max_m, nearest first.
 
     points_in(cell_ids) returns [(seq, id, lat, lon)] for those cells; seq orders ties.
     """
     _check_point(lat, lon)
-    max_m = _check_query(k, max_m)
-    seen, found = set(), []                   # found: (distance, seq, Neighbour)
-    r = min(_FIRST_RADIUS_M, max_m * _MARGIN)
+    limit = _check_query(k, max_m)
+    seen: set[int] = set()
+    found: list[tuple[float, int, Neighbour]] = []    # (distance, seq, Neighbour)
+    r = min(_FIRST_RADIUS_M, limit * _MARGIN)
     while True:
         new = [c for c in _cells_near(grid.layout, lat, lon, r) if c not in seen]
         seen.update(new)
         if new:
             for seq, pid, plat, plon in points_in(new):
                 way = navigate.direction(lat, lon, plat, plon)
-                if way.distance_m <= max_m and (where is None or where(pid)):
+                if way.distance_m <= limit and (where is None or where(pid)):
                     found.append((way.distance_m, seq, Neighbour(pid, plat, plon, way.distance_m, way.bearing_deg)))
             found.sort(key=lambda f: (f[0], f[1]))
             del found[k:]
         sure = r / _MARGIN                     # every point within this distance has been looked at
-        if (len(found) == k and found[-1][0] <= sure) or sure >= max_m:
+        if (len(found) == k and found[-1][0] <= sure) or sure >= limit:
             return [f[2] for f in found]
-        r = min(r * 2, max_m * _MARGIN)
+        r = min(r * 2, limit * _MARGIN)
 
 
 class PointIndex:
@@ -127,14 +139,14 @@ class PointIndex:
     Safe to share between threads: changes and searches take a lock.
     """
 
-    def __init__(self, grid):
+    def __init__(self, grid: Grid) -> None:
         self.grid = grid
-        self._points = {}                      # id -> (seq, lat, lon, cell ID)
-        self._cells = {}                       # cell ID -> {id, ...}
+        self._points: dict[Hashable, tuple[int, float, float, int]] = {}   # id -> (seq, lat, lon, cell ID)
+        self._cells: dict[int, set[Hashable]] = {}                          # cell ID -> {id, ...}
         self._seq = 0
         self._lock = threading.RLock()
 
-    def add(self, point_id, lat, lon):
+    def add(self, point_id: Hashable, lat: float, lon: float) -> None:
         """Add a point, or move it if its ID is already in the index."""
         _check_point(lat, lon)
         try:
@@ -153,12 +165,12 @@ class PointIndex:
             self._points[point_id] = (seq, float(lat), float(lon), cid)
             self._cells.setdefault(cid, set()).add(point_id)
 
-    def add_many(self, points):
+    def add_many(self, points: Iterable[tuple[Hashable, float, float]]) -> None:
         """Add or move many points: an iterable of (id, lat, lon)."""
         for pid, lat, lon in points:
             self.add(pid, lat, lon)
 
-    def remove(self, point_id):
+    def remove(self, point_id: Hashable) -> None:
         """Remove a point; a missing ID is ignored."""
         with self._lock:
             old = self._points.pop(point_id, None)
@@ -168,31 +180,33 @@ class PointIndex:
                 if not cell:
                     del self._cells[old[3]]
 
-    def get(self, point_id):
+    def get(self, point_id: Hashable) -> tuple[float, float] | None:
         """(lat, lon) of a point, or None."""
         p = self._points.get(point_id)
         return (p[1], p[2]) if p else None
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._points)
 
-    def __contains__(self, point_id):
+    def __contains__(self, point_id: object) -> bool:
         return point_id in self._points
 
-    def _points_in(self, cell_ids):
-        out = []
+    def _points_in(self, cell_ids: Iterable[int]) -> list[tuple[int, Hashable, float, float]]:
+        out: list[tuple[int, Hashable, float, float]] = []
         for c in cell_ids:
             for pid in self._cells.get(c, ()):
                 seq, lat, lon, _ = self._points[pid]
                 out.append((seq, pid, lat, lon))
         return out
 
-    def nearest(self, lat, lon, k=5, max_m=None, where=None):
+    def nearest(self, lat: float, lon: float, k: int = 5, max_m: float | None = None,
+                where: Callable[[Any], bool] | None = None) -> list[Neighbour]:
         """The k nearest points to the pin, nearest first: [Neighbour]."""
         with self._lock:
             return search(self.grid, lat, lon, k, max_m, self._points_in, where)
 
-    def within(self, lat, lon, radius_m, where=None):
+    def within(self, lat: float, lon: float, radius_m: float,
+               where: Callable[[Any], bool] | None = None) -> list[Neighbour]:
         """Every point within radius_m of the pin, nearest first."""
         with self._lock:
             return search(self.grid, lat, lon, max(len(self._points), 1), radius_m, self._points_in, where)
