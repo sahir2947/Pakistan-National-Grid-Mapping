@@ -6,8 +6,8 @@ If it gives the same answers for every case, it matches pakgrid.
 
     pakgrid export-conformance -o conformance
 
-writes conformance/navigation.json. The rules it tests are written out in
-conformance/NAVIGATION.md.
+writes conformance/navigation.json and conformance/walkthrough.json. The rules they
+test are written out in conformance/NAVIGATION.md and conformance/WALKTHROUGH.md.
 
 Random cases are chosen so that none lies within MARGIN of a decision
 threshold (a compass sector boundary, a turn-word limit, the arrival distance,
@@ -328,4 +328,152 @@ def write_conformance_files(output_dir="conformance"):
     out.mkdir(parents=True, exist_ok=True)
     path = out / "navigation.json"
     path.write_text(navigation_json(), encoding="utf-8", newline="\n")
-    return [path]
+    wt = out / "walkthrough.json"
+    wt.write_text(walkthrough_json(), encoding="utf-8", newline="\n")
+    return [path, wt]
+
+
+# -- Walkthrough suite ---------------------------------------------------------------
+
+_WT_LEGS = {                           # (east, north) metres of each leg of a walk
+    "L-shape": [(0, 40), (30, 0), (0, 20)],
+    "straight": [(3, 60)],
+    "zig-zag": [(0, 20), (20, 15), (-10, 25), (25, 0), (0, 15)],
+    "hairpin": [(0, 30), (8, 0), (0, -25), (30, 0)],
+    "short": [(9, 4)],
+}
+_WT_FIELDS = ("frame", "progress_m", "to_go_m", "off_path_m", "next_turn", "next_turn_in_m", "arrived", "gps", "text")
+
+
+def _wt_walk(legs, noise, rng, ref=(31.5201, 74.3571)):
+    from . import geodesy as g
+    m_lat, m_lon = g.metres_per_degree(ref[0])
+    pts = [(0.0, 0.0)]
+    for dx, dy in legs:
+        pts.append((pts[-1][0] + dx, pts[-1][1] + dy))
+    total = sum(math.hypot(*leg) for leg in legs)
+    track, t, s = [], 0.0, 0.0
+    while s <= total + 1e-9:
+        rem, (x, y) = s, pts[-1]
+        for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+            seg = math.hypot(bx - ax, by - ay)
+            if rem <= seg + 1e-9:
+                x, y = ax + (bx - ax) * rem / seg, ay + (by - ay) * rem / seg
+                break
+            rem -= seg
+        track.append((t, ref[0] + (y + rng.gauss(0, noise)) / m_lat, ref[1] + (x + rng.gauss(0, noise)) / m_lon, 5.0))
+        t, s = t + 1.0, s + 1.25
+    return track, (ref[0] + pts[-1][1] / m_lat, ref[1] + pts[-1][0] / m_lon), ref
+
+
+def _distance_text_margin(v):
+    """How far v is from a step of navigate.format_distance (in metres)."""
+    if v < 100:
+        return min(abs((v / 5) % 1 - 0.5) * 5, abs(v - 100))
+    if v < 1000:
+        return min(abs((v / 10) % 1 - 0.5) * 10, abs(v - 1000))
+    return abs((v / 100) % 1 - 0.5) * 100
+
+
+def _wt_margins(wt, guide, before, call, args, state):
+    """The distances of this step's decisions from their thresholds (metres or accuracy)."""
+    from . import walkthrough as W
+    out = []
+    if call == "update" and state.gps != "ignored":
+        acc = args["accuracy_m"]
+        acc = acc if isinstance(acc, (int, float)) and math.isfinite(acc) and acc > 0 else W.ASSUMED_ACCURACY_M
+        x, y = W._xy(wt.ref, args["lat"], args["lon"])
+        cands = []
+        for k in range(len(wt.xy) - 1):
+            d, a, _ = W._project(wt.xy[k:k + 2], wt.along[k:k + 2], x, y)
+            cands.append((d, a))
+        cands.sort()
+        d0, a0 = cands[0]
+        out += [abs(acc - W.WEAK_GPS_M), abs(d0 - W.OFF_PATH_M), abs(a0 - before), abs(before - a0 - W.BACK_M)]
+        out += [abs(d - d0) for d, a in cands[1:] if abs(a - a0) > 1e-9]
+    p = state.progress_m
+    out.append(abs(state.to_go_m - W.ARRIVED_M))
+    out += [abs(t["along_m"] - p) for t in wt.turns]
+    if state.next_turn_in_m is not None:
+        out += [abs(state.next_turn_in_m - W.TURN_NOW_M), _distance_text_margin(state.next_turn_in_m)]
+    out.append(_distance_text_margin(state.to_go_m))
+    if state.off_path_m is not None:
+        out.append(_distance_text_margin(state.off_path_m))
+    d = sorted(abs(f["along_m"] - p) for f in wt.frames)
+    if len(d) > 1:
+        out.append(d[1] - d[0])
+    return min(out) if out else math.inf
+
+
+def _wt_session(wt, name, rng, n_steps):
+    from . import geodesy as g
+    guide, steps = wt.guide(), []
+    m_lat, m_lon = g.metres_per_degree(wt.ref[0])
+    length = wt.length_m
+    def point_near(s, off):
+        k = min(range(len(wt.along) - 1), key=lambda k: 0 if wt.along[k] <= s <= wt.along[k + 1] else 1)
+        (ax, ay), (bx, by) = wt.xy[k], wt.xy[k + 1]
+        seg = wt.along[k + 1] - wt.along[k]
+        f = 0.0 if seg == 0 else (s - wt.along[k]) / seg
+        nx, ny = (-(by - ay) / seg, (bx - ax) / seg) if seg else (0.0, 0.0)
+        x, y = ax + f * (bx - ax) + off * nx, ay + f * (by - ay) + off * ny
+        return wt.ref[0] + y / m_lat, wt.ref[1] + x / m_lon
+    s = 0.0
+    while len(steps) < n_steps:
+        r = rng.random()
+        if r < 0.08:
+            call, args = rng.choice(("show", "next", "previous")), {}
+            if call == "show":
+                args = {"index": rng.randint(-1, len(wt.frames))}
+        elif r < 0.11:
+            call, args = "update", {"lat": rng.choice(("NaN", 91.0)), "lon": 74.3, "accuracy_m": 5.0}
+        else:
+            s = min(max(s + rng.uniform(-6, 9) if rng.random() < 0.85 else rng.uniform(0, length), 0.0), length)
+            off = rng.gauss(0, 6) if rng.random() < 0.9 else rng.uniform(-60, 60)
+            lat, lon = point_near(s, off)
+            acc = rng.choice((5.0, 8.0, 12.0, 25.0, 45.0, None, "NaN", -1.0, 0.0))
+            call, args = "update", {"lat": round(lat, 8), "lon": round(lon, 8), "accuracy_m": acc}
+        before = guide.progress
+        saved = (guide.progress, guide.state)
+        num = {k: (math.nan if v == "NaN" else v) for k, v in args.items()}
+        if call == "update":
+            state = guide.update(num["lat"], num["lon"], num["accuracy_m"])
+        elif call == "show":
+            state = guide.show(num["index"])
+        else:
+            state = getattr(guide, call)()
+        if _wt_margins(wt, guide, before, call, num, state) < MARGIN:
+            guide.progress, guide.state = saved                 # too close to call: try another step
+            continue
+        steps.append({"call": call, "args": args, "expect": {k: state.to_dict()[k] for k in _WT_FIELDS}})
+    start = wt.guide().state.to_dict()
+    return {"name": name, "walkthrough": wt.to_dict(), "start": {k: start[k] for k in _WT_FIELDS}, "steps": steps}
+
+
+def walkthrough_suite(seed=2027):
+    from .walkthrough import build
+    rng = random.Random(seed)
+    sessions = []
+    for name, legs in _WT_LEGS.items():
+        for noise in (0.0, 2.0):
+            track, pin, ref = _wt_walk(legs, noise, rng)
+            wt = build(track, pin=pin, start=ref, author="conformance")
+            wt.data["created_at"] = "2026-01-01T00:00:00+00:00"
+            sessions.append(_wt_session(wt, f"{name}{' (noisy)' if noise else ''}", rng, 60))
+    return {
+        "format": "pakgrid-conformance",
+        "suite": "walkthrough",
+        "format_version": FORMAT_VERSION,
+        "grid_version": spec.GRID_VERSION,
+        "generated_by": f"pakgrid {__version__}",
+        "rules": "conformance/WALKTHROUGH.md",
+        "tolerance": {"metres": 1e-06},
+        "field_tolerance": {"progress_m": "metres", "to_go_m": "metres", "off_path_m": "metres",
+                            "next_turn_in_m": "metres"},
+        "sessions": sessions,
+    }
+
+
+def walkthrough_json():
+    """The walkthrough suite as JSON text."""
+    return json.dumps(walkthrough_suite(), indent=1, allow_nan=False, ensure_ascii=False) + "\n"

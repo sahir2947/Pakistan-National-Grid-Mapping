@@ -102,6 +102,7 @@
   <button type="button" id="measure" title="Distance and direction between two blocks: tap one, then the other">Measure</button>
   <button type="button" id="roadsbtn" title="Draw a road or street and name it; see the sub-cells and places it passes">Roads</button>
   <button type="button" id="blocksbtn" title="Make your own blocks: click cells or draw a shape, give it a code and name">Blocks</button>
+  <button type="button" id="walkbtn" title="Try a walkthrough: the photos a rider sees from the road to the door">Walk</button>
   <button type="button" id="zonebtn" title="Draw a delivery zone, check pins against it, and copy its data">Zone</button>
   <button type="button" id="draw" title="Draw a new locality and see the sub-cells it would tag">Draw</button>
 </form>
@@ -636,6 +637,7 @@
     if (nav.target) nav.close(true);
     if (roading) stopRoad();
     if (blocking) stopBlocks();
+    if (walking) stopWalk();
     if (drawing) stopDrawing();
     if (zoning) stopZone();
     selLayer.clearLayers(); arrow = arrowMarker = null;
@@ -721,6 +723,7 @@
     if (drawing) { addVertex(e.latlng.lat, e.latlng.lng); return; }
     if (zoning) { zoneTap(e.latlng.lat, e.latlng.lng); return; }
     if (blocking) { blockTap(e.latlng.lat, e.latlng.lng); return; }
+    if (walking) { walkTap(e.latlng.lat, e.latlng.lng); return; }
     if (roading) { roading.pts.push([+e.latlng.lat.toFixed(7), +e.latlng.lng.toFixed(7)]); roading.done = false; showRoad(); return; }
     if (measuring) { measureTap(e.latlng.lat, e.latlng.lng); return; }
     selectPoint(e.latlng.lat, e.latlng.lng, false);
@@ -740,6 +743,7 @@
     if (zoning) stopZone();
     if (measuring) stopMeasure();
     if (blocking) stopBlocks();
+    if (walking) stopWalk();
     selLayer.clearLayers(); arrow = arrowMarker = null;
     roading = { pts: [], done: false, name: "", local: "", kind: "street", oneway: false, surface: "", vehicles: {}, mode: "road", sourceId: "" };
     roadsBtn.classList.add("on");
@@ -890,6 +894,138 @@
     };
   }
 
+  // -- Walkthroughs (pakgrid.walkthrough) ---------------------------------------------
+  // Load a walkthrough's JSON (from `pakgrid walkthrough build`) and its photos (the frame-NNN.jpg
+  // files) or the video itself, whose photos are then taken in the browser. Taps on the map act
+  // as a rider's GPS readings, run through the rider rule (PakGrid.WalkthroughGuide, the same
+  // rule as the library and the conformance file); the arrows step through the photos by hand.
+  var walking = null, walkBtn = document.getElementById("walkbtn");
+  function startWalk() {
+    if (nav.target) nav.close(true);
+    if (roading) stopRoad();
+    if (blocking) stopBlocks();
+    if (drawing) stopDrawing();
+    if (zoning) stopZone();
+    if (measuring) stopMeasure();
+    selLayer.clearLayers(); arrow = arrowMarker = null;
+    walking = { guide: null, data: null, images: {}, video: null, acc: 8, error: null };
+    walkBtn.classList.add("on");
+    showWalk();
+  }
+  function stopWalk() {
+    if (walking && walking.video) URL.revokeObjectURL(walking.video.src);
+    if (walking) Object.keys(walking.images).forEach(function (k) {
+      if (walking.images[k].indexOf("blob:") === 0) URL.revokeObjectURL(walking.images[k]);
+    });
+    walking = null;
+    walkBtn.classList.remove("on");
+    selLayer.clearLayers();
+    showSummary();
+  }
+  walkBtn.addEventListener("click", function () { if (walking) stopWalk(); else startWalk(); });
+  function walkTap(lat, lon) {
+    if (!walking.guide) return;
+    walking.rider = [lat, lon];
+    walking.guide.update(lat, lon, walking.acc);
+    showWalk();
+  }
+  function walkPhoto(w, f, img) {              // the photo of frame f, from its file or the video
+    if (w.images[f.image]) { img.src = w.images[f.image]; return; }
+    if (!w.video) { img.removeAttribute("src"); img.alt = "No photo loaded for " + f.image; return; }
+    var v = w.video, want = f.t_s;
+    var grab = function () {
+      v.removeEventListener("seeked", grab);
+      if (walking !== w || Math.abs(v.currentTime - want) > 0.5) return;
+      var c = document.createElement("canvas");
+      c.width = v.videoWidth; c.height = v.videoHeight;
+      c.getContext("2d").drawImage(v, 0, 0);
+      w.images[f.image] = c.toDataURL("image/jpeg", 0.8);
+      if (walking === w && w.guide && w.data.frames[w.guide.state.frame] === f) img.src = w.images[f.image];
+    };
+    v.addEventListener("seeked", grab);
+    v.currentTime = Math.min(want, isFinite(v.duration) ? Math.max(v.duration - 0.05, 0) : want);
+  }
+  function showWalk() {
+    var w = walking, html = "<h2>Walkthrough</h2>";
+    selLayer.clearLayers();
+    if (!w.guide) {
+      html += "<div class='sub'>Load a walkthrough made with <code>pakgrid walkthrough build</code>, and its photos " +
+              "(the frame-NNN.jpg files) or the video it was made from. Then tap the map where a rider is.</div>" +
+              "<h3>Walkthrough JSON</h3><input type='file' id='w-json' accept='.json,application/json'>" +
+              (w.error ? "<p class='error'>" + esc(w.error) + "</p>" : "");
+      panel.innerHTML = html;
+      document.getElementById("w-json").onchange = function (e) {
+        var file = e.target.files[0];
+        if (!file) return;
+        file.text().then(function (text) {
+          try {
+            w.data = JSON.parse(text);
+            w.guide = new PakGrid.WalkthroughGuide(w.data);
+            w.error = null;
+            map.fitBounds(L.latLngBounds(w.data.path.map(function (p) { return [p[0], p[1]]; })).pad(0.3));
+          } catch (err) { w.error = "Not a walkthrough: " + err.message; w.guide = null; }
+          showWalk();
+        });
+      };
+      return;
+    }
+    var d = w.data, s = w.guide.state, f = d.frames[s.frame];
+    L.polyline(d.path.map(function (p) { return [p[0], p[1]]; }), { color: "#2563eb", weight: 5, opacity: 0.8, interactive: false }).addTo(selLayer);
+    d.frames.forEach(function (fr) {
+      L.circleMarker([fr.lat, fr.lon], { radius: fr === f ? 7 : 3, color: fr.turn ? "#d97706" : "#1e3a8a", weight: 2,
+                                        fillColor: fr === f ? "#facc15" : "#fff", fillOpacity: 1 })
+        .on("click", function (ev) { L.DomEvent.stopPropagation(ev); w.guide.show(fr.index); showWalk(); })
+        .addTo(selLayer);
+    });
+    L.circleMarker(d.start, { radius: 8, color: "#15803d", fillColor: "#22c55e", fillOpacity: 1, weight: 2, interactive: false })
+      .bindTooltip("Start (road)").addTo(selLayer);
+    L.circleMarker(d.pin, { radius: 8, color: "#b91c1c", fillColor: "#ef4444", fillOpacity: 1, weight: 2, interactive: false })
+      .bindTooltip("Door (pin)").addTo(selLayer);
+    if (w.rider && s.gps !== "manual") {
+      L.circleMarker(w.rider, { radius: 6, color: "#111827", fillColor: "#60a5fa", fillOpacity: 1, weight: 2, interactive: false }).addTo(selLayer);
+      L.circle(w.rider, { radius: w.acc, color: "#60a5fa", weight: 1, fillOpacity: 0.1, interactive: false }).addTo(selLayer);
+    }
+    var gpsWords = { start: "Tap the map where the rider is", ok: "GPS reading used", weak: "GPS too weak: the photo stays",
+                     off_path: "Off the path", ignored: "Reading ignored", manual: "Chosen by hand" };
+    html += "<div class='sub'>" + Math.round(d.length_m) + " m · " + d.frames.length + " photos · " + d.turns.length +
+            " turn" + (d.turns.length === 1 ? "" : "s") + " · by " + esc(d.author) + "</div>" +
+            "<div style='margin-top:8px;background:#111827;border-radius:8px;min-height:120px;display:flex;align-items:center;justify-content:center'>" +
+            "<img id='w-img' style='max-width:100%;max-height:260px;border-radius:8px;color:#fff;font-size:12px'></div>" +
+            "<div class='code' style='font-size:18px;margin-top:8px'>" + esc(s.text) + "</div>" +
+            "<div class='sub'>" + PakGrid.formatDistance(s.to_go_m) + " to the door · photo " + (s.frame + 1) + " of " + d.frames.length +
+            " · " + gpsWords[s.gps] + "</div>" +
+            "<p><button type='button' id='w-prev'>◀ Back</button> <button type='button' id='w-next'>Next ▶</button> " +
+            "<label class='sub'>GPS accuracy <select id='w-acc'>" + [5, 8, 15, 40].map(function (a) {
+              return "<option value='" + a + "'" + (a === w.acc ? " selected" : "") + ">" + a + " m</option>"; }).join("") +
+            "</select></label></p>" +
+            "<h3>Photos</h3><div class='sub'>Choose the frame-NNN.jpg files, or the video (its photos are taken here).</div>" +
+            "<input type='file' id='w-files' accept='image/*,video/*' multiple>" +
+            "<h3>This photo</h3>" + rowsHtml([
+              ["Video time", f.t_s.toFixed(2) + " s"], ["Along", f.along_m.toFixed(1) + " m"],
+              ["Heading", f.heading_deg.toFixed(0) + "°"], ["Step", esc(f.text)], ["Sub-cell", f.sub_cell || "–"]]) +
+            "<p><button type='button' id='w-close'>Load another</button></p>";
+    panel.innerHTML = html;
+    var q = function (id) { return document.getElementById(id); };
+    walkPhoto(w, f, q("w-img"));
+    q("w-prev").onclick = function () { w.guide.previous(); showWalk(); };
+    q("w-next").onclick = function () { w.guide.next(); showWalk(); };
+    q("w-acc").onchange = function () { w.acc = +q("w-acc").value; };
+    q("w-close").onclick = function () { stopWalk(); startWalk(); };
+    q("w-files").onchange = function (e) {
+      Array.prototype.forEach.call(e.target.files, function (file) {
+        if (file.type.indexOf("video/") === 0) {
+          if (w.video) URL.revokeObjectURL(w.video.src);
+          w.video = document.createElement("video");
+          w.video.muted = true; w.video.preload = "auto"; w.video.src = URL.createObjectURL(file);
+          w.video.addEventListener("loadeddata", function () { if (walking === w) showWalk(); }, { once: true });
+        } else {
+          w.images[file.name] = URL.createObjectURL(file);
+        }
+      });
+      showWalk();
+    };
+  }
+
   // -- Custom blocks (pakgrid.blocks) -------------------------------------------------
   // Make named, coded blocks by clicking cells (or sub-cells, from zoom 14) or drawing a shape.
   // The panel describes the chosen block: its cells, size, province/district/tehsil, localities,
@@ -906,6 +1042,7 @@
   function saveBlockSet() { try { localStorage.setItem(BLOCK_KEY, JSON.stringify(blocking.set.toDict())); } catch (e) {} }
   function startBlocks() {
     if (nav.target) nav.close(true);
+    if (walking) stopWalk();
     if (roading) stopRoad();
     if (drawing) stopDrawing();
     if (zoning) stopZone();
@@ -1098,6 +1235,7 @@
     if (nav.target) nav.close(true);
     if (roading) stopRoad();
     if (blocking) stopBlocks();
+    if (walking) stopWalk();
     if (drawing) stopDrawing();
     if (measuring) stopMeasure();
     selLayer.clearLayers(); arrow = arrowMarker = null;
@@ -1222,6 +1360,7 @@
     if (nav.target) nav.close(true);
     if (roading) stopRoad();
     if (blocking) stopBlocks();
+    if (walking) stopWalk();
     if (measuring) stopMeasure();
     if (zoning) stopZone();
     selLayer.clearLayers();
@@ -1361,6 +1500,7 @@
     if (drawing) stopDrawing();
     if (zoning) stopZone();
     if (blocking) stopBlocks();
+    if (walking) stopWalk();
     if (roading) stopRoad();
     var two = /^\s*(\S+)\s+(?:to|-|→)\s+(\S+)\s*$/i.exec(document.getElementById("q").value);
     if (two && grid.parseCode(two[1]) && grid.parseCode(two[2])) {     // '11-0140-0471 to 11-0150-0480'

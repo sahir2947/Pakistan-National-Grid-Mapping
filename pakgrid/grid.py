@@ -492,6 +492,15 @@ class Grid:
         flags = self._flags(found, level)
         return [i for i in found if flags.get(i, OUTSIDE) != OUTSIDE]
 
+    # -- Walkthroughs ---------------------------------------------------------------
+
+    def walkthrough(self, track, *, pin, author, start=None, properties=None):
+        """A walkthrough from a GPS track recorded with a phone video, walking from the road
+        (start) to the door (pin): the path, the photos to take and their steps
+        (pakgrid.walkthrough)."""
+        from .walkthrough import build
+        return build(track, pin=pin, author=author, start=start, grid=self, properties=properties)
+
     # -- Blocks and describing areas ---------------------------------------------
 
     def block_set(self, name="blocks"):

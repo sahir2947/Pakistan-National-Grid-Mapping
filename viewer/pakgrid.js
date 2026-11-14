@@ -1606,6 +1606,66 @@
     return "Only " + v.map(function (x) { return VEHICLE_LABELS[x]; }).join(", ");
   }
 
+  // -- Walkthrough rider rule (same rules as pakgrid.walkthrough.WalkthroughGuide) ------
+  var WT = { WEAK_GPS_M: 30, OFF_PATH_M: 30, BACK_M: 12, ARRIVED_M: 6, TURN_NOW_M: 4, ASSUMED_ACCURACY_M: 20 };
+  function finiteNum(v) { return typeof v === "number" && isFinite(v); }
+  function WalkthroughGuide(data) {
+    if (!data || data.walkthrough_version !== 1 || !data.path || data.path.length < 2 || !data.frames || !data.frames.length) {
+      throw new Error("not walkthrough version 1 data");
+    }
+    var ref = [data.path[0][0], data.path[0][1]];
+    this.data = data;
+    this.ref = ref;
+    this.xy = data.path.map(function (p) { var o = localOffset(ref[0], ref[1], p[0], p[1]); return [o.east, o.north]; });
+    this.along = data.path.map(function (p) { return p[3]; });
+    this.progress = 0;
+    this.state = this._state(null, "start");
+  }
+  WalkthroughGuide.prototype._project = function (x, y) {
+    var best = null, xy = this.xy, along = this.along;
+    for (var k = 0; k + 1 < xy.length; k++) {
+      var ax = xy[k][0], ay = xy[k][1], dx = xy[k + 1][0] - ax, dy = xy[k + 1][1] - ay, seg2 = dx * dx + dy * dy;
+      var t = seg2 === 0 ? 0 : Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / seg2));
+      var d = Math.hypot(x - (ax + t * dx), y - (ay + t * dy));
+      if (best === null || d < best[0]) best = [d, along[k] + t * (along[k + 1] - along[k])];
+    }
+    return best;
+  };
+  WalkthroughGuide.prototype.update = function (lat, lon, accuracy) {
+    if (!(finiteNum(lat) && finiteNum(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180)) return this._set(null, "ignored");
+    var acc = finiteNum(accuracy) && accuracy > 0 ? accuracy : WT.ASSUMED_ACCURACY_M;
+    var o = localOffset(this.ref[0], this.ref[1], lat, lon), pr = this._project(o.east, o.north), off = pr[0], raw = pr[1];
+    if (acc > WT.WEAK_GPS_M) return this._set(off, "weak");
+    if (off > WT.OFF_PATH_M) return this._set(off, "off_path");
+    if (raw >= this.progress || this.progress - raw > WT.BACK_M) this.progress = raw;
+    return this._set(off, "ok");
+  };
+  WalkthroughGuide.prototype.show = function (index) {
+    var n = this.data.frames.length;
+    index = Math.min(Math.max(Math.trunc(index), 0), n - 1);
+    this.progress = this.data.frames[index].along_m;
+    return this._set(null, "manual");
+  };
+  WalkthroughGuide.prototype.next = function () { return this.show(this.state.frame + 1); };
+  WalkthroughGuide.prototype.previous = function () { return this.show(this.state.frame - 1); };
+  WalkthroughGuide.prototype._set = function (off, gps) { this.state = this._state(off, gps); return this.state; };
+  WalkthroughGuide.prototype._state = function (off, gps) {
+    var frames = this.data.frames, turns = this.data.turns, p = this.progress, best = 0, i;
+    for (i = 0; i < frames.length; i++) {
+      if (Math.abs(frames[i].along_m - p) <= Math.abs(frames[best].along_m - p)) best = i;
+    }
+    var toGo = Math.max(this.data.length_m - p, 0), nxt = null;
+    for (i = 0; i < turns.length; i++) if (turns[i].along_m >= p) { nxt = turns[i]; break; }
+    var inM = nxt === null ? null : nxt.along_m - p, arrived = toGo <= WT.ARRIVED_M, text;
+    if (gps === "off_path") text = "Go back to the path: it is " + formatDistance(off) + " away";
+    else if (arrived) text = "You have arrived";
+    else if (nxt !== null && inM <= WT.TURN_NOW_M) text = nxt.turn.charAt(0).toUpperCase() + nxt.turn.slice(1) + " now";
+    else if (nxt !== null) text = "In " + formatDistance(inM) + ", " + nxt.turn;
+    else text = "The door is " + formatDistance(toGo) + " ahead";
+    return { frame: best, progress_m: p, to_go_m: toGo, off_path_m: off, next_turn: nxt === null ? null : nxt.turn,
+             next_turn_in_m: inM, arrived: arrived, gps: gps, text: text };
+  };
+
   Places.prototype.path = function (place) {
     var out = [];
     for (var p = place; p; p = this.byId[p.parentId]) out.push(p);
@@ -1619,6 +1679,7 @@
     formatDistance: formatDistance, NavigationSession: NavigationSession, cellId: cellId, subCellId: subCellId,
     pointInRings: pointInRings, Zone: Zone, geojsonGeometry: geojsonGeometry, PointIndex: PointIndex,
     BlockSet: BlockSet, codeMasks: codeMasks, lineLength: lineLength,
+    WalkthroughGuide: WalkthroughGuide,
     VEHICLES: VEHICLES, vehiclesUpTo: vehiclesUpTo, vehiclesList: vehiclesList, accessText: accessText,
     cellCode: cellCode, subCellCode: subCellCode
   };

@@ -510,6 +510,53 @@ class StreetAccessSet(APIView):
 the answer (`{"largest": "rickshaw", "text": "Up to rickshaw size", ...}`), so
 the rider app can warn a car driver before they turn in.
 
+**Walkthroughs.** The shop app uploads the video and the GPS track it
+recorded with it (`[{"t": 0.0, "lat": ..., "lon": ..., "accuracy": 6}, ...]`,
+`t` in seconds into the video). Make the walkthrough at once, so a bad
+recording is refused while the owner is still there, and take the photos in a
+background job (ffmpeg must be installed on the worker)
+([project.md §5.10](../project.md#510-walkthroughs-photos-from-the-road-to-the-door)):
+
+```python
+from pakgrid import WalkthroughError
+
+class WalkthroughUpload(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, shop_id):     # multipart: video, track (JSON text), pin_lat, pin_lon, start_lat, start_lon
+        shop = get_object_or_404(Shop, id=shop_id, owner=request.user)
+        d = request.data
+        try:
+            wt = get_grid().walkthrough(json.loads(d["track"]), pin=(float(d["pin_lat"]), float(d["pin_lon"])),
+                                        start=(float(d["start_lat"]), float(d["start_lon"])),
+                                        author=request.user.username, properties={"shop": shop.id})
+        except (WalkthroughError, KeyError, ValueError) as exc:
+            return Response({"error": str(exc)}, status=400)
+        w = Walkthrough.objects.create(shop=shop, data=wt.to_dict(), video=d["video"],
+                                       pin_sub_cell=wt.data["pin_sub_cell"], approved=False)
+        take_photos.delay(w.id)             # Celery, RQ, ...
+        return Response({"id": w.id, "length_m": wt.length_m, "photos": len(wt.frames)}, status=201)
+
+
+@shared_task
+def take_photos(walkthrough_id):
+    w = Walkthrough.objects.get(id=walkthrough_id)
+    wt = pakgrid.Walkthrough.from_dict(w.data)
+    with tempfile.TemporaryDirectory() as out:
+        for cmd in wt.ffmpeg_commands(w.video.path, out):
+            subprocess.run(cmd, check=True)
+        for f in wt.frames:                  # to your storage, e.g. S3, under the walkthrough
+            w.photos.create(index=f["index"], image=File(open(os.path.join(out, f["image"]), "rb"), f["image"]))
+    w.video.delete()                         # keep only the photos
+```
+
+Send a rider the walkthrough's JSON with each photo's URL when an order is
+assigned (only to riders with an active order to that address, and only once
+the owner has approved it), so it works with a weak signal at the door. The
+rider app runs the rider rule on the phone: a Dart port of
+[conformance/WALKTHROUGH.md](../conformance/WALKTHROUGH.md), checked with
+`walkthrough.json`.
+
 **Your users' own blocks.** Let staff divide a city into territories in the
 app: they click cells or draw a shape, and name the block. Keep the block set's
 JSON in your database, and describe a block for the screen that shows it

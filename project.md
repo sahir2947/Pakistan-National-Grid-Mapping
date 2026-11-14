@@ -826,6 +826,101 @@ asks the question with one button per vehicle, and its *Street already on the
 map* option makes the `user.set_access(...)` call for a street that is not a
 user road.
 
+### 5.10 Walkthroughs: photos from the road to the door
+
+The last 100 m are where riders lose the most time: a gali off the main road,
+a gate, a turn behind a shop. A **walkthrough** shows them the way. The shop
+owner records it once, walking from a point on the road where a rider can
+park to their door while the app films and logs the phone's GPS about once a
+second. Every rider after that sees the photo that matches where they are
+standing, with the distance to the door and the next turn
+(`pakgrid/walkthrough.py`).
+
+```python
+wt = grid.walkthrough(track, pin=(31.52064, 74.35742), start=(31.5201, 74.3571), author="ali")
+wt.length_m, len(wt.frames), [t["turn"] for t in wt.turns]   # 86.84, 19, ['turn right', 'turn left']
+data = wt.to_dict()                          # JSON: store it with the address (photos are separate files)
+wt.ffmpeg_commands("walk.mp4", "frames/")    # one ffmpeg command per photo
+
+guide = Walkthrough.from_dict(data).guide()  # on the rider's phone (or WalkthroughGuide in Dart/JS)
+s = guide.update(31.52024, 74.35711, accuracy_m=8)
+s.frame, s.text, s.to_go_m                   # 3, 'In 25 m, turn right', 71.3
+guide.next(); guide.previous(); guide.show(7)   # swiping through the photos by hand
+```
+
+**The track** is the phone's GPS readings, each `(t, lat, lon)` or
+`(t, lat, lon, accuracy_m)` (or a dict with those keys), where `t` is seconds
+into the video. `read_gpx()` reads a GPX file from a GPS logger app instead,
+with `video_start` lining its clock up with the video's.
+
+**How it is made:**
+
+1. **Clean:** readings that are not finite, less accurate than 25 m, at a
+   time already seen, or further from the last kept reading than 4 m/s plus
+   both readings' accuracy allows (a GPS jump) are dropped; `track` counts
+   them.
+2. **Smooth:** each reading is averaged with those within 2 s of it,
+   weighted by 1 / accuracy².
+3. **Anchor:** the first reading moves to the **start** (the point on the
+   road; the first reading if not given) and the last to the **pin**. Each
+   must be within 30 m, or the walk is refused ("record from the start").
+4. **Simplify:** rounded to 10⁻⁷ degree, and simplified (Douglas-Peucker,
+   5 m) so GPS wobble does not become zig-zags. Every point keeps its video
+   time, so the video's time maps to distance along the path.
+5. **Limits:** at least 5 m, at most **500 m** and **5 minutes**: it is for
+   the last stretch, not whole routes.
+6. **Turns:** where the direction changes by 30° or more, measured from 8 m
+   before to 8 m after; of turns closer than 12 m, only the sharpest counts.
+   Words as navigation: `turn left`, `bear right`, `turn around`.
+7. **Photos (frames):** one every 5 m along the path, one at each turn
+   (facing the way out of it) and one at the door; a regular one within 2 m
+   of a turn or the door is left out. A 100 m walk gives about 20 photos
+   (2–3 MB at 1280 px), much less than the video.
+
+Each frame has its video time `t_s`, point, `heading_deg`, `along_m`,
+`to_go_m`, sub-cell, the `turn` there, the step `text` (`In 25 m, turn
+right`) and its photo's file name (`frame-004.jpg`). The walkthrough also has
+the path (GeoJSON from `to_geojson()`), the sub-cells it passes through, the
+start and pin with their sub-cells (link it to the address by
+`pin_sub_cell`), length, duration, author and your own `properties`.
+
+**The rider rule** (`WalkthroughGuide`, written out exactly in
+[conformance/WALKTHROUGH.md](conformance/WALKTHROUGH.md)):
+
+- Each GPS reading is projected onto the path. A reading less accurate than
+  30 m does not move the rider (`weak`); further than 30 m from the path is
+  `off_path` ("Go back to the path: it is 40 m away").
+- The rider's progress moves forward with the readings. A step back of 12 m or
+  less is GPS wobble and is ignored; a bigger one means they really went back.
+- The photo shown is the one nearest the progress. The text says `In 25 m,
+  turn right`, `Turn right now` (within 4 m), `The door is 15 m ahead`, or
+  `You have arrived` (within 6 m).
+- `show(i)`, `next()` and `previous()` move through the photos by hand, for
+  narrow galis where GPS is poor.
+
+The rule needs no database, so the rider app runs it on the phone. The
+conformance file `walkthrough.json` lets a Flutter port check it gives the
+same photo and words; the viewer's JavaScript passes it.
+
+**Limits of GPS:** in narrow galis between tall buildings, phone GPS can
+drift 5–10 m. The walkthrough still has every photo in order, but a turn may
+be placed a few metres off or an extra turn found; riders can always swipe.
+An owner's review of the photos before the walkthrough goes live (stage 2)
+catches these.
+
+**Command line and viewer:** `pakgrid walkthrough build --track track.json
+--pin LAT LON --start LAT LON --author A -o wt.json --video walk.mp4
+--frames-dir frames/` makes the walkthrough and takes its photos (with
+ffmpeg). The viewer's **Walk** tool loads the walkthrough and the photos or
+the video (taking the photos in the browser), and taps on the map act as a
+rider's GPS.
+
+**Privacy:** street videos show people, homes and number plates. The library
+stores no media. Recommended in the app: only riders with an active order to
+the address see its walkthrough, the owner approves it first, and the video
+is deleted once the photos are taken. Blurring faces and plates is planned as
+an optional backend step (stage 3).
+
 ---
 
 ## 6. Library architecture
@@ -848,6 +943,7 @@ pakgrid/
 ├── userplaces.py Localities drawn by users, kept in a separate file (§5.8)
 ├── roads.py      Roads and streets drawn by users, in the same file (§5.9)
 ├── access.py     What can drive through a street: answers on roads and other streets (§5.9)
+├── walkthrough.py Walkthroughs: photos from the road to the door, and the rider rule (§5.10)
 ├── zones.py      Custom zones: sets of sub-cells, pin checks, stored form (§7.6)
 ├── geojson.py    GeoJSON: blocks, zones and places' exact outlines (§7.7)
 ├── nearest.py    Nearest lookup: PointIndex and the ring search (§7.8)
@@ -1012,6 +1108,7 @@ with Grid.open("pakgrid_v1.sqlite") as grid:
 | `pakgrid places [TEXT] [--level L] [--cells]` | List or search places (province, district, tehsil, locality); `--cells` prints the cells of one place |
 | `pakgrid user-places [--file F] add NAME (--polygon FILE \| --cells CODE...) --author A [--kind K] [--local-name L] [--ref KEY]... [--nearest N]` | Add a user locality (§5.8); also `update KEY`, `remove KEY`, `list`, `show KEY`, `history [KEY]`, `export FILE`, `import FILE`, `refresh` |
 | `pakgrid user-places add-road NAME --line FILE --author A [--kind K] [--local-name L] [--oneway] [--surface S] [--vehicles ...] [--width-m W] [--speed-kmh V]` | Add a user road (§5.9); also `update-road KEY`, `remove-road KEY`, `roads`, `road KEY`, `near-road LAT LON`, `roads-geojson` |
+| `pakgrid walkthrough build --track FILE --pin LAT LON [--start LAT LON] --author A [-o FILE] [--video V --frames-dir D]` | Make a walkthrough from a GPS track (JSON or GPX) and take its photos (§5.10); also `walkthrough frames FILE --video V --frames-dir D [--print]`, `walkthrough guide FILE LAT,LON[,ACC] ...` |
 | `pakgrid user-places access set --author A (--largest V \| --vehicles V ...) (--road KEY \| --line FILE [--source-id ID] [--name N])` | What can drive through a street (§5.9); also `access at LAT LON`, `list`, `remove --street S`, `history [--street S]`, `geojson` |
 | `pakgrid locate ... --user-places FILE` / `pakgrid show ... --user-places FILE` | Include user localities in the answer |
 
