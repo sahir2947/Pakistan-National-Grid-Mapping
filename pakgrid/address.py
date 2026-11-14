@@ -17,6 +17,8 @@ north-south part (N or S), separated by single spaces, upper case. Parsing
 also accepts lower case, extra spaces, and the two offset parts in either order.
 """
 
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -35,7 +37,7 @@ _ADDRESS_RE = re.compile(
 
 
 @lru_cache(maxsize=1)
-def _layout():
+def _layout() -> GridLayout:
     return GridLayout.from_spec()
 
 
@@ -47,20 +49,20 @@ class GridAddress:
     north_m: int = 0
 
     @property
-    def code(self):
+    def code(self) -> str:
         return ids.sub_cell_code(self.sub_cell_id)
 
     @property
-    def text(self):
+    def text(self) -> str:
         """Canonical text, e.g. '11-0140-0471-00 W23 S18'."""
         ew = "E" if self.east_m >= 0 else "W"
         ns = "N" if self.north_m >= 0 else "S"
         return f"{self.code} {ew}{abs(self.east_m)} {ns}{abs(self.north_m)}"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.text
 
-    def centroid(self):
+    def centroid(self) -> tuple[float, float]:
         """(lat, lon) of the sub-cell's centre."""
         cid, sub = ids.split_sub_cell_id(self.sub_cell_id)
         q, row, col = ids.split_cell_id(cid)
@@ -68,13 +70,13 @@ class GridAddress:
         lat_e7, lon_e7 = _layout().quadrants[q].item_centroid_e7(row * SUB + sr, col * SUB + sc, "sub")
         return lat_e7 / SCALE, lon_e7 / SCALE
 
-    def point(self):
+    def point(self) -> tuple[float, float]:
         """(lat, lon) the address refers to: the centre moved by the offset."""
         clat, clon = self.centroid()
         return geodesy.apply_offset(clat, clon, self.east_m, self.north_m)
 
 
-def parse_address(text):
+def parse_address(text: str) -> GridAddress:
     """GridAddress from text such as '11-0140-0471-00 W23 S18' (or just the code)."""
     m = _ADDRESS_RE.match(text) if isinstance(text, str) else None
     if not m:
@@ -96,16 +98,16 @@ def parse_address(text):
     return GridAddress(sid, east, north)
 
 
-def _sub_cell_at(lat, lon):
+def _sub_cell_at(lat: float, lon: float) -> int:
     q, row, col, sr, sc = _layout().locate_e7(to_e7(lat), to_e7(lon))
     return ids.sub_cell_id(ids.cell_id(q, row, col), ids.sub_index(sr, sc))
 
 
-def _toward_zero(v):
+def _toward_zero(v: int) -> int:
     return v - 1 if v > 0 else v + 1 if v < 0 else v
 
 
-def address_from_point(lat, lon):
+def address_from_point(lat: float, lon: float) -> GridAddress:
     """The grid address of a GPS point: its sub-cell and the offset from that sub-cell's centre.
 
     The offset is rounded to whole metres. If rounding would carry the point over the
@@ -114,8 +116,8 @@ def address_from_point(lat, lon):
     """
     sid = _sub_cell_at(lat, lon)
     clat, clon = GridAddress(sid).centroid()
-    east, north = geodesy.local_offset(clat, clon, lat, lon)
-    east, north = round(east), round(north)
+    east_m, north_m = geodesy.local_offset(clat, clon, lat, lon)
+    east, north = round(east_m), round(north_m)
     for e, n in ((east, north), (_toward_zero(east), north), (east, _toward_zero(north)),
                  (_toward_zero(east), _toward_zero(north))):
         if _sub_cell_at(*geodesy.apply_offset(clat, clon, e, n)) == sid:
@@ -123,6 +125,6 @@ def address_from_point(lat, lon):
     return GridAddress(sid, _toward_zero(east), _toward_zero(north))  # unreachable for 200 m sub-cells
 
 
-def resolve_address(text):
+def resolve_address(text: str) -> tuple[float, float]:
     """(lat, lon) of an address given as text."""
     return parse_address(text).point()

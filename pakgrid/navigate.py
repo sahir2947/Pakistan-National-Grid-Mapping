@@ -10,9 +10,12 @@ nothing, so each app builds its own screen on top. The map viewer carries an ide
 in JavaScript (viewer/pakgrid.js), tested against this one.
 """
 
+from __future__ import annotations
+
 import math
 import time as _time
 from dataclasses import asdict, dataclass
+from typing import Any, TypeGuard
 
 from . import geodesy
 
@@ -32,11 +35,12 @@ class Direction:
     turn_deg: float | None  # negative = left, positive = right; None without a heading
     turn: str | None        # e.g. "bear right"
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {k: (round(v, 1) if isinstance(v, float) else v) for k, v in self.__dict__.items()}
 
 
-def direction(from_lat, from_lon, to_lat, to_lon, heading=None):
+def direction(from_lat: float, from_lon: float, to_lat: float, to_lon: float,
+              heading: float | None = None) -> Direction:
     """Straight-line distance and direction from one point to another.
 
     heading: the direction the rider is facing or moving, in degrees from
@@ -62,7 +66,7 @@ def direction(from_lat, from_lon, to_lat, to_lon, heading=None):
                      turn_deg, turn)
 
 
-def turn_words(turn_deg):
+def turn_words(turn_deg: float) -> str:
     """Plain-language turn instruction for a relative angle (negative = left)."""
     size = abs(turn_deg)
     if size < 10:
@@ -77,7 +81,7 @@ def turn_words(turn_deg):
     return f"turn {side}"
 
 
-def format_distance(metres, units="m"):
+def format_distance(metres: float, units: str = "m") -> str:
     """Distance as short text that doesn't flicker while the rider moves.
 
     Metres: 5 m steps under 100 m, 10 m steps under 1 km, then km to one decimal.
@@ -130,7 +134,7 @@ class NavState:
     arrow_deg: float | None = None
     arrow_mode: str | None = None
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -157,40 +161,42 @@ class NavigationSession:
     the current time.
     """
 
-    def __init__(self, target_lat, target_lon, *, arrived_m=15.0, almost_m=50.0, moving_mps=2.0,
-                 compass_fresh_s=3.0, smoothing_window_s=10.0, smoothing_count=3):
+    def __init__(self, target_lat: float, target_lon: float, *, arrived_m: float = 15.0,
+                 almost_m: float = 50.0, moving_mps: float = 2.0, compass_fresh_s: float = 3.0,
+                 smoothing_window_s: float = 10.0, smoothing_count: int = 3) -> None:
         self.arrived_m = arrived_m
         self.almost_m = almost_m
         self.moving_mps = moving_mps
         self.compass_fresh_s = compass_fresh_s
         self.smoothing_window_s = smoothing_window_s
         self.smoothing_count = smoothing_count
-        self._compass = None            # (heading, time)
+        self._compass: tuple[float, float] | None = None            # (heading, time)
         self.target = (float(target_lat), float(target_lon))
         self.reset()
 
-    def set_target(self, lat, lon):
+    def set_target(self, lat: float, lon: float) -> NavState:
         """Change the target; the rider's position and heading are kept."""
         self.target = (float(lat), float(lon))
         return self.state
 
-    def reset(self):
+    def reset(self) -> NavState:
         """Forget the rider's position, heading and GPS history (the target stays)."""
-        self.position = None
-        self.accuracy_m = None
-        self.heading = None             # (degrees, source)
-        self._fixes = []                # (lat, lon, accuracy, time)
-        self._anchor = None
+        self.position: tuple[float, float] | None = None
+        self.accuracy_m: float | None = None
+        self.heading: tuple[float, str] | None = None             # (degrees, source)
+        self._fixes: list[tuple[float, float, float, float]] = []  # (lat, lon, accuracy, time)
+        self._anchor: tuple[float, float] | None = None
         self._live = False
         return self.state
 
-    def add_fix(self, lat, lon, accuracy=None, speed=None, heading=None, time=None):
+    def add_fix(self, lat: float, lon: float, accuracy: float | None = None, speed: float | None = None,
+                heading: float | None = None, time: float | None = None) -> NavState:
         """A GPS reading: position, accuracy in metres, speed in m/s, direction of travel in degrees."""
         if not _valid_point(lat, lon):
             return self.state                    # a bad reading (NaN, out of range) is ignored
         now = _now(time)
         acc = max(accuracy if _finite(accuracy) and accuracy > 0 else 20.0, 1.0)
-        if not self._live or direction(*self.position, lat, lon).distance_m > max(acc, 5.0):
+        if not self._live or self.position is None or direction(*self.position, lat, lon).distance_m > max(acc, 5.0):
             self._fixes = []
         self._fixes.append((lat, lon, acc, now))
         self._fixes = [f for f in self._fixes if now - f[3] < self.smoothing_window_s][-self.smoothing_count:]
@@ -213,7 +219,7 @@ class NavigationSession:
             self.heading = None
         return self.state
 
-    def add_compass(self, heading, time=None):
+    def add_compass(self, heading: float, time: float | None = None) -> NavState:
         """A compass reading in degrees from north (already corrected for screen rotation).
 
         It is used straight away unless the GPS direction of travel is in charge, and it is
@@ -226,7 +232,7 @@ class NavigationSession:
             self.heading = (self._compass[0], "compass")
         return self.state
 
-    def set_position(self, lat, lon, heading=None):
+    def set_position(self, lat: float, lon: float, heading: float | None = None) -> NavState:
         """Place the rider directly, e.g. a manual pick or a simulation; no smoothing.
 
         With a heading, that heading is used ('manual'). Without one, once the rider has moved
@@ -253,7 +259,7 @@ class NavigationSession:
         return self.state
 
     @property
-    def state(self):
+    def state(self) -> NavState:
         tlat, tlon = self.target
         if self.position is None:
             return NavState("waiting", tlat, tlon)
@@ -271,18 +277,18 @@ class NavigationSession:
                         "relative" if hdg is not None else "north-up")
 
 
-def _now(t):
+def _now(t: float | None) -> float:
     return _time.time() if t is None else float(t)
 
 
-def _finite(x):
+def _finite(x: object) -> TypeGuard[float]:
     return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
 
 
-def _valid(heading):
+def _valid(heading: object) -> TypeGuard[float]:
     return _finite(heading)
 
 
-def _valid_point(lat, lon):
+def _valid_point(lat: float, lon: float) -> bool:
     """A usable GPS position: finite numbers within -90..90 and -180..180."""
     return _finite(lat) and _finite(lon) and -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0
