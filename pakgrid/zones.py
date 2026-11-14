@@ -28,14 +28,21 @@ Rules:
 Internally a zone is {cell ID: 25-bit mask of its sub-cells}, which also is its stored form.
 """
 
+from __future__ import annotations
+
 import math
 from bisect import bisect_right
 from collections import defaultdict
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any, ClassVar
 
 from . import geodesy, ids, spec
 from .errors import OutsideGridError, PakgridError
-from .layout import SCALE, SUB, to_e7
+from .layout import SCALE, SUB, GridLayout, QuadrantLayout, to_e7
+
+Masks = dict[int, int]           # {cell ID: 25-bit mask of its sub-cells}
+RingE7 = list[tuple[int, int]]   # (lat_e7, lon_e7) points of a closed ring
 
 ZONE_VERSION = 1
 FULL = (1 << (SUB * SUB)) - 1        # mask of a cell with all 25 sub-cells
@@ -49,7 +56,7 @@ class ZoneError(PakgridError, ValueError):
 
 # -- Polygons ------------------------------------------------------------------------------
 
-def rings_e7(polygon):
+def rings_e7(polygon: Any) -> list[RingE7]:
     """Closed rings of (lat_e7, lon_e7) from [(lat, lon), ...], [[ring], [hole], ...] or a GeoJSON
     Polygon or MultiPolygon ({"type": "Polygon", "coordinates": [[[lon, lat], ...], ...]})."""
     if isinstance(polygon, dict):
@@ -88,12 +95,12 @@ def rings_e7(polygon):
     return out
 
 
-def _is_point(p):
+def _is_point(p: object) -> bool:
     return isinstance(p, (list, tuple)) and len(p) == 2 and all(
         isinstance(v, (int, float)) and not isinstance(v, bool) for v in p)
 
 
-def point_in_rings(lat_e7, lon_e7, rings):
+def point_in_rings(lat_e7: int, lon_e7: int, rings: Iterable[RingE7]) -> bool:
     """True if the point is inside the rings (even-odd rule), in exact integer arithmetic.
 
     A ray goes east from the point; an edge counts when it straddles the point's latitude
@@ -114,8 +121,8 @@ def point_in_rings(lat_e7, lon_e7, rings):
 class _Edges:
     """A polygon's edges, indexed by latitude band, for scanning one latitude at a time."""
 
-    def __init__(self, rings):
-        self.bands = defaultdict(list)
+    def __init__(self, rings: Iterable[RingE7]) -> None:
+        self.bands: defaultdict[int, list[tuple[int, int, int, int]]] = defaultdict(list)
         for ring in rings:
             for (y1, x1), (y2, x2) in zip(ring, ring[1:]):
                 if y1 == y2:
@@ -123,7 +130,7 @@ class _Edges:
                 for b in range(min(y1, y2) // _BAND, max(y1, y2) // _BAND + 1):
                     self.bands[b].append((y1, x1, y2, x2))
 
-    def thresholds(self, lat):
+    def thresholds(self, lat: int) -> list[int]:
         """Sorted integers T: an integer longitude x is inside the polygon at latitude `lat` exactly
         when an odd number of T are greater than x (the same test as point_in_rings)."""
         out = []
@@ -138,7 +145,7 @@ class _Edges:
         return out
 
 
-def polygon_masks(layout, rings):
+def polygon_masks(layout: GridLayout, rings: Sequence[RingE7]) -> Masks:
     """{cell ID: mask} of the sub-cells whose centroid is inside the rings.
 
     Scans the polygon one row of sub-cells at a time: the polygon's crossings of the row's
@@ -149,7 +156,7 @@ def polygon_masks(layout, rings):
     ys = [y for r in rings for y, _ in r]
     south, north = min(ys), max(ys)
     edges = _Edges(rings)
-    masks = defaultdict(int)
+    masks: defaultdict[int, int] = defaultdict(int)
     count = 0
     for ql in layout.quadrants:
         lats = ql.lat_e7
@@ -182,11 +189,11 @@ def polygon_masks(layout, rings):
     return dict(masks)
 
 
-def _centroid_lon(ql, row, j):
+def _centroid_lon(ql: QuadrantLayout, row: int, j: int) -> int:
     return to_e7((ql.fine_lon(row, j) + ql.fine_lon(row, j + 1)) / 2)
 
 
-def _first_col_at_or_east(ql, row, m5, x):
+def _first_col_at_or_east(ql: QuadrantLayout, row: int, m5: int, x: int) -> int:
     """The first sub-cell column j whose centroid longitude is >= x (m5 if none)."""
     w, e = ql.west_e7, ql.east_e7
     j = min(max(int((x - w) * m5 // (e - w)), 0), m5)
@@ -197,7 +204,7 @@ def _first_col_at_or_east(ql, row, m5, x):
     return j
 
 
-def _set_run(masks, q, row, sr, j0, j1):
+def _set_run(masks: defaultdict[int, int], q: int, row: int, sr: int, j0: int, j1: int) -> None:
     """Set the bits of sub-cell columns j0..j1-1 of sub-row sr in row `row` of quadrant q."""
     while j0 < j1:
         col, sc = divmod(j0, SUB)
@@ -209,21 +216,24 @@ def _set_run(masks, q, row, sr, j0, j1):
 
 # -- Zones ----------------------------------------------------------------------------------
 
-def _rows_of(mask):
+def _rows_of(mask: int) -> list[int]:
     return [k for k in range(SUB * SUB) if mask >> k & 1]
 
 
 @dataclass(frozen=True, eq=False)
 class Zone:
     """A set of grid sub-cells (see the module docstring). Immutable; combine with | & -."""
-    masks: dict                 # {cell ID: 25-bit mask of its sub-cells in the zone}; no zero masks
+    masks: Masks                # {cell ID: 25-bit mask of its sub-cells in the zone}; no zero masks
+    # The grid layout, set on each zone made with one; zones made without one have None
+    # (contains() needs it). Not a dataclass field: it is not part of a zone's value.
+    _layout: ClassVar[GridLayout | None] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         object.__setattr__(self, "masks", {c: m for c, m in self.masks.items() if m})
 
     # -- Checks ----------------------------------------------------------------------
 
-    def contains(self, lat, lon):
+    def contains(self, lat: float, lon: float) -> bool:
         """True if the pin is in the zone: the sub-cell containing it is. Points outside the grid
         rectangle are in no zone."""
         if self._layout is None:
@@ -234,12 +244,14 @@ class Zone:
             return False
         return bool(self.masks.get(ids.cell_id(q, row, col), 0) >> (sr * SUB + sc) & 1)
 
-    def __contains__(self, sub_cell_id):
+    def __contains__(self, sub_cell_id: object) -> bool:
+        if not isinstance(sub_cell_id, int):
+            return False
         """`sub_cell_id in zone`."""
         cid, sub = ids.split_sub_cell_id(sub_cell_id)
         return bool(self.masks.get(cid, 0) >> sub & 1)
 
-    def covers_cell(self, cell_id):
+    def covers_cell(self, cell_id: int) -> str:
         """'all', 'part' or 'none': how much of a cell the zone covers."""
         m = self.masks.get(cell_id, 0)
         return "all" if m == FULL else "part" if m else "none"
@@ -247,25 +259,25 @@ class Zone:
     # -- Contents --------------------------------------------------------------------
 
     @property
-    def sub_cell_count(self):
+    def sub_cell_count(self) -> int:
         return sum(bin(m).count("1") for m in self.masks.values())
 
     @property
-    def cell_count(self):
+    def cell_count(self) -> int:
         """Cells with at least one sub-cell in the zone."""
         return len(self.masks)
 
     @property
-    def empty(self):
+    def empty(self) -> bool:
         return not self.masks
 
-    def cells(self, full_only=False):
+    def cells(self, full_only: bool = False) -> list[int]:
         """Cell IDs with any (or, with full_only, all 25) of their sub-cells in the zone, in order."""
         return sorted(c for c, m in self.masks.items() if not full_only or m == FULL)
 
-    def sub_cells(self):
+    def sub_cells(self) -> list[int]:
         """Sub-cell IDs in the zone, in order."""
-        out = []
+        out: list[int] = []
         for c in sorted(self.masks):
             m = self.masks[c]
             base = ids.sub_cell_id(c, 0)
@@ -276,11 +288,10 @@ class Zone:
         return out
 
     @property
-    def area_km2(self):
+    def area_km2(self) -> float:
         """The zone's area on the ellipsoid, in km² (sub-cells of one row have the same area)."""
-        from .layout import GridLayout
         layout = self._layout or GridLayout.from_spec()
-        per_row = defaultdict(int)
+        per_row: defaultdict[tuple[int, int, int, int], int] = defaultdict(int)
         for c, m in self.masks.items():
             q, row, col = ids.split_cell_id(c)
             for sr in range(SUB):
@@ -295,11 +306,10 @@ class Zone:
             total += n * geodesy.rect_area(ql.fine_lat(i), ql.fine_lat(i + 1), 0.0, width)
         return total / 1e6
 
-    def bounds(self):
+    def bounds(self) -> tuple[float, float, float, float] | None:
         """(south, west, north, east) in degrees of the zone's cells, or None if empty."""
         if self.empty:
             return None
-        from .layout import GridLayout
         layout = self._layout or GridLayout.from_spec()
         box = None
         for c in self.masks:
@@ -310,38 +320,38 @@ class Zone:
 
     # -- Combining ---------------------------------------------------------------------
 
-    def __or__(self, other):
+    def __or__(self, other: Zone) -> Zone:
         out = dict(self.masks)
         for c, m in other.masks.items():
             out[c] = out.get(c, 0) | m
         return self._new(out, other)
 
-    def __and__(self, other):
+    def __and__(self, other: Zone) -> Zone:
         return self._new({c: m & other.masks[c] for c, m in self.masks.items() if c in other.masks}, other)
 
-    def __sub__(self, other):
+    def __sub__(self, other: Zone) -> Zone:
         return self._new({c: m & ~other.masks.get(c, 0) & FULL for c, m in self.masks.items()}, other)
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, Zone) and self.masks == other.masks
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(frozenset(self.masks.items()))
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.sub_cell_count
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"Zone({self.sub_cell_count:,} sub-cells in {self.cell_count:,} cells)"
 
-    def _new(self, masks, other=None):
+    def _new(self, masks: Masks, other: Zone | None = None) -> Zone:
         z = Zone(masks)
         object.__setattr__(z, "_layout", self._layout or getattr(other, "_layout", None))
         return z
 
     # -- Storing ---------------------------------------------------------------------------
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         """JSON-ready: {"zone_version", "grid_version", "full": [cell IDs], "partial": [[cell ID, mask]]},
         both in ID order, so the same zone always gives the same data."""
         return {"zone_version": ZONE_VERSION, "grid_version": spec.GRID_VERSION,
@@ -350,12 +360,12 @@ class Zone:
                 "partial": [[c, self.masks[c]] for c in sorted(self.masks) if self.masks[c] != FULL]}
 
     @classmethod
-    def from_dict(cls, data, grid=None):
+    def from_dict(cls, data: Mapping[str, Any], grid: Any = None) -> Zone:
         """A zone from to_dict() data; pass the Grid (or its layout) to check the cells and to use
         contains()."""
         if data.get("zone_version") != ZONE_VERSION or data.get("grid_version") != spec.GRID_VERSION:
             raise ZoneError(f"not zone version {ZONE_VERSION} data for grid version {spec.GRID_VERSION}")
-        layout = getattr(grid, "layout", grid)
+        layout: GridLayout | None = getattr(grid, "layout", grid)
         masks = {}
         for c in data.get("full", []):
             masks[c] = FULL
@@ -370,16 +380,15 @@ class Zone:
         object.__setattr__(z, "_layout", layout)
         return z
 
-    def to_geojson(self, properties=None):
+    def to_geojson(self, properties: Mapping[str, Any] | None = None) -> dict[str, Any]:
         """The zone as a GeoJSON Feature: one outline (Polygon or MultiPolygon, with holes) of its
         sub-cells, with sub_cells and area_km2 among the properties (see pakgrid.geojson)."""
         from .geojson import feature, geometry
-        from .layout import GridLayout
         props = {"sub_cells": self.sub_cell_count, "area_km2": round(self.area_km2, 6)}
         props.update(properties or {})
         return feature(geometry(self._layout or GridLayout.from_spec(), self.masks), props)
 
-    def codes(self, full_cells=True):
+    def codes(self, full_cells: bool = True) -> list[str]:
         """Readable codes: whole cells as cell codes (with full_cells) and the rest as sub-cell codes."""
         out = []
         for c in sorted(self.masks):
@@ -392,10 +401,7 @@ class Zone:
         return out
 
 
-Zone._layout = None        # zones made without a layout: contains() needs one
-
-
-def make_zone(masks, layout):
+def make_zone(masks: Masks, layout: GridLayout | None) -> Zone:
     z = Zone(masks)
     object.__setattr__(z, "_layout", layout)
     return z
@@ -408,19 +414,19 @@ class ZoneIndex:
         index.at(31.5204, 74.3587)        # ['shop-42']
     """
 
-    def __init__(self, zones, layout=None):
-        self._by_cell = defaultdict(list)
-        self._layout = layout
-        self.names = []
+    def __init__(self, zones: Mapping[Any, Zone], layout: GridLayout | None = None) -> None:
+        self._by_cell: defaultdict[int, list[tuple[Any, int]]] = defaultdict(list)
+        self.names: list[Any] = []
         for name, zone in zones.items():
             self.names.append(name)
-            self._layout = self._layout or zone._layout
+            layout = layout or zone._layout
             for c, m in zone.masks.items():
                 self._by_cell[c].append((name, m))
-        if self._layout is None:
+        if layout is None:
             raise ZoneError("the zones have no grid layout; pass layout=grid.layout")
+        self._layout: GridLayout = layout
 
-    def at(self, lat, lon):
+    def at(self, lat: float, lon: float) -> list[Any]:
         """Names of the zones containing the pin, in the order the zones were given."""
         try:
             q, row, col, sr, sc = self._layout.locate_e7(to_e7(lat), to_e7(lon))
@@ -429,6 +435,6 @@ class ZoneIndex:
         bit = sr * SUB + sc
         return [name for name, m in self._by_cell.get(ids.cell_id(q, row, col), ()) if m >> bit & 1]
 
-    def at_sub_cell(self, sub_cell_id):
+    def at_sub_cell(self, sub_cell_id: int) -> list[Any]:
         cid, sub = ids.split_sub_cell_id(sub_cell_id)
         return [name for name, m in self._by_cell.get(cid, ()) if m >> sub & 1]
