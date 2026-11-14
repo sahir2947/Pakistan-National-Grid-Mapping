@@ -136,6 +136,9 @@ first release. Pull request numbers are in brackets.
   [#10, #12].
 - Type hints on every function, a `py.typed` marker so apps' type checkers
   check their calls into pakgrid, and `mypy` in continuous integration. [#30]
+- `CONTRIBUTING.md` (bug reports and suggestions from anyone, code changes by
+  the owner's permission only), `SECURITY.md` (private reporting), issue forms
+  for bugs and feature requests, and a pull request checklist.
 
 ### Fixed
 - Verifier gaps, bad sensor readings in navigation, and documentation, from a

@@ -295,3 +295,7 @@ For tests or a pilot, build part of the grid, for example
 
 **Tests:** `pip install -e ".[test]"`, then `pytest`. GitHub Actions runs them on
 Python 3.10–3.13 for every push to `main` and every pull request.
+
+**Contributing:** bug reports and suggestions are welcome as issues. Code
+changes are by the owner's permission only; see [CONTRIBUTING.md](CONTRIBUTING.md).
+Report security problems privately ([SECURITY.md](SECURITY.md)).

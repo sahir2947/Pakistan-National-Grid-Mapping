@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/sahir2947/Pakistan-National-Grid-Mapping/security/advisories/new
+    about: Report it privately, never in a public issue (see SECURITY.md).
+  - name: How to contribute
+    url: https://github.com/sahir2947/Pakistan-National-Grid-Mapping/blob/main/CONTRIBUTING.md
+    about: Code changes are by the owner's permission only; read this first.
