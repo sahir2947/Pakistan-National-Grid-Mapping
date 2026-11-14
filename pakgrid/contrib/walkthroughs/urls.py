@@ -1,3 +1,6 @@
+"""The API's URLs (see pakgrid.contrib.walkthroughs.api); mount with
+`path("api/", include("pakgrid.contrib.walkthroughs.urls"))`."""
+
 from django.urls import path
 
 from . import api

@@ -146,7 +146,38 @@ Because the engine uses an optimized relational schema layout and basic integer 
 The grid described above is implemented as the Python package `pakgrid`.
 Full design documentation: [project.md](project.md).
 
-**Requirements:** Python 3.10+, no other dependencies.
+**Requirements:** Python 3.10+, no other dependencies. The optional Django
+app for walkthroughs needs `pip install "pakgrid[django]"`.
+
+### Features
+
+Each feature stands alone: an app uses only what it needs. Full details are
+in the linked sections of [project.md](project.md).
+
+| Feature | Python | Command line | Map viewer | Docs |
+|---|---|---|---|---|
+| Locate a GPS point (sub-cell, offset, GPS confidence) | `grid.locate`, `locate_many` | `pakgrid locate` | tap, **My location** | [§8–§9](project.md#8-how-a-lookup-works) |
+| Cells, sub-cells, neighbours, areas | `grid.cell`, `sub_cell`, `children`, `neighbours`, `cells_in_area` | `pakgrid show` | tap, search | [§7.1](project.md#71-python-library) |
+| Grid addresses (`11-0140-0471-00 W23 S18`), no database | `address_from_point`, `parse_address`, `resolve_address` | | details panel | [§4.4](project.md#44-readable-codes) |
+| Pakistan border flags and the Pakistan edition | `grid.in_pakistan`, `pakistan_flags` | `pakgrid build --pakistan-only` | **Pakistan only** | [§5.6](project.md#56-pakistan-border-flags) |
+| Place names (province, district, tehsil, locality) | `grid.place`, `find_places`, `cells_in_place` | `pakgrid places` | **Places**, search | [§5.7](project.md#57-layers-on-the-grid-and-the-places-layer) |
+| User localities | `user.add`, … | `pakgrid user-places add` | **Draw** | [§5.8](project.md#58-user-places-localities-drawn-by-an-apps-users) |
+| User roads | `user.add_road`, … | `pakgrid user-places add-road` | **Roads** | [§5.9](project.md#59-user-roads-streets-drawn-and-named-by-an-apps-users) |
+| What can drive through a street | `user.set_access`, `access_at` | `pakgrid user-places access` | **Roads** | [§5.9](project.md#59-user-roads-streets-drawn-and-named-by-an-apps-users) |
+| Walkthroughs (photos from the road to the door) | `grid.walkthrough`, `WalkthroughGuide` | `pakgrid walkthrough` | **Walk** | [§5.10](project.md#510-walkthroughs-photos-from-the-road-to-the-door), [rider rule](conformance/WALKTHROUGH.md) |
+| Radius search, cell-to-cell distance | `grid.cells_within`, `distance` | `pakgrid within`, `distance` | **Around this point**, **Measure** | [§7.5](project.md#75-radius-search-and-cell-to-cell-distances) |
+| Custom zones (delivery areas) | `grid.zone`, `ZoneIndex` | `pakgrid zone` | **Zone** | [§7.6](project.md#76-custom-zones) |
+| GeoJSON for any map | `grid.geojson`, `cells_geojson`, `place_geojson`, `zone.to_geojson` | `pakgrid geojson` | **Download GeoJSON** | [§7.7](project.md#77-geojson) |
+| Nearest lookup (riders, shops, localities) | `grid.point_index`, `nearest`, `nearest_places` | `pakgrid nearest` | **Nearest places** | [§7.8](project.md#78-nearest-lookup) |
+| Custom blocks, described | `grid.block_set`, `describe_zone` | `pakgrid blocks` | **Blocks** | [§7.9](project.md#79-custom-blocks) |
+| Rider navigation, no database | `direction`, `NavigationSession`, `format_distance` | | **Navigate here** | [§10](project.md#10-rider-navigation), [rules](conformance/NAVIGATION.md) |
+| Building and verifying the database | | `pakgrid build`, `build-places`, `verify`, `info` | | [§5](project.md#5-pre-built-catalogue-and-database) |
+| Ports to other languages (e.g. Dart) | | `pakgrid export-conformance` | | [conformance/](conformance/) |
+| Using it in a backend | | | | [docs/django.md](docs/django.md) |
+
+The viewer's JavaScript (`viewer/pakgrid.js`) repeats the grid, addresses,
+navigation, zones, GeoJSON, nearest lookup, blocks, roads, street access and
+the walkthrough rider rule, tested against the Python library.
 
 ```bash
 pip install -e .                 # from this repository
@@ -204,10 +235,10 @@ format_distance(s.distance_m), s.compass_short, s.turn, s.status       # ('370 m
 The same functions exist in JavaScript in `viewer/pakgrid.js`
 (`grid.addressFromPoint`, `PakGrid.NavigationSession`, …), tested against Python.
 
-**Porting navigation to your app's language:** [conformance/](conformance/)
-has the exact navigation rules and a test file of about 2,000 cases with
-expected results, so a port (for example in Dart for a Flutter app) can prove
-it matches pakgrid.
+**Porting to your app's language:** [conformance/](conformance/) has the
+exact rules for rider navigation and for the walkthrough rider rule, with test
+files of expected results (about 2,000 and 610 cases), so a port (for example
+in Dart for a Flutter app) can prove it matches pakgrid.
 
 **Using it in a backend:** [docs/django.md](docs/django.md) sets up `pakgrid`
 in a Django REST Framework backend step by step: install, build and verify the

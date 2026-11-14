@@ -1,3 +1,7 @@
+"""The walkthrough records: a `Walkthrough` (its data, status, video and review) and its
+`WalkthroughPhoto`s. Files live in PAKGRID_WALKTHROUGHS['STORAGE'] and are deleted with
+their records."""
+
 import os
 import uuid
 

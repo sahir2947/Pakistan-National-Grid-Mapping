@@ -1,5 +1,5 @@
 """Command-line tools: pakgrid build | build-places | verify | locate | show | within | distance | nearest |
-zone | blocks | geojson | places | user-places | info | export-layout | export-conformance."""
+zone | blocks | geojson | places | user-places | walkthrough | info | export-layout | export-conformance."""
 
 import argparse
 import json
