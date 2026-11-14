@@ -16,8 +16,11 @@ as (quadrant, i, j): its row and column counted at that level within the
 quadrant.
 """
 
+from __future__ import annotations
+
 import math
 from bisect import bisect_right
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from . import geodesy, ids, spec
@@ -27,8 +30,11 @@ SCALE = spec.COORD_SCALE
 SUB = spec.SUBDIVISIONS
 LEVELS = ("cell", "sub")
 
+# (quadrant, row, column) of a cell, or (quadrant, sub-row, sub-column) of a sub-cell
+Item = tuple[int, int, int]
 
-def to_e7(deg):
+
+def to_e7(deg: float) -> int:
     """Degrees -> integer units of 1e-7 degree."""
     return round(deg * SCALE)
 
@@ -38,7 +44,7 @@ WEST_E7, EAST_E7 = to_e7(spec.WEST), to_e7(spec.EAST)
 MID_LAT_E7, MID_LON_E7 = to_e7(spec.MID_LAT), to_e7(spec.MID_LON)
 
 
-def _unit(level):
+def _unit(level: str) -> int:
     if level == "cell":
         return SUB
     if level == "sub":
@@ -54,13 +60,13 @@ class QuadrantLayout:
     west: float
     east: float
     nrows: int
-    ncols: tuple
-    lat_e7: tuple = field(repr=False)  # fine latitude lines, 5 * nrows + 1 values
+    ncols: tuple[int, ...]
+    lat_e7: tuple[int, ...] = field(repr=False)  # fine latitude lines, 5 * nrows + 1 values
     west_e7: int = field(repr=False)
     east_e7: int = field(repr=False)
 
     @classmethod
-    def build(cls, q, nrows, ncols):
+    def build(cls, q: int, nrows: int, ncols: Iterable[int]) -> QuadrantLayout:
         south, north, west, east = spec.quadrant_bounds(q)
         n5 = SUB * nrows
         lats = tuple(to_e7(north if i == n5 else south + (north - south) * i / n5)
@@ -68,43 +74,43 @@ class QuadrantLayout:
         return cls(q, south, north, west, east, nrows, tuple(ncols), lats, to_e7(west), to_e7(east))
 
     @property
-    def code(self):
+    def code(self) -> str:
         return spec.QUADRANTS[self.q][0]
 
     @property
-    def name(self):
+    def name(self) -> str:
         return spec.QUADRANTS[self.q][1]
 
     @property
-    def ncells(self):
+    def ncells(self) -> int:
         return sum(self.ncols)
 
-    def fine_lat(self, i):
+    def fine_lat(self, i: int) -> float:
         n5 = SUB * self.nrows
         return self.north if i == n5 else self.south + (self.north - self.south) * i / n5
 
-    def fine_lon(self, row, j):
+    def fine_lon(self, row: int, j: int) -> float:
         m5 = SUB * self.ncols[row]
         return self.east if j == m5 else self.west + (self.east - self.west) * j / m5
 
-    def fine_lon_e7(self, row, j):
+    def fine_lon_e7(self, row: int, j: int) -> int:
         return to_e7(self.fine_lon(row, j))
 
-    def level_rows(self, level):
+    def level_rows(self, level: str) -> int:
         return self.nrows * SUB // _unit(level)
 
-    def level_cols(self, i, level):
+    def level_cols(self, i: int, level: str) -> int:
         u = _unit(level)
         return self.ncols[i * u // SUB] * SUB // u
 
-    def item_bounds_e7(self, i, j, level):
+    def item_bounds_e7(self, i: int, j: int, level: str) -> tuple[int, int, int, int]:
         """(south, west, north, east) of item (i, j) in units of 1e-7 degree."""
         u = _unit(level)
         row = i * u // SUB
         return (self.lat_e7[i * u], self.fine_lon_e7(row, j * u),
                 self.lat_e7[(i + 1) * u], self.fine_lon_e7(row, (j + 1) * u))
 
-    def item_centroid_e7(self, i, j, level):
+    def item_centroid_e7(self, i: int, j: int, level: str) -> tuple[int, int]:
         """(lat, lon) of item (i, j)'s area-weighted centroid, in 1e-7 degree.
 
         The same formulas the builder stores, so no database is needed to get them.
@@ -118,38 +124,38 @@ class QuadrantLayout:
 class GridLayout:
     """Row and column structure of all four quadrants."""
 
-    def __init__(self, quadrants):
+    def __init__(self, quadrants: Iterable[QuadrantLayout]) -> None:
         self.quadrants = tuple(sorted(quadrants, key=lambda ql: ql.q))
         if [ql.q for ql in self.quadrants] != [0, 1, 2, 3]:
             raise ValueError("a layout needs exactly quadrants 0-3")
 
     @classmethod
-    def from_spec(cls):
+    def from_spec(cls) -> GridLayout:
         """Compute the layout from the grid rules."""
         return cls(QuadrantLayout.build(q, *compute_quadrant_rows(q)) for q in spec.QUADRANTS)
 
     @property
-    def total_cells(self):
+    def total_cells(self) -> int:
         return sum(ql.ncells for ql in self.quadrants)
 
     @property
-    def total_sub_cells(self):
+    def total_sub_cells(self) -> int:
         return self.total_cells * SUB * SUB
 
-    def same_shape(self, other):
+    def same_shape(self, other: GridLayout) -> bool:
         return all(a.nrows == b.nrows and a.ncols == b.ncols
                    for a, b in zip(self.quadrants, other.quadrants))
 
     # -- IDs -------------------------------------------------------------
 
-    def check_cell(self, q, row, col):
+    def check_cell(self, q: int, row: int, col: int) -> None:
         ql = self.quadrants[q]
         if row >= ql.nrows or col >= ql.ncols[row]:
             raise InvalidIdError(
                 f"cell {q:02b}-{row:04d}-{col:04d} does not exist: quadrant {ql.code} has "
                 f"{ql.nrows} rows" + (f" and row {row} has {ql.ncols[row]} columns" if row < ql.nrows else ""))
 
-    def item_from_id(self, item_id, level):
+    def item_from_id(self, item_id: int, level: str) -> Item:
         """(q, i, j) of a cell or sub-cell ID, checked against the layout."""
         if level == "cell":
             q, row, col = ids.split_cell_id(item_id)
@@ -162,7 +168,7 @@ class GridLayout:
         return q, row * SUB + sr, col * SUB + sc
 
     @staticmethod
-    def item_id(q, i, j, level):
+    def item_id(q: int, i: int, j: int, level: str) -> int:
         if level == "cell":
             return ids.cell_id(q, i, j)
         return ids.sub_cell_id(ids.cell_id(q, i // SUB, j // SUB),
@@ -170,7 +176,7 @@ class GridLayout:
 
     # -- Point location --------------------------------------------------
 
-    def locate_e7(self, lat_e7, lon_e7):
+    def locate_e7(self, lat_e7: int, lon_e7: int) -> tuple[int, int, int, int, int]:
         """(quadrant, row, column, sub_row, sub_col) containing a point given in 1e-7 degree.
 
         Edge rule: a point on a line belongs to the item north or east of it;
@@ -199,7 +205,7 @@ class GridLayout:
 
     # -- Topology --------------------------------------------------------
 
-    def _row_after(self, q, i, step, level):
+    def _row_after(self, q: int, i: int, step: int, level: str) -> tuple[int, int] | None:
         """The level row next to row i of quadrant q, as (half, i), or None at the outer edge."""
         half = q & 1
         ni = i + step
@@ -211,7 +217,8 @@ class GridLayout:
             return 0, self.quadrants[0].level_rows(level) - 1
         return None
 
-    def _cols_touching(self, q, i, level, w_e7, e_e7, strict_west=False):
+    def _cols_touching(self, q: int, i: int, level: str, w_e7: int, e_e7: int,
+                       strict_west: bool = False) -> list[int]:
         """Columns j of level row i in quadrant q whose span touches [w_e7, e_e7].
 
         With strict_west, an item that only ends exactly at w_e7 is excluded
@@ -231,10 +238,10 @@ class GridLayout:
                 out.append(j)
         return out
 
-    def neighbours(self, q, i, j, level):
+    def neighbours(self, q: int, i: int, j: int, level: str) -> list[Item]:
         """Items sharing an edge or a corner with (q, i, j), across quadrant lines too."""
         ql = self.quadrants[q]
-        found = []
+        found: list[Item] = []
         if j > 0:
             found.append((q, i, j - 1))
         elif q >= 2:
@@ -255,14 +262,15 @@ class GridLayout:
                 found.extend((nq, ni, nj) for nj in self._cols_touching(nq, ni, level, w, e))
         return found
 
-    def items_in_area(self, south_e7, west_e7, north_e7, east_e7, level):
+    def items_in_area(self, south_e7: int, west_e7: int, north_e7: int, east_e7: int,
+                      level: str) -> list[Item]:
         """All items whose area overlaps the closed box, in ID order."""
         south_e7, north_e7 = max(south_e7, SOUTH_E7), min(north_e7, NORTH_E7)
         west_e7, east_e7 = max(west_e7, WEST_E7), min(east_e7, EAST_E7)
         if south_e7 > north_e7 or west_e7 > east_e7:
             return []
         u = _unit(level)
-        out = []
+        out: list[Item] = []
         for ql in self.quadrants:
             lines = ql.lat_e7
             if ql.west_e7 > east_e7 or ql.east_e7 < west_e7 or lines[0] > north_e7 or lines[-1] < south_e7:
@@ -280,12 +288,12 @@ class GridLayout:
         return out
 
 
-def compute_quadrant_rows(q):
+def compute_quadrant_rows(q: int) -> tuple[int, list[int]]:
     """(number of rows, column count per row) of quadrant q, from the grid rules."""
     south, north, west, east = spec.quadrant_bounds(q)
     nrows = round(geodesy.meridian_arc(south, north) / spec.CELL_SIZE_M)
     height = (north - south) / nrows
-    ncols = []
+    ncols: list[int] = []
     for row in range(nrows):
         mid = south + (row + 0.5) * height
         width = geodesy.parallel_length(mid, west, east)
@@ -293,7 +301,7 @@ def compute_quadrant_rows(q):
     return nrows, ncols
 
 
-def rounding_margins(q):
+def rounding_margins(q: int) -> list[float]:
     """How far each row/column count is from a rounding boundary (0.5 = safest).
 
     Used by tests to prove the layout cannot change through last-digit
