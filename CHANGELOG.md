@@ -143,7 +143,7 @@ first release. Pull request numbers are in brackets.
   length and likely bugs, with its settings in `pyproject.toml`. [#32]
 - Documentation gaps closed: docstrings on every public method, the `ids`
   helpers, the last methods and command-line options in the reference, and the
-  package layout.
+  package layout. [#33]
 
 ### Fixed
 - Verifier gaps, bad sensor readings in navigation, and documentation, from a
