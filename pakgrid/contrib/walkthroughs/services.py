@@ -90,7 +90,8 @@ def create(user: Any, *, video: Any, track: Any, pin: Sequence[float], start: Se
         raise WalkthroughError(f"the video is {video.size / 1048576:.0f} MB; at most {limit} MB is allowed")
     props = {**(properties or {}), **({"place_ref": place_ref} if place_ref else {})}
     grid = conf.get_grid()
-    args: dict[str, Any] = dict(pin=pin, start=start, author=user.get_username() if user else "unknown", properties=props)
+    author = user.get_username() if user else "unknown"
+    args: dict[str, Any] = dict(pin=pin, start=start, author=author, properties=props)
     track = parse_track(track, video_start)
     data = grid.walkthrough(track, **args) if grid is not None else build_walkthrough(track, **args)
     with transaction.atomic():
@@ -264,7 +265,8 @@ def _replace_others(wt: Walkthrough) -> None:
 
 def live_for(place_ref: str) -> Walkthrough | None:
     """The address's live walkthrough, or None."""
-    return Walkthrough.objects.filter(place_ref=place_ref, status=Walkthrough.LIVE).order_by("-reviewed_at", "-created_at").first()
+    live = Walkthrough.objects.filter(place_ref=place_ref, status=Walkthrough.LIVE)
+    return live.order_by("-reviewed_at", "-created_at").first()
 
 
 def payload(wt: Walkthrough, url: Callable[[str], str] = lambda u: u) -> dict[str, Any]:

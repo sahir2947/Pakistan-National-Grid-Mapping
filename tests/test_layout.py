@@ -4,8 +4,7 @@ import pytest
 
 from pakgrid import geodesy, spec
 from pakgrid.errors import OutsideGridError
-from pakgrid.layout import (EAST_E7, MID_LAT_E7, MID_LON_E7, NORTH_E7, SOUTH_E7, WEST_E7, GridLayout,
-                            rounding_margins)
+from pakgrid.layout import EAST_E7, MID_LAT_E7, MID_LON_E7, NORTH_E7, SOUTH_E7, WEST_E7, GridLayout, rounding_margins
 
 
 def test_counts(layout):

@@ -56,8 +56,10 @@ class Boundary:
                 if (ax, ay) == (bx, by):
                     continue
                 k = len(x1)
-                x1.append(ax / SCALE); y1.append(ay / SCALE)
-                x2.append(bx / SCALE); y2.append(by / SCALE)
+                x1.append(ax / SCALE)
+                y1.append(ay / SCALE)
+                x2.append(bx / SCALE)
+                y2.append(by / SCALE)
                 # a 1-unit margin keeps float rounding of query latitudes from missing an edge
                 for b in range((min(ay, by) - 1) // _BAND, (max(ay, by) + 1) // _BAND + 1):
                     self._bands.setdefault(b, []).append(k)

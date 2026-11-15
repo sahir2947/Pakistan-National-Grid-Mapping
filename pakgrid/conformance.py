@@ -125,9 +125,10 @@ def _scale_cases() -> list[Case]:
 
 def _direction_cases(rng: random.Random, n: int) -> list[Case]:
     out: list[DirectionCase] = []
-    fixed: list[DirectionCase] = [(31.5215, 74.3570, 31.5204, 74.3587, 90.0), (31.52085, 74.35855, 31.5204, 74.3587, 180.0),
-             (31.5204, 74.3587, 31.5204, 74.3587, None), (31.5, 74.3, 31.6, 74.3001, 350.0),
-             (24.86, 67.0, 24.87, 67.0, None), (35.3, 75.6, 35.29, 75.61, 10.0)]
+    fixed: list[DirectionCase] = [
+        (31.5215, 74.3570, 31.5204, 74.3587, 90.0), (31.52085, 74.35855, 31.5204, 74.3587, 180.0),
+        (31.5204, 74.3587, 31.5204, 74.3587, None), (31.5, 74.3, 31.6, 74.3001, 350.0),
+        (24.86, 67.0, 24.87, 67.0, None), (35.3, 75.6, 35.29, 75.61, 10.0)]
     while len(fixed) + len(out) < n:
         lat, lon = rng.uniform(23.6, 37.0), rng.uniform(61.0, 77.8)
         case: DirectionCase = (lat, lon, lat + rng.uniform(-0.05, 0.05), lon + rng.uniform(-0.05, 0.05),
@@ -274,7 +275,8 @@ def _random_steps(rng: random.Random, target: tuple[float, float]) -> list[Step]
             steps.append(("set_position", {"lat": lat, "lon": lon,
                                            "heading": rng.choice([None, None, rng.uniform(0.0, 360.0)])}))
         elif kind == "set_target":
-            steps.append(("set_target", {"lat": lat + rng.uniform(-0.002, 0.002), "lon": lon + rng.uniform(-0.002, 0.002)}))
+            steps.append(("set_target", {"lat": lat + rng.uniform(-0.002, 0.002),
+                                         "lon": lon + rng.uniform(-0.002, 0.002)}))
         else:
             steps.append(("reset", {}))
     return steps
@@ -347,7 +349,7 @@ def write_conformance_files(output_dir: str | Path = "conformance") -> list[Path
 
 # -- Walkthrough suite ---------------------------------------------------------------
 
-_WT_LEGS: dict[str, list[tuple[float, float]]] = {                           # (east, north) metres of each leg of a walk
+_WT_LEGS: dict[str, list[tuple[float, float]]] = {      # (east, north) metres of each leg of a walk
     "L-shape": [(0, 40), (30, 0), (0, 20)],
     "straight": [(3, 60)],
     "zig-zag": [(0, 20), (20, 15), (-10, 25), (25, 0), (0, 15)],

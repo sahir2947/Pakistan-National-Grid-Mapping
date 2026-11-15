@@ -124,7 +124,8 @@ def test_describe_a_block_in_a_city(grid):
 def test_describe_spanning_several_places(grid):
     d = grid.describe_zone(grid.zone(circle=(31.525, 74.30, 3000)))    # crosses the Lahore Cantt / City line
     tehsils = d["places"]["tehsil"]
-    assert len(tehsils) >= 2 and sum(t["sub_cells"] for t in tehsils) == d["size"]["sub_cells"] - d["outside_pakistan_sub_cells"]
+    inside = d["size"]["sub_cells"] - d["outside_pakistan_sub_cells"]
+    assert len(tehsils) >= 2 and sum(t["sub_cells"] for t in tehsils) == inside
     counts = [t["sub_cells"] for t in tehsils]
     assert counts == sorted(counts, reverse=True)
     for t in tehsils[:2]:

@@ -264,7 +264,8 @@ class AccessMixin:
                 fields.update(line=json.dumps([[y / SCALE, x / SCALE] for y, x in pts]), length_m=round(length, 1))
             if old is None:
                 fields.update(source_id=source_id, created_by=author, created_at=now)
-                n = db.execute(f"INSERT INTO access_notes ({', '.join(fields)}) VALUES ({', '.join('?' * len(fields))})",
+                marks = ", ".join("?" * len(fields))
+                n = db.execute(f"INSERT INTO access_notes ({', '.join(fields)}) VALUES ({marks})",
                                tuple(fields.values())).lastrowid
                 assert n is not None                # an INSERT always gives its row ID
                 action = "add"
@@ -284,8 +285,8 @@ class AccessMixin:
     def remove_access(self, street: str | int | AccessNote | UserRoad, *, author: str) -> AccessNote | None:
         """Take back an answer: remove an access note (its ID, 'note/<id>', source_id or AccessNote;
         its history is kept), or clear a user road's `vehicles` detail (its key or UserRoad)."""
-        from .userplaces import _check_text, _now
         from .roads import UserRoad
+        from .userplaces import _check_text, _now
         author = _check_text(author, "author")
         road: UserRoad | None = street if isinstance(street, UserRoad) else None
         if isinstance(street, str) and not street.startswith("note/"):

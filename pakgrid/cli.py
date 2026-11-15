@@ -147,7 +147,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     a = bact.add_parser("geojson", help="every block's outline as GeoJSON")
     a.add_argument("-o", "--output", metavar="FILE")
 
-    p = sub.add_parser("geojson", help="write cells, a zone or a place as GeoJSON (for Google Maps, Mapbox, Leaflet ...)")
+    p = sub.add_parser("geojson",
+                       help="write cells, a zone or a place as GeoJSON (for Google Maps, Mapbox, Leaflet ...)")
     p.add_argument("--db", default=DEFAULT_DB)
     src = p.add_mutually_exclusive_group(required=False)
     src.add_argument("--cells", nargs="+", metavar="CODE", help="cell and sub-cell codes")
@@ -155,7 +156,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     src.add_argument("--zone", metavar="ZONE.json", help="a zone file from `pakgrid zone make`")
     src.add_argument("--circle", nargs=3, type=float, metavar=("LAT", "LON", "METRES"),
                      help="the sub-cells within a radius, as one outline")
-    src.add_argument("--polygon", metavar="FILE", help="the sub-cells inside a polygon (as `zone make`), as one outline")
+    src.add_argument("--polygon", metavar="FILE",
+                     help="the sub-cells inside a polygon (as `zone make`), as one outline")
     p.add_argument("--merge", action="store_true", help="with --cells: one outline instead of one box per block")
     p.add_argument("--pakistan-only", action="store_true", help="keep only sub-cells in Pakistan")
     p.add_argument("--user-places", default=DEFAULT_USER_PLACES, metavar="FILE",
@@ -258,9 +260,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     a.add_argument("--db", default=DEFAULT_DB)
     a.add_argument("--track", required=True, metavar="FILE",
                    help="JSON readings [{t, lat, lon, accuracy}, ...] (t: seconds into the video), or a GPX file")
-    a.add_argument("--video-start", metavar="TIME", help="for GPX: when the video started (ISO time); default the first point")
+    a.add_argument("--video-start", metavar="TIME",
+                   help="for GPX: when the video started (ISO time); default the first point")
     a.add_argument("--pin", nargs=2, type=float, required=True, metavar=("LAT", "LON"), help="the door")
-    a.add_argument("--start", nargs=2, type=float, metavar=("LAT", "LON"), help="the point on the road (default the first reading)")
+    a.add_argument("--start", nargs=2, type=float, metavar=("LAT", "LON"),
+                   help="the point on the road (default the first reading)")
     a.add_argument("--author", required=True)
     a.add_argument("-o", "--output", metavar="FILE", help="write the walkthrough JSON here (default: print it)")
     a.add_argument("--video", metavar="FILE", help="also take the photos from this video (needs ffmpeg) ...")
@@ -284,7 +288,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("-o", "--output-dir", default="viewer")
 
     p = sub.add_parser("export-conformance",
-                       help="write the conformance test files for ports to other languages (navigation.json, walkthrough.json)")
+                       help="write the conformance test files for ports to other languages "
+                            "(navigation.json, walkthrough.json)")
     p.add_argument("-o", "--output-dir", default="conformance")
 
     args = parser.parse_args(argv)
@@ -358,6 +363,7 @@ def _export_layout(args: Args) -> int:
 def _walkthrough(args: Args) -> int:
     import shutil
     import subprocess
+
     from .walkthrough import Walkthrough, read_gpx
     a = args.action
     if a == "build":

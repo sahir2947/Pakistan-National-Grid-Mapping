@@ -77,7 +77,8 @@ def photo_path(instance: WalkthroughPhoto, filename: str) -> str:
 class Walkthrough(models.Model):
     """One recorded walk from the road to an address's door, and its photos."""
 
-    PROCESSING, REVIEW, LIVE, REJECTED, FAILED, REPLACED = "processing", "review", "live", "rejected", "failed", "replaced"
+    PROCESSING, REVIEW, LIVE = "processing", "review", "live"
+    REJECTED, FAILED, REPLACED = "rejected", "failed", "replaced"
     STATUSES = [(PROCESSING, "Taking photos"), (REVIEW, "Waiting for the owner's approval"), (LIVE, "Live"),
                 (REJECTED, "Rejected"), (FAILED, "Failed"), (REPLACED, "Replaced by a newer one")]
 

@@ -92,7 +92,8 @@ def test_closed_grid_cannot_be_used(lahore_db):
     grid.close()
     with pytest.raises(sqlite3.ProgrammingError):
         grid.locate(31.52, 74.36)
-    t = threading.Thread(target=lambda: other.append(pytest.raises(sqlite3.ProgrammingError, grid.locate, 31.52, 74.36)))
+    t = threading.Thread(
+        target=lambda: other.append(pytest.raises(sqlite3.ProgrammingError, grid.locate, 31.52, 74.36)))
     t.start()
     t.join()
     assert len(other) == 2

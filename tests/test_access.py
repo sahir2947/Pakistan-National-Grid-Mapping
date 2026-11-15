@@ -31,7 +31,7 @@ def user(grid, tmp_path):
 def test_vehicle_rules():
     assert VEHICLES == ("foot", "bicycle", "motorbike", "rickshaw", "car", "pickup", "truck")
     assert up_to("rickshaw") == ("foot", "bicycle", "motorbike", "rickshaw") and up_to("foot") == ("foot",)
-    assert vehicles_list({"car", "foot", "car"}) == ("foot", "car")
+    assert vehicles_list(["car", "foot", "car"]) == ("foot", "car")       # repeats dropped
     assert access_text(["foot"]) == "On foot only"
     assert access_text(up_to("rickshaw")) == "Up to rickshaw size"
     assert access_text(VEHICLES) == "All vehicles"

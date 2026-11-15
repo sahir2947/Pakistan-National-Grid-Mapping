@@ -46,7 +46,7 @@ tell you the terms for your contribution before it is merged.
 ```
 git clone https://github.com/sahir2947/Pakistan-National-Grid-Mapping.git
 cd Pakistan-National-Grid-Mapping
-python -m pip install -e ".[test]" pyflakes mypy==2.4.1
+python -m pip install -e ".[test]" ruff==0.17.5 mypy==2.4.1
 ```
 
 You also need Node.js 20 or later. The tests run the map viewer's JavaScript
@@ -59,7 +59,7 @@ every pull request, on Linux, macOS and Windows.
 
 ```
 python -m pytest -q          # all tests
-python -m pyflakes pakgrid tests
+python -m ruff check .       # lint (settings in pyproject.toml)
 python -m mypy               # type check (settings in pyproject.toml)
 ```
 

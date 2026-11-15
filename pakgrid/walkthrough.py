@@ -320,8 +320,9 @@ def _manifest(path: list[TimedPoint], author: str, properties: dict[str, Any] | 
     for k, c in sorted(found, key=lambda kc: (-abs(kc[1]), kc[0])):
         if all(abs(along[k] - along[j]) >= TURN_GAP_M for j, _ in kept):
             kept.append((k, c))
-    turns: list[dict[str, Any]] = [{"along_m": round(along[k], 2), "turn_deg": round(c, 1), "turn": navigate.turn_words(c),
-              "point": [path[k][1], path[k][2]]} for k, c in sorted(kept)]
+    turns: list[dict[str, Any]] = [{"along_m": round(along[k], 2), "turn_deg": round(c, 1),
+                                    "turn": navigate.turn_words(c), "point": [path[k][1], path[k][2]]}
+                                   for k, c in sorted(kept)]
 
     # Frames
     marks = {round(t["along_m"], 2): t["turn"] for t in turns}

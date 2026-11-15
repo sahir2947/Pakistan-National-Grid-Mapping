@@ -5,7 +5,7 @@
 ## Checks
 
 - [ ] `python -m pytest -q` passes
-- [ ] `python -m pyflakes pakgrid tests` and `python -m mypy` are clean
+- [ ] `python -m ruff check .` and `python -m mypy` are clean
 - [ ] Grid IDs and codes are unchanged
 - [ ] A changed stored format has a new format version
 - [ ] The map viewer's JavaScript agrees with Python (if a shared rule changed)

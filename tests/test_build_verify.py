@@ -112,6 +112,7 @@ def test_centroid_latitudes_are_far_from_rounding_ties(layout):
     """Centroid latitudes come from sin/cos, whose last digit can differ between platforms.
     None is close enough to a rounding tie at 1e-7 degree for that to change a stored value."""
     import math
+
     from pakgrid import geodesy
     from pakgrid.layout import SCALE
     worst = 0.5

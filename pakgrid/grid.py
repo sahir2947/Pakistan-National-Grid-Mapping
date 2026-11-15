@@ -618,7 +618,8 @@ class Grid:
             q, i, j = self.layout.item_from_id(v, lv)
             s, w, n, e = (x / SCALE for x in self.layout.quadrants[q].item_bounds_e7(i, j, lv))
             code = ids.cell_code(v) if lv == "cell" else ids.sub_cell_code(v)
-            out.append(feature(box_geometry(s, w, n, e), {"id": v, "code": code, "level": lv, **(properties or {})}, code))
+            props = {"id": v, "code": code, "level": lv, **(properties or {})}
+            out.append(feature(box_geometry(s, w, n, e), props, code))
         return feature_collection(out)
 
     def place_geojson(self, place: int | str | Place, properties: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -913,11 +914,11 @@ class Grid:
         if level == "cell":
             return sorted(cid for cid, _, _ in rows)
         out: list[int] = []
-        for cid, tag, subs in rows:
+        for cid, _tag, subs in rows:
             if subs is None:            # the 25 sub-cell IDs of a cell are consecutive
                 first = ids.sub_cell_id(cid, 0)
                 out.extend(range(first, first + SUB * SUB))
-        for cid, tag, subs in self.store.split_cells(layer):
+        for cid, _tag, subs in self.store.split_cells(layer):
             out.extend(ids.sub_cell_id(cid, k) for k, t in enumerate(struct.unpack(_UNPACK[layer], subs))
                        if t in tags)
         out.sort()
@@ -952,7 +953,8 @@ class Grid:
                 found = self.meta.get("places_version")
                 raise NotInDatabaseError(
                     f"this database ({self.store.path.name}) has "
-                    + (f"places version {found}, not {PLACES_VERSION}; rebuild it" if found else "no places layer; add it")
+                    + (f"places version {found}, not {PLACES_VERSION}; rebuild it" if found
+                       else "no places layer; add it")
                     + " with `pakgrid build-places`")
             self._places = {
                 r[0]: Place(r[0], PLACE_LEVELS[r[1] - 1], r[2], r[3], r[4], r[5], r[6], r[7], r[8],
@@ -1096,7 +1098,7 @@ def _sub_cell_from_record(cid: int, sub: int, record: SubRecord) -> SubCell:
 
 def _layout_from_store(store: GridStore) -> GridLayout:
     ncols: dict[int, list[int]] = {q: [] for q in spec.QUADRANTS}
-    for q, row, _s, _n, n in store.rows():
+    for q, _row, _s, _n, n in store.rows():
         ncols[q].append(n)
     quads = []
     for q, _code, _name, _s, _w, _n, _e, nrows, _ncells in store.quadrants():

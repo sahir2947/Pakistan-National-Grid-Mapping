@@ -26,8 +26,8 @@ def _brute(points, lat, lon, k, max_m=MAX_NEAREST_M, where=None):
 
 
 def _scatter(rng, n, lat=31.52, lon=74.36, spread=0.3):
-    return [(f"p{i}", round(lat + (rng.random() - 0.5) * spread, 7), round(lon + (rng.random() - 0.5) * spread / 0.85, 7))
-            for i in range(n)]
+    return [(f"p{i}", round(lat + (rng.random() - 0.5) * spread, 7),
+             round(lon + (rng.random() - 0.5) * spread / 0.85, 7)) for i in range(n)]
 
 
 @pytest.mark.parametrize("n, spread, k", [(2000, 0.3, 5), (200, 0.3, 10), (15, 0.6, 5), (3, 0.05, 5),
