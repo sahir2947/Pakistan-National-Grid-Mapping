@@ -6,7 +6,7 @@ import random
 
 import pytest
 
-from pakgrid import Grid, Zone, ZoneError, ZoneIndex, geodesy, ids
+from pakgrid import Grid, InvalidIdError, Zone, ZoneError, ZoneIndex, geodesy, ids
 from pakgrid.cli import main
 from pakgrid.layout import SCALE, GridLayout, to_e7
 from pakgrid.zones import FULL, point_in_rings, polygon_masks, rings_e7
@@ -195,7 +195,7 @@ def test_store_and_load(grid):
                 {**data, "partial": [[data["partial"][0][0], FULL]]}):
         with pytest.raises(ZoneError):
             Zone.from_dict(bad, grid)
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidIdError):
         Zone.from_dict({**data, "full": [ids.cell_id(3, 9999, 0)]}, grid)
 
 

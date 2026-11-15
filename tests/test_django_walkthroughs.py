@@ -33,10 +33,10 @@ from django.core.management import call_command  # noqa: E402
 from django.test.utils import override_settings  # noqa: E402
 from django.urls import include, path  # noqa: E402
 from rest_framework.test import APIClient  # noqa: E402
+from test_walkthrough import REF, walk  # noqa: E402
 
 from pakgrid.contrib.walkthroughs import services  # noqa: E402
 from pakgrid.contrib.walkthroughs.models import Walkthrough, WalkthroughPhoto  # noqa: E402
-from test_walkthrough import REF, walk  # noqa: E402
 
 urlpatterns = [path("api/", include("pakgrid.contrib.walkthroughs.urls"))]
 TRACK, PIN = walk()
@@ -264,7 +264,8 @@ def test_celery_task():
 def test_real_ffmpeg(tmp_path):
     video = tmp_path / "walk.mp4"
     REAL_RUN(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i",
-              f"testsrc=size=320x240:rate=5:duration={TRACK[-1][0] + 1}", "-pix_fmt", "yuv420p", str(video)], check=True)
+              f"testsrc=size=320x240:rate=5:duration={TRACK[-1][0] + 1}", "-pix_fmt", "yuv420p", str(video)],
+             check=True)
     with override_settings(PAKGRID_WALKTHROUGHS={"JOB": "sync", "PHOTO_WIDTH": 160}):
         r = upload(client("ali"), video=SimpleUploadedFile("walk.mp4", video.read_bytes(), content_type="video/mp4"))
     wt = Walkthrough.objects.get(pk=r.json()["id"])

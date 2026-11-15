@@ -334,8 +334,9 @@ class RoadsMixin:
             key = self._free_road_key(f"{tehsil.key}/roads/{_slug(name) or 'road'}")
             n = db.execute(f"INSERT INTO roads ({_ROAD_COLUMNS}, places_version) VALUES "
                            "(NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,?)",
-                           (key, name, local_name, kind, tehsil.key, json.dumps([[y / SCALE, x / SCALE] for y, x in pts]),
-                            round(length, 1), len(subs), json.dumps(details, ensure_ascii=False),
+                           (key, name, local_name, kind, tehsil.key,
+                            json.dumps([[y / SCALE, x / SCALE] for y, x in pts]), round(length, 1), len(subs),
+                            json.dumps(details, ensure_ascii=False),
                             author, now, author, now, self._places_version())).lastrowid
             assert n is not None                    # an INSERT always gives its row ID
             db.executemany("INSERT INTO road_cells VALUES (?, ?)", [(n, s) for s in subs])
@@ -371,7 +372,8 @@ class RoadsMixin:
                 db.execute("DELETE FROM road_cells WHERE road = ?", (old.id,))
                 db.executemany("INSERT INTO road_cells VALUES (?, ?)", [(old.id, s) for s in subs])
             fields.update(updated_by=author, updated_at=_now(), places_version=self._places_version())
-            db.execute(f"UPDATE roads SET {', '.join(k + ' = ?' for k in fields)} WHERE id = ?", (*fields.values(), old.id))
+            db.execute(f"UPDATE roads SET {', '.join(k + ' = ?' for k in fields)} WHERE id = ?",
+                       (*fields.values(), old.id))
             road = self._get_road(old.id)
             self._log_road(old.id, author, "update", road)
         return road
@@ -416,7 +418,8 @@ class RoadsMixin:
     def road_sub_cells(self, road: str | int | UserRoad) -> list[int]:
         """IDs of the sub-cells a road passes through, in ID order."""
         r = self.get_road(road)
-        return [s for (s,) in self._db.execute("SELECT sub_cell FROM road_cells WHERE road = ? ORDER BY sub_cell", (r.id,))]
+        rows = self._db.execute("SELECT sub_cell FROM road_cells WHERE road = ? ORDER BY sub_cell", (r.id,))
+        return [s for (s,) in rows]
 
     def road_history(self, road: str | int | UserRoad | None = None) -> list[dict[str, Any]]:
         """Every change to roads, oldest first: dicts of at, author, action, key and the road after it."""
@@ -482,7 +485,8 @@ class RoadsMixin:
                                 "along_m": round(along, 1), "how": how}
         merged: list[dict[str, Any]] = []
         for j in sorted(out.values(), key=lambda j: (j["along_m"], j["key"])):
-            if merged and merged[-1]["key"] == j["key"] and abs(merged[-1]["along_m"] - j["along_m"]) <= JUNCTION_SNAP_M:
+            if (merged and merged[-1]["key"] == j["key"]
+                    and abs(merged[-1]["along_m"] - j["along_m"]) <= JUNCTION_SNAP_M):
                 continue                                    # the same junction found twice
             merged.append(j)
         return merged
@@ -534,7 +538,8 @@ class RoadsMixin:
                   "speed_kmh": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v <= 200}
         for k, ok in checks.items():
             if k in out and out[k] is not None and not ok(out[k]):
-                raise UserPlacesError(f"bad {k}: {out[k]!r}" + (f" (vehicles are {', '.join(VEHICLES)})" if k == "vehicles" else ""))
+                hint = f" (vehicles are {', '.join(VEHICLES)})" if k == "vehicles" else ""
+                raise UserPlacesError(f"bad {k}: {out[k]!r}{hint}")
         if "vehicles" in out and out["vehicles"] is not None:
             out["vehicles"] = sorted(set(out["vehicles"]), key=VEHICLES.index)
         try:

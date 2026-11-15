@@ -69,7 +69,8 @@ def test_children_tile_the_cell(grid):
 
 def test_random_points_are_contained(grid):
     rng = random.Random(3)
-    s, n = grid.cell(grid.from_text("11-0135-0000")).bounds.south, grid.cell(grid.from_text("11-0145-0000")).bounds.north
+    s = grid.cell(grid.from_text("11-0135-0000")).bounds.south
+    n = grid.cell(grid.from_text("11-0145-0000")).bounds.north
     points = [(rng.uniform(s, n - 1e-9), rng.uniform(spec.MID_LON, spec.EAST - 1e-9)) for _ in range(3000)]
     for (lat, lon), loc in zip(points, grid.locate_many(points)):
         b = loc.sub_cell.bounds

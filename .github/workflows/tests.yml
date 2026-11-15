@@ -43,10 +43,10 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[test]" pyflakes
+          python -m pip install -e ".[test]" ruff==0.17.5
 
       - name: Lint
-        run: python -m pyflakes pakgrid tests
+        run: python -m ruff check .
 
       - name: Type check
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'

@@ -152,7 +152,8 @@ def test_grid_features(grid):
     cell = grid.geojson("11-0140-0471")
     assert cell["properties"]["level"] == "cell" and grid.geojson(grid.from_text("11-0140-0471"), "cell") == cell
     fc = grid.cells_geojson(["11-0140-0471", "11-0140-0472-03"])
-    assert fc["type"] == "FeatureCollection" and [x["id"] for x in fc["features"]] == ["11-0140-0471", "11-0140-0472-03"]
+    assert fc["type"] == "FeatureCollection"
+    assert [x["id"] for x in fc["features"]] == ["11-0140-0471", "11-0140-0472-03"]
     merged = grid.cells_geojson(["11-0140-0471", "11-0140-0472"], merge=True)
     assert merged["geometry"]["type"] == "Polygon" and len(merged["geometry"]["coordinates"][0]) == 5
     assert merged["properties"]["sub_cells"] == 50

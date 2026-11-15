@@ -124,11 +124,13 @@ def test_refused(grid):
 
 def test_the_rider_rule(grid):
     track, pin = walk()
-    wt = Walkthrough.from_dict(json.loads(json.dumps(grid.walkthrough(track, pin=pin, start=REF, author="a").to_dict())))
+    made = grid.walkthrough(track, pin=pin, start=REF, author="a")
+    wt = Walkthrough.from_dict(json.loads(json.dumps(made.to_dict())))
     g = wt.guide()
     assert g.state.gps == "start" and g.state.frame == 0 and g.state.text == "In 40 m, turn right"
     s = g.update(*at(1, 20), accuracy_m=5)
-    assert s.gps == "ok" and abs(s.progress_m - 20) < 2 and s.next_turn == "turn right" and s.text == "In 20 m, turn right"
+    assert s.gps == "ok" and abs(s.progress_m - 20) < 2
+    assert s.next_turn == "turn right" and s.text == "In 20 m, turn right"
     assert wt.frames[s.frame]["along_m"] == min((f["along_m"] for f in wt.frames), key=lambda a: abs(a - s.progress_m))
     p = s.progress_m
     assert g.update(*at(0, 14), accuracy_m=5).progress_m == p                  # 6 m back: GPS wobble, ignored
@@ -148,7 +150,8 @@ def test_the_rider_rule(grid):
     # by hand
     s = g.show(3)
     assert (s.frame, s.gps, s.off_path_m) == (3, "manual", None) and s.progress_m == wt.frames[3]["along_m"]
-    assert g.next().frame == 4 and g.previous().frame == 3 and g.show(-5).frame == 0 and g.show(999).frame == len(wt.frames) - 1
+    assert g.next().frame == 4 and g.previous().frame == 3
+    assert g.show(-5).frame == 0 and g.show(999).frame == len(wt.frames) - 1
     assert g.next().frame == len(wt.frames) - 1
     json.dumps(s.to_dict())
 
@@ -163,7 +166,8 @@ def test_stored_form(grid):
     cmd = wt.ffmpeg_commands("walk.mp4", "out", width=640)[2]
     assert cmd[:6] == ["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{wt.frames[2]['t_s']:.2f}"]
     assert cmd[-1].endswith("frame-002.jpg") and "scale=640:-2" in cmd
-    for bad in ({}, {"walkthrough_version": 2}, {"walkthrough_version": 1}, {"walkthrough_version": 1, "path": [[1, 2, 0, 0]], "frames": []}):
+    for bad in ({}, {"walkthrough_version": 2}, {"walkthrough_version": 1},
+                {"walkthrough_version": 1, "path": [[1, 2, 0, 0]], "frames": []}):
         with pytest.raises(WalkthroughError):
             Walkthrough.from_dict(bad)
     assert W.build(track, pin=pin, start=REF, author="a").data["pin_sub_cell"] is None        # without a grid
@@ -185,7 +189,8 @@ def test_gpx():
 def test_photos_from_a_video(grid, tmp_path):
     track, pin = walk()
     video = tmp_path / "walk.mp4"
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", f"testsrc=size=320x240:rate=5:duration={track[-1][0] + 1}",
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi",
+                    "-i", f"testsrc=size=320x240:rate=5:duration={track[-1][0] + 1}",
                     "-pix_fmt", "yuv420p", str(video)], check=True)
     wt = grid.walkthrough(track, pin=pin, start=REF, author="a")
     for c in wt.ffmpeg_commands(video, tmp_path, width=160):
@@ -201,8 +206,10 @@ def test_cli(lahore_db, tmp_path, capsys):
     assert main(["walkthrough", "build", "--db", str(lahore_db), "--track", str(tf), "--pin", *map(str, pin),
                  "--start", *map(str, REF), "--author", "ali", "-o", str(out)]) == 0
     summary = json.loads(capsys.readouterr().out)
-    assert summary["turns"] == ["turn right", "turn left"] and summary["frames"] == len(json.loads(out.read_text())["frames"])
-    assert main(["walkthrough", "guide", str(out), "%f,%f" % at(1, 20), "%f,%f,50" % at(1, 30)]) == 0
+    assert summary["turns"] == ["turn right", "turn left"]
+    assert summary["frames"] == len(json.loads(out.read_text())["frames"])
+    pins = ["{:f},{:f}".format(*at(1, 20)), "{:f},{:f},50".format(*at(1, 30))]
+    assert main(["walkthrough", "guide", str(out), *pins]) == 0
     states = json.loads(capsys.readouterr().out)
     assert [s["gps"] for s in states] == ["ok", "weak"] and states[0]["text"] == "In 20 m, turn right"
     assert main(["walkthrough", "frames", str(out), "--video", "v.mp4", "--frames-dir", "f", "--print"]) == 0

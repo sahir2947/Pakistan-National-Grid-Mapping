@@ -6,8 +6,8 @@ All angles passed in and returned are in degrees unless a name says otherwise.
 from __future__ import annotations
 
 import functools
-from collections.abc import Callable
 import math
+from collections.abc import Callable
 
 from . import spec
 

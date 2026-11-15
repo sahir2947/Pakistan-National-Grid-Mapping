@@ -7,10 +7,10 @@ import os
 import sqlite3
 import struct
 import time
-from dataclasses import dataclass
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 
 from . import __version__, geodesy, ids, spec
 from .boundary import FLAG_NAMES, OUTSIDE, Boundary, cell_flags, row_flags
@@ -22,8 +22,8 @@ _ROW_REC = struct.Struct("<5i")
 _CELL_REC = struct.Struct("<8i")
 _MASKS = struct.Struct("<2i")
 
-Quadrant = Union[int, str]                # 0-3 or a code such as "11"
-RowSelection = Union[range, Sequence[int]]   # a range, or (start, stop)
+Quadrant = int | str                      # 0-3 or a code such as "11"
+RowSelection = range | Sequence[int]       # a range, or (start, stop)
 # (cell ID, cell values, sub-record values, (inside_mask, border_mask))
 CellRecord = tuple[int, tuple[int, ...], tuple[int, ...], tuple[int, int]]
 

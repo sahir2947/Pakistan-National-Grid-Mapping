@@ -102,7 +102,8 @@ class WalkthroughListCreate(_Base):
             raise WalkthroughError("send the GPS track as track (JSON or GPX text) or track_file")
         wt = services.create(request.user, video=request.FILES.get("video"), track=track,
                              pin=(_number(d, "pin_lat"), _number(d, "pin_lon")),
-                             start=cast("tuple[float, float]", start) if None not in start else None, place_ref=d.get("place_ref", ""),
+                             start=cast("tuple[float, float]", start) if None not in start else None,
+                             place_ref=d.get("place_ref", ""),
                              video_start=d.get("video_start") or None)
         wt.refresh_from_db()
         return Response(_summary(wt, request), status=status.HTTP_201_CREATED)

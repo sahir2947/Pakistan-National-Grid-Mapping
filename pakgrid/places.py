@@ -43,8 +43,8 @@ import struct
 from array import array
 from bisect import bisect_left, bisect_right
 from collections import Counter
-from dataclasses import dataclass
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from importlib import resources
 from typing import Any
 
@@ -384,7 +384,7 @@ def _sources() -> _Sources:
              + [(2, clean_name(n), n, pc) for pc, (n, _) in districts.items()]
              + [(3, u.name, u.source_name, u.source_id) for u, *_ in tehsils])
     pid: dict[str, int] = {}
-    for level, name, _, source_id in sorted(order, key=lambda r: (r[0], r[1].lower(), r[3])):
+    for _level, _name, _, source_id in sorted(order, key=lambda r: (r[0], r[1].lower(), r[3])):
         pid[source_id] = len(pid) + 1
     units: dict[int, tuple[int, str, str, str, int | None]] = {}
     for level, name, source_name, source_id in order:
@@ -502,10 +502,10 @@ def _tag_localities(src: _Sources, lat: int, clon: Sequence[int], tehsils: Seque
                     flags: bytes | bytearray) -> array[int]:
     """Locality tags of one fine row of sub-cells (centroids at lat_e7, clon[j]); 0 = none.
 
-    Only sub-cells with a tehsil (and a border flag `flags` other than outside) are tagged. In order: the smallest named area containing the
-    centroid (other than town and city outlines); else the point locality with the smallest
-    distance / reach among those within reach (ties: the smallest place ID); else the smallest
-    town or city outline containing it.
+    Only sub-cells with a tehsil (and a border flag `flags` other than outside) are tagged. In order:
+    the smallest named area containing the centroid (other than town and city outlines); else the
+    point locality with the smallest distance / reach among those within reach (ties: the smallest
+    place ID); else the smallest town or city outline containing it.
     """
     n = len(clon)
     if not _INSIDE_RUN.search(flags):

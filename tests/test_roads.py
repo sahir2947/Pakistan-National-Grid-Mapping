@@ -184,7 +184,7 @@ def test_geojson_line_and_export_import(user, lahore_db, tmp_path):
     with Grid.open(lahore_db) as grid:
         other = grid.attach_user_places(tmp_path / "copy.sqlite")
         added = other.import_data(data, author="admin")
-        assert {getattr(x, "key") for x in added} == {r.key, user.localities()[0].key}
+        assert {x.key for x in added} == {r.key, user.localities()[0].key}
         assert other.get_road(r.key).details == {"surface": "unpaved"}
         assert other.road_sub_cells(r.key) == user.road_sub_cells(r)
 
@@ -209,8 +209,8 @@ def test_cli(lahore_db, tmp_path, capsys):
     line = tmp_path / "line.json"
     line.write_text(json.dumps([list(p) for p in STREET]))
     base = ["user-places", "--db", str(lahore_db), "--file", str(f)]
-    assert main(base + ["add-road", "Street 7", "--line", str(line), "--author", "ali", "--oneway", "--surface", "paved",
-                        "--vehicles", "motorbike", "car", "--local-name", "گلی ۷"]) == 0
+    assert main(base + ["add-road", "Street 7", "--line", str(line), "--author", "ali", "--oneway",
+                        "--surface", "paved", "--vehicles", "motorbike", "car", "--local-name", "گلی ۷"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["key"] == "punjab/lahore/lahore-cantt/roads/street-7"
     assert out["details"] == {"oneway": True, "surface": "paved", "vehicles": ["motorbike", "car"]}

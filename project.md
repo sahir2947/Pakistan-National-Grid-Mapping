@@ -2045,7 +2045,7 @@ tested code: [docs/django.md](docs/django.md).
 
 All tests run automatically on GitHub Actions (`.github/workflows/tests.yml`)
 for Python 3.10, 3.11, 3.12 and 3.13 on Linux, and Python 3.13 on macOS and
-Windows, on every push to `main` and every pull request. The workflow also runs `pyflakes`, and checks that the viewer's
+Windows, on every push to `main` and every pull request. The workflow also runs the `ruff` linter (settings in `pyproject.toml`), and checks that the viewer's
 `layout.js` and `boundary.js` match the library.
 
 Every function in the package has type hints, and the package ships a

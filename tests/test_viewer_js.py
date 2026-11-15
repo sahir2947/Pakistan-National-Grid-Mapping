@@ -12,8 +12,8 @@ import pytest
 from pakgrid import geodesy, ids
 from pakgrid.boundary import Boundary, cell_flags, row_flags
 from pakgrid.export import boundary_js, layout_js
+from pakgrid.layout import EAST_E7, MID_LAT_E7, MID_LON_E7, NORTH_E7, SCALE, SOUTH_E7, WEST_E7, to_e7
 from pakgrid.navigate import _COMPASS_8, _COMPASS_16
-from pakgrid.layout import (EAST_E7, MID_LAT_E7, MID_LON_E7, NORTH_E7, SCALE, SOUTH_E7, WEST_E7, to_e7)
 
 VIEWER = Path(__file__).resolve().parent.parent / "viewer"
 VIEWER_JS = VIEWER.as_posix()   # for paths written into JavaScript source (no Windows backslashes)
@@ -447,7 +447,7 @@ def test_javascript_user_locality_preview_matches_python(lahore_db, tmp_path):
         subs, tehsil, centre, refs = e
         assert g["subs"] == subs and g["tehsil"] == tehsil and g["centre"] == centre
         assert [r[0] for r in g["refs"]] == [r.place_key for r in refs]
-        for (key, dist, way, east, north), r in zip(g["refs"], refs):
+        for (_key, dist, way, east, north), r in zip(g["refs"], refs):
             assert way == r.direction
             assert abs(dist - r.distance_m) <= 0.051 and abs(east - r.east_m) <= 0.051 and abs(north - r.north_m) <= 0.051
     assert sum(len(e[0]) for e in expected if e != "error") > 500

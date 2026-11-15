@@ -55,10 +55,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 from . import ids, navigate
-from .errors import InvalidIdError, NotInDatabaseError, PakgridError
-from .layout import SCALE, SUB, to_e7
 from . import zones as _zones
 from .access import AccessMixin
+from .errors import InvalidIdError, NotInDatabaseError, PakgridError
+from .layout import SCALE, SUB, to_e7
 from .roads import RoadsMixin
 from .zones import RingE7, ZoneError, polygon_masks, rings_e7
 
@@ -431,7 +431,7 @@ class UserPlaces(RoadsMixin, AccessMixin):
                 if sid not in best or (size, -n) < best[sid]:
                     best[sid] = (size, -n)
         got: dict[int, UserLocality] = {}
-        for sid, (_, neg) in best.items():
+        for _sid, (_, neg) in best.items():
             if -neg not in got:
                 got[-neg] = self._get(-neg)
         return {sid: got[-neg] for sid, (_, neg) in best.items()}
@@ -489,8 +489,8 @@ class UserPlaces(RoadsMixin, AccessMixin):
         for item in data.get("access_notes", []):
             if item.get("removed") or json.dumps(item["line"]) in lines:
                 continue
-            if item.get("source_id") and self._one("SELECT 1 FROM access_notes WHERE source_id = ? AND removed_at IS NULL",
-                                                   (item["source_id"],)):
+            if item.get("source_id") and self._one(
+                    "SELECT 1 FROM access_notes WHERE source_id = ? AND removed_at IS NULL", (item["source_id"],)):
                 continue
             added.append(self.set_access(item["vehicles"], author=author, line=item["line"],
                                          source_id=item.get("source_id"), name=item.get("name")))
