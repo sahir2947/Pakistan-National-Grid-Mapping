@@ -43,6 +43,7 @@ _UNPACK = {"tehsil": "<25H", "locality": "<25I"}
 
 @dataclass(frozen=True)
 class Bounds:
+    """A latitude/longitude box, in degrees."""
     south: float
     west: float
     north: float
@@ -50,17 +51,21 @@ class Bounds:
 
     @classmethod
     def from_e7(cls, s: int, w: int, n: int, e: int) -> Bounds:
+        """Bounds from values in 1e-7 degree, as the database stores them."""
         return cls(s / SCALE, w / SCALE, n / SCALE, e / SCALE)
 
     def contains(self, lat: float, lon: float) -> bool:
+        """True if the point is inside the box or on its edge."""
         return self.south <= lat <= self.north and self.west <= lon <= self.east
 
     def to_dict(self) -> dict[str, float]:
+        """As a dict: south, west, north, east."""
         return dict(self.__dict__)
 
 
 @dataclass(frozen=True)
 class Cell:
+    """A ~1 km cell: its ID, code, place in the grid, boundaries, centroid and Pakistan border flag."""
     id: int
     code: str
     quadrant: str
@@ -71,6 +76,7 @@ class Cell:
     pakistan: str        # "inside", "border" or "outside"
 
     def to_dict(self) -> dict[str, Any]:
+        """As JSON-ready data."""
         return {"id": self.id, "code": self.code, "quadrant": self.quadrant, "row": self.row,
                 "column": self.column, "centroid": list(self.centroid), "bounds": self.bounds.to_dict(),
                 "pakistan": self.pakistan}
@@ -78,6 +84,7 @@ class Cell:
 
 @dataclass(frozen=True)
 class SubCell:
+    """A ~200 m sub-cell (index 0-24 within its cell): its ID, code, boundaries, centroid and border flag."""
     id: int
     code: str
     cell_id: int
@@ -88,6 +95,7 @@ class SubCell:
     pakistan: str        # "inside", "border" or "outside"
 
     def to_dict(self) -> dict[str, Any]:
+        """As JSON-ready data."""
         return {"id": self.id, "code": self.code, "cell_id": self.cell_id, "cell_code": self.cell_code,
                 "index": self.index, "centroid": list(self.centroid), "bounds": self.bounds.to_dict(),
                 "pakistan": self.pakistan}
@@ -101,10 +109,12 @@ class Offset:
 
     @property
     def distance_m(self) -> float:
+        """Straight-line length of the vector, in metres."""
         return math.hypot(self.east_m, self.north_m)
 
     @property
     def bearing_deg(self) -> float:
+        """Compass bearing of the vector from the centroid, 0-360 degrees."""
         return geodesy.bearing(self.east_m, self.north_m)
 
     @property
@@ -115,6 +125,7 @@ class Offset:
         return f"{ew}{round(abs(self.east_m))} {ns}{round(abs(self.north_m))}"
 
     def to_dict(self) -> dict[str, Any]:
+        """As JSON-ready data, metres and degrees rounded to 0.1."""
         return {"east_m": round(self.east_m, 1), "north_m": round(self.north_m, 1),
                 "distance_m": round(self.distance_m, 1), "bearing_deg": round(self.bearing_deg, 1),
                 "text": self.text}
@@ -129,6 +140,7 @@ class Nearby:
     bearing_deg: float          # compass bearing from the point to the block's centroid
 
     def to_dict(self) -> dict[str, Any]:
+        """As JSON-ready data, distances rounded to 0.1 m."""
         return {"id": self.id, "code": self.code, "distance_m": round(self.distance_m, 1),
                 "bearing_deg": round(self.bearing_deg, 1)}
 
@@ -151,6 +163,7 @@ class Separation:
         return f"{navigate.format_distance(self.distance_m)} {self.compass_short}"
 
     def to_dict(self) -> dict[str, Any]:
+        """As JSON-ready data, distances rounded to 0.1 m."""
         return {"from": self.from_code, "to": self.to_code, "distance_m": round(self.distance_m, 1),
                 "bearing_deg": round(self.bearing_deg, 1), "compass": self.compass,
                 "compass_short": self.compass_short, "east_m": round(self.east_m, 1),
@@ -266,18 +279,22 @@ class Location:
 
     @property
     def id(self) -> int:
+        """The sub-cell's ID."""
         return self.sub_cell.id
 
     @property
     def code(self) -> str:
+        """The sub-cell's code, e.g. '11-0140-0471-00'."""
         return self.sub_cell.code
 
     @property
     def cell_id(self) -> int:
+        """The ID of the cell holding the sub-cell."""
         return self.sub_cell.cell_id
 
     @property
     def cell_code(self) -> str:
+        """The code of the cell holding the sub-cell, e.g. '11-0140-0471'."""
         return self.sub_cell.cell_code
 
     @property
@@ -286,6 +303,7 @@ class Location:
         return address_from_point(self.lat, self.lon)
 
     def to_dict(self) -> dict[str, Any]:
+        """The result as JSON-ready data (address, sub-cell, cell, offset, confidence, candidates, place)."""
         return {
             "grid_version": spec.GRID_VERSION,
             "address": self.address.text,
@@ -340,6 +358,7 @@ class Grid:
         return grid
 
     def close(self) -> None:
+        """Close the database, and the attached user places file if there is one."""
         if self._user is not None:
             self._user.close()
         self.store.close()
@@ -1017,6 +1036,7 @@ class Grid:
     # -- Info ------------------------------------------------------------
 
     def info(self) -> dict[str, Any]:
+        """The grid's rules and this database's details (edition, checksums, border and places layer), as a dict."""
         return {
             "grid_version": spec.GRID_VERSION,
             "datum": spec.DATUM,

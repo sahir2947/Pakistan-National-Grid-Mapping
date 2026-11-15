@@ -71,9 +71,11 @@ class Block:
 
     @property
     def sub_cell_count(self) -> int:
+        """Number of sub-cells in the block."""
         return self.zone.sub_cell_count
 
     def contains(self, lat: float, lon: float) -> bool:
+        """True if the point is in one of the block's sub-cells."""
         return self.zone.contains(lat, lon)
 
     def __repr__(self) -> str:
@@ -170,6 +172,7 @@ class BlockSet:
     # -- Reading ------------------------------------------------------------------------
 
     def get(self, code: str) -> Block:
+        """The block with this code; BlockError if there is none."""
         try:
             return self._blocks[code]
         except (KeyError, TypeError):
@@ -233,6 +236,7 @@ class BlockSet:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any], grid: Grid) -> BlockSet:
+        """A block set from its stored form (BlockSet.to_dict()), checked against the grid."""
         if data.get("blockset_version") != BLOCKSET_VERSION or data.get("grid_version") != spec.GRID_VERSION:
             raise BlockError(f"not block set version {BLOCKSET_VERSION} data for grid version {spec.GRID_VERSION}")
         out = cls(grid, data.get("name") or "blocks")

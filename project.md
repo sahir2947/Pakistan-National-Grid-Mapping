@@ -290,6 +290,26 @@ column   = cell_id & 0x3FF
 sub      = sub_id & 0x1F
 ```
 
+`pakgrid.ids` does this for you, with no database. Each function checks its
+inputs and raises `InvalidIdError` for an impossible value (a quadrant
+other than 0-3, a sub-cell index other than 0-24, a malformed code). It does
+not check that a row or column exists in the grid; `grid.from_text(code)`
+does that.
+
+```python
+from pakgrid import ids
+
+cid = ids.cell_id(3, 140, 471)        # 3289559           (quadrant, row, column)
+ids.split_cell_id(cid)                # (3, 140, 471)
+sid = ids.sub_cell_id(cid, ids.sub_index(0, 0))   # 105265888  (sub-row, sub-column → 0-24)
+ids.split_sub_cell_id(sid)            # (3289559, 0)       (cell ID, sub-cell index)
+ids.parent(sid)                       # 3289559
+ids.split_sub_index(7)                # (1, 2)             (sub-row, sub-column)
+ids.cell_code(cid)                    # '11-0140-0471'
+ids.sub_cell_code(sid)                # '11-0140-0471-00'
+ids.parse_code("11-0140-0471-00")     # ('sub', 105265888); a cell code gives ('cell', ...)
+```
+
 ### 4.3 Worked example: central Lahore (31.5204° N, 74.3587° E)
 
 | Step | Working | Result |
@@ -974,12 +994,20 @@ pakgrid/
 ├── export.py     Writes the map viewer's data files: layout.js, boundary.js, places.js (§7.3)
 ├── conformance.py Writes the conformance files for ports: navigation.json, walkthrough.json
 ├── cli.py        Command-line tools (§7.2)
-└── __main__.py   `python -m pakgrid` runs the command-line tools
+├── __init__.py   The public names (`from pakgrid import Grid, ...`)
+├── __main__.py   `python -m pakgrid` runs the command-line tools
+└── py.typed      Marks the package as typed, for apps' type checkers (§14)
 scripts/          make_places_data.py: makes data/places-v2.json.gz from the source downloads
 viewer/           The map viewer (§7.3) and its JavaScript copy of the library (pakgrid.js)
 conformance/      Exact rules and test files for ports to other languages (navigation, walkthrough)
 docs/             Using pakgrid in a Django REST Framework backend (django.md)
 tests/            Every feature's tests (§14), run on Linux, macOS and Windows
+.github/          Continuous integration (tests, checksums), issue forms, pull request checklist
+pyproject.toml    Package metadata, and the pytest, ruff and mypy settings
+README.md         Overview and quick start
+CHANGELOG.md      Every notable change, and the format versions
+CONTRIBUTING.md   How to report a bug or suggest a feature; code changes by permission only
+SECURITY.md       How to report a security problem privately
 ```
 
 ### 6.2 Principles
@@ -1033,7 +1061,7 @@ level by itself.
 | 8 | `cells_in_area(south, west, north, east, level="cell", pakistan_only=False)` | IDs of cells or sub-cells overlapping a box; optionally only those in Pakistan |
 | 8a | `cells_within(lat, lon, radius_m, level="cell", pakistan_only=False, touching=False)` | Radius search: the cells or sub-cells whose centroid (with `touching=True`, any part) is within `radius_m` of a point, nearest first, as `Nearby` (`id`, `code`, `distance_m`, `bearing_deg`); radius up to 50 km (§7.5) |
 | 8b | `distance(a, b, level="cell")` | Cell-to-cell distance: `Separation` between two blocks' centroids (`distance_m`, `bearing_deg`, `compass`, `compass_short`, `east_m`, `north_m`, `text` such as `13.8 km NE`); codes may mix cells and sub-cells; no database access (§7.5) |
-| 8c | `zone(polygon= / circle= / cells= / place=, pakistan_only=False)` | A custom zone (`Zone`): a set of sub-cells with `contains(lat, lon)`, counts, area, `cells()`, `sub_cells()`, `\|` `&` `-`, `to_dict()` / `Zone.from_dict()`; `ZoneIndex` finds which of many zones hold a pin (§7.6) |
+| 8c | `zone(polygon= / circle= / cells= / place=, pakistan_only=False)` | A custom zone (`Zone`): a set of sub-cells with `contains(lat, lon)`, `sub_cell_count`, `cell_count`, `empty`, `area_km2`, `covers_cell(cell_id)` (`'all'`, `'part'` or `'none'`), `cells()`, `sub_cells()`, `\|` `&` `-`, `to_dict()` / `Zone.from_dict()`; `ZoneIndex` finds which of many zones hold a pin (`at(lat, lon)`) or a sub-cell (`at_sub_cell(id)`) (§7.6) |
 | 8d | `geojson(item)`, `cells_geojson(items, merge=False)`, `place_geojson(place)` | GeoJSON Features of blocks, sets of blocks and places' exact outlines; `zone.to_geojson()` for zones (§7.7) |
 | 8e | `point_index(points=())`, `nearest(lat, lon, fetch, k=5)`, `nearest_places(lat, lon, k=5, kind=None)` | Nearest lookup: the k nearest points (in memory, or in your database by cell ID) or localities to a pin, exact, as `Neighbour` (`id`, `distance_m`, `bearing_deg`, `direction`, `text`) (§7.8) |
 | 8f | `block_set(name)`, `describe_zone(zone, references=())` | Custom blocks: named, coded, non-overlapping groups of cells built by clicks or polygons, described with cell codes, size, places, city and directions; JSON to store anywhere (§7.9) |
@@ -1077,6 +1105,7 @@ version the library implements (1).
 | `user.remove(key, author=...)` | Hides it from lookups; history kept |
 | `user.get(key_or_id)` / `user.localities()` / `user.find(text)` | User localities |
 | `user.sub_cells(key)` | Its sub-cell IDs |
+| `user.at_sub_cells(sub_cell_ids)` / `user.at_cell(cell_id)` | `{sub-cell ID: UserLocality}` for those of the sub-cells inside a user locality (the smallest, else the newest, where several overlap) / a cell's user locality, the one most of its sub-cells have, or `None` |
 | `user.history(key=None)` | Every change: time, author, action and the record after it |
 | `user.export_data()` / `user.import_data(data, author=...)` | Backup and restore as JSON |
 | `user.refresh(author=...)` | Recompute tehsils, centres and reference vectors after a new places version |
@@ -1169,12 +1198,12 @@ The last four are also `ValueError`s.
 
 | Command | Purpose |
 |---|---|
-| `pakgrid build [-o FILE] [--quadrant CODE] [--rows START:STOP] [--pakistan-only]` | Generate the database; `--quadrant` and `--rows` build part of it for tests or pilots, `--pakistan-only` builds the Pakistan edition |
+| `pakgrid build [-o FILE] [--overwrite] [--quadrant CODE] [--rows START:STOP] [--pakistan-only]` | Generate the database; `--overwrite` replaces an existing file, `--quadrant` and `--rows` build part of it for tests or pilots, `--pakistan-only` builds the Pakistan edition |
 | `pakgrid verify [--db FILE] [--full] [--expect SHA256]` | Check a database against the rules, its border, its checksum and (for a complete build) the official checksum; `--full` regenerates every record and flag; `--expect` also requires a given checksum |
 | `pakgrid locate LAT LON [--accuracy M]` | Look up a point; prints JSON |
 | `pakgrid within LAT LON METRES [--level sub] [--pakistan-only] [--touching]` | Radius search, nearest first (§7.5) |
 | `pakgrid distance FROM TO` | Distance and direction between two cells or sub-cells, by code (§7.5) |
-| `pakgrid blocks --file FILE (add CODE \| add-cells \| remove-cells \| update \| remove \| list \| describe CODE [--ref KEY] \| at LAT LON \| geojson)` | Custom blocks in a JSON file (§7.9) |
+| `pakgrid blocks --file FILE (add CODE \| add-cells \| remove-cells \| update \| remove \| list \| describe CODE [--ref KEY] \| at LAT LON \| geojson)` | Custom blocks in a JSON file (§7.9). `add CODE [--name N] [--set-name N]` (`--set-name` names a new file's set); `add` and `add-cells` take `--cells`, `--polygon`, `--circle` or `--place`, with `--take` to move sub-cells another block has and `--pakistan-only`; `update CODE [--name N] [--new-code C]` renames a block or changes its code |
 | `pakgrid nearest LAT LON [-k N] [--max-m M] [--points FILE] [--kind KIND]` | The nearest points of a JSON/CSV file, or the nearest localities (§7.8) |
 | `pakgrid geojson (--cells CODE... [--merge] \| --place KEY \| --zone FILE \| --circle LAT LON M \| --polygon FILE) [-o FILE]` | Write GeoJSON for any map (§7.7) |
 | `pakgrid zone make (--polygon FILE \| --circle LAT LON M \| --cells CODE... \| --place KEY) [--pakistan-only] [-o FILE]` / `zone check FILE LAT LON` / `zone show FILE [--codes]` | Make a custom zone, check a pin, summarise one (§7.6) |
@@ -1184,9 +1213,9 @@ The last four are also `ValueError`s.
 | `pakgrid export-conformance [-o DIR]` | Write the conformance test files for ports: `conformance/navigation.json` and `conformance/walkthrough.json` |
 | `pakgrid build ... --no-places` / `pakgrid build-places [--db FILE]` | Build without the places layer / add or rebuild it in an existing database |
 | `pakgrid places [TEXT] [--level L] [--cells]` | List or search places (province, district, tehsil, locality); `--cells` prints the cells of one place |
-| `pakgrid user-places [--file F] add NAME (--polygon FILE \| --cells CODE...) --author A [--kind K] [--local-name L] [--ref KEY]... [--nearest N]` | Add a user locality (§5.8); also `update KEY`, `remove KEY`, `list`, `show KEY`, `history [KEY]`, `export FILE`, `import FILE`, `refresh` |
+| `pakgrid user-places [--file F] add NAME (--polygon FILE \| --cells CODE...) --author A [--kind K] [--local-name L] [--ref KEY]... [--nearest N]` | Add a user locality (§5.8); also `update KEY`, `remove KEY`, `list [TEXT] [--removed]` (`--removed` includes removed ones), `show KEY`, `history [KEY]`, `export FILE`, `import FILE`, `refresh` |
 | `pakgrid user-places add-road NAME --line FILE --author A [--kind K] [--local-name L] [--oneway] [--surface S] [--vehicles ...] [--width-m W] [--speed-kmh V]` | Add a user road (§5.9); also `update-road KEY`, `remove-road KEY`, `roads`, `road KEY`, `near-road LAT LON`, `roads-geojson` |
-| `pakgrid walkthrough build --track FILE --pin LAT LON [--start LAT LON] --author A [-o FILE] [--video V --frames-dir D]` | Make a walkthrough from a GPS track (JSON or GPX) and take its photos (§5.10); also `walkthrough frames FILE --video V --frames-dir D [--print]`, `walkthrough guide FILE LAT,LON[,ACC] ...` |
+| `pakgrid walkthrough build --track FILE --pin LAT LON [--start LAT LON] [--video-start TIME] --author A [-o FILE] [--video V --frames-dir D]` | Make a walkthrough from a GPS track (JSON or GPX; for GPX, `--video-start` is when the video started, as ISO time) and take its photos (§5.10); also `walkthrough frames FILE --video V --frames-dir D [--print]`, `walkthrough guide FILE LAT,LON[,ACC] ...` |
 | `pakgrid user-places access set --author A (--largest V \| --vehicles V ...) (--road KEY \| --line FILE [--source-id ID] [--name N])` | What can drive through a street (§5.9); also `access at LAT LON`, `list`, `remove --street S`, `history [--street S]`, `geojson` |
 | `pakgrid locate ... --user-places FILE` / `pakgrid show ... --user-places FILE` | Include user localities in the answer |
 
@@ -1336,6 +1365,8 @@ with Grid.open("pakgrid_v1_pakistan.sqlite") as grid:
 
     index = ZoneIndex({"shop-42": zone, "shop-77": near})
     index.at(31.5204, 74.3587)                 # ['shop-42', 'shop-77']: who delivers here?
+    index.at_sub_cell(105265888)               # the same, for a sub-cell ID
+    zone.covers_cell(3289559)                  # 'all', 'part' or 'none'
 ```
 
 | Made from | Sub-cells in the zone |
@@ -1440,6 +1471,7 @@ search only measures the points in the cells around the pin.
 ```python
 riders = grid.point_index()                       # or grid.point_index([(id, lat, lon), ...])
 riders.add("rider-7", 31.5210, 74.3570)           # add, or move when the ID is already there
+riders.add_many([("rider-8", 31.52, 74.36), ...]) # many at once, (id, lat, lon)
 riders.remove("rider-3")
 riders.nearest(31.5204, 74.3587, k=3)             # [Neighbour(id='rider-7', distance_m=174.6, ...)]
 riders.nearest(lat, lon, k=5, max_m=3000, where=lambda rid: rid in available)

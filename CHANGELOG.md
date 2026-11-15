@@ -141,6 +141,9 @@ first release. Pull request numbers are in brackets.
   for bugs and feature requests, and a pull request checklist. [#31]
 - The `ruff` linter in place of `pyflakes`: unused names, import order, line
   length and likely bugs, with its settings in `pyproject.toml`. [#32]
+- Documentation gaps closed: docstrings on every public method, the `ids`
+  helpers, the last methods and command-line options in the reference, and the
+  package layout.
 
 ### Fixed
 - Verifier gaps, bad sensor readings in navigation, and documentation, from a
