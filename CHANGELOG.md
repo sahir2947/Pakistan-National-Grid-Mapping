@@ -140,7 +140,7 @@ first release. Pull request numbers are in brackets.
   the owner's permission only), `SECURITY.md` (private reporting), issue forms
   for bugs and feature requests, and a pull request checklist. [#31]
 - The `ruff` linter in place of `pyflakes`: unused names, import order, line
-  length and likely bugs, with its settings in `pyproject.toml`.
+  length and likely bugs, with its settings in `pyproject.toml`. [#32]
 
 ### Fixed
 - Verifier gaps, bad sensor readings in navigation, and documentation, from a
