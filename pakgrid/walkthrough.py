@@ -403,6 +403,7 @@ class Walkthrough:
 
     @classmethod
     def from_dict(cls, data: object) -> Walkthrough:
+        """A walkthrough from its stored form (to_dict()); WalkthroughError if the data is not one."""
         if not isinstance(data, dict) or data.get("walkthrough_version") != WALKTHROUGH_VERSION:
             raise WalkthroughError(f"not walkthrough version {WALKTHROUGH_VERSION} data")
         try:
@@ -414,18 +415,22 @@ class Walkthrough:
         return wt
 
     def to_dict(self) -> dict[str, Any]:
+        """The stored form: JSON-ready data that from_dict() reads back."""
         return self.data
 
     @property
     def length_m(self) -> float:
+        """Length of the path from the start to the pin, in metres."""
         return self.data["length_m"]
 
     @property
     def frames(self) -> list[dict[str, Any]]:
+        """The photos: index, video time, point, heading, distance along and to go, turn, step text and image name."""
         return self.data["frames"]
 
     @property
     def turns(self) -> list[dict[str, Any]]:
+        """The turns along the path: distance along, angle, words ('turn left') and point."""
         return self.data["turns"]
 
     def guide(self) -> WalkthroughGuide:
@@ -499,6 +504,7 @@ class GuideState:
     text: str                   # 'In 15 m, turn left', 'Turn left now', 'The door is 35 m ahead', ...
 
     def to_dict(self) -> dict[str, Any]:
+        """As JSON-ready data."""
         return dict(self.__dict__)
 
 
@@ -548,9 +554,11 @@ class WalkthroughGuide:
         return self._set(None, "manual")
 
     def next(self) -> GuideState:
+        """Move to the next photo by hand. Returns the GuideState."""
         return self.show(self.state.frame + 1)
 
     def previous(self) -> GuideState:
+        """Move to the previous photo by hand. Returns the GuideState."""
         return self.show(self.state.frame - 1)
 
     def _set(self, off: float | None, gps: str) -> GuideState:

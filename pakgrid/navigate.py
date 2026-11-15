@@ -27,6 +27,8 @@ _COMPASS_8 = ("North", "North-East", "East", "South-East",
 
 @dataclass(frozen=True)
 class Direction:
+    """Distance and direction from one point to another, with the turn to make when a heading is known (see
+    direction())."""
     distance_m: float
     distance_ft: float
     bearing_deg: float
@@ -36,6 +38,7 @@ class Direction:
     turn: str | None        # e.g. "bear right"
 
     def to_dict(self) -> dict[str, Any]:
+        """As JSON-ready data, numbers rounded to 0.1."""
         return {k: (round(v, 1) if isinstance(v, float) else v) for k, v in self.__dict__.items()}
 
 
@@ -135,6 +138,7 @@ class NavState:
     arrow_mode: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """As JSON-ready data."""
         return asdict(self)
 
 
@@ -260,6 +264,7 @@ class NavigationSession:
 
     @property
     def state(self) -> NavState:
+        """The current NavState, without adding a reading."""
         tlat, tlon = self.target
         if self.position is None:
             return NavState("waiting", tlat, tlon)

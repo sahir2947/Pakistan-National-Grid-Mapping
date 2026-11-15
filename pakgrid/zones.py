@@ -260,6 +260,7 @@ class Zone:
 
     @property
     def sub_cell_count(self) -> int:
+        """Number of sub-cells in the zone."""
         return sum(bin(m).count("1") for m in self.masks.values())
 
     @property
@@ -269,6 +270,7 @@ class Zone:
 
     @property
     def empty(self) -> bool:
+        """True if the zone has no sub-cells."""
         return not self.masks
 
     def cells(self, full_only: bool = False) -> list[int]:
@@ -436,5 +438,6 @@ class ZoneIndex:
         return [name for name, m in self._by_cell.get(ids.cell_id(q, row, col), ()) if m >> bit & 1]
 
     def at_sub_cell(self, sub_cell_id: int) -> list[Any]:
+        """Names of the zones containing this sub-cell, in the order the zones were given."""
         cid, sub = ids.split_sub_cell_id(sub_cell_id)
         return [name for name, m in self._by_cell.get(cid, ()) if m >> sub & 1]

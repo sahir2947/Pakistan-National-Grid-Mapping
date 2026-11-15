@@ -121,6 +121,7 @@ class Reference:
         return f"{navigate.format_distance(self.distance_m)} {self.direction} of {self.place_name}"
 
     def to_dict(self) -> dict[str, Any]:
+        """As JSON-ready data."""
         return {"place_key": self.place_key, "place_name": self.place_name, "distance_m": self.distance_m,
                 "bearing_deg": self.bearing_deg, "direction": self.direction, "east_m": self.east_m,
                 "north_m": self.north_m, "text": self.text}
@@ -149,6 +150,7 @@ class UserLocality:
 
     @property
     def removed(self) -> bool:
+        """True once the locality has been removed (its history is kept)."""
         return self.removed_at is not None
 
     @property
@@ -157,6 +159,7 @@ class UserLocality:
         return f"{self.name} ({self.references[0].text})" if self.references else self.name
 
     def to_dict(self) -> dict[str, Any]:
+        """As JSON-ready data."""
         return {"id": self.id, "key": self.key, "name": self.name, "local_name": self.local_name,
                 "kind": self.kind, "tehsil_key": self.tehsil_key, "centre": [self.lat, self.lon],
                 "sub_cells": self.sub_cell_count, "shape": self.shape, "text": self.text,
@@ -256,6 +259,7 @@ class UserPlaces(RoadsMixin, AccessMixin):
             yield db
 
     def close(self) -> None:
+        """Close the user places file's database connections."""
         self._closed = True
         with self._lock:
             conns = list(self._open)

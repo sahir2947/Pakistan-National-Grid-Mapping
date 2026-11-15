@@ -124,6 +124,7 @@ class StreetAccess:
 
     @property
     def largest(self) -> str:
+        """The largest vehicle that gets through, e.g. 'rickshaw'."""
         return self.vehicles[-1]
 
     @property
@@ -133,6 +134,7 @@ class StreetAccess:
 
     @property
     def text(self) -> str:
+        """The answer in words: 'On foot only', 'Up to rickshaw size', 'All vehicles', ..."""
         return access_text(self.vehicles)
 
     def allows(self, vehicle: str) -> bool:
@@ -142,6 +144,7 @@ class StreetAccess:
         return vehicle in self.vehicles
 
     def to_dict(self) -> dict[str, Any]:
+        """As JSON-ready data."""
         return {"vehicles": list(self.vehicles), "largest": self.largest, "nested": self.nested, "text": self.text,
                 "source": self.source, "key": self.key, "name": self.name, "source_id": self.source_id,
                 "set_by": self.set_by, "set_at": self.set_at,
@@ -166,17 +169,21 @@ class AccessNote:
 
     @property
     def key(self) -> str:
+        """The note's key, 'note/<id>'."""
         return f"note/{self.id}"
 
     @property
     def removed(self) -> bool:
+        """True once the note has been removed (its history is kept)."""
         return self.removed_at is not None
 
     def access(self, distance_m: float | None = None) -> StreetAccess:
+        """The note's answer as a StreetAccess (distance_m: from a pin, if any)."""
         return StreetAccess(self.vehicles, "note", self.key, self.name, self.source_id, self.updated_by,
                             self.updated_at, distance_m)
 
     def to_dict(self) -> dict[str, Any]:
+        """As JSON-ready data."""
         return {"id": self.id, "key": self.key, "source_id": self.source_id, "name": self.name,
                 "line": [list(p) for p in self.line], "length_m": self.length_m, "vehicles": list(self.vehicles),
                 "text": access_text(self.vehicles), "created_by": self.created_by, "created_at": self.created_at,
@@ -184,6 +191,7 @@ class AccessNote:
                 "removed_by": self.removed_by, "removed_at": self.removed_at}
 
     def to_geojson(self) -> dict[str, Any]:
+        """The note as a GeoJSON Feature (a LineString of the stretch of street)."""
         return {"type": "Feature", "id": self.key,
                 "geometry": {"type": "LineString", "coordinates": [[lon, lat] for lat, lon in self.line]},
                 "properties": {"key": self.key, "source_id": self.source_id, "name": self.name,

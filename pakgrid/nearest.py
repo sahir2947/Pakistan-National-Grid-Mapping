@@ -71,6 +71,7 @@ class Neighbour:
         return f"{navigate.format_distance(self.distance_m)} {self.direction}"
 
     def to_dict(self) -> dict[str, Any]:
+        """As JSON-ready data, distances rounded to 0.1 m."""
         return {"id": self.id, "lat": self.lat, "lon": self.lon, "distance_m": round(self.distance_m, 1),
                 "bearing_deg": round(self.bearing_deg, 1), "direction": self.direction, "text": self.text}
 

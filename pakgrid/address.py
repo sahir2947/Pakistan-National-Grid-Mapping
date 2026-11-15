@@ -50,6 +50,7 @@ class GridAddress:
 
     @property
     def code(self) -> str:
+        """The sub-cell's code, e.g. '11-0140-0471-00'."""
         return ids.sub_cell_code(self.sub_cell_id)
 
     @property
