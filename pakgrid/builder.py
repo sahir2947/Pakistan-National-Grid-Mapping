@@ -6,6 +6,7 @@ import hashlib
 import os
 import sqlite3
 import struct
+import tempfile
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
@@ -47,7 +48,7 @@ def _parse_selection(quadrants: Iterable[Quadrant] | None,
 
 
 def _quadrant_number(q: Quadrant) -> int:
-    if isinstance(q, int):
+    if isinstance(q, int) and not isinstance(q, bool) and q in spec.QUADRANTS:
         return q
     for number, (code, _) in spec.QUADRANTS.items():
         if q == code:
@@ -144,20 +145,36 @@ def build_database(path: str | os.PathLike[str], quadrants: Iterable[Quadrant] |
     quadrant, row and boundary tables are always complete.
     """
     path = Path(path)
-    if path.exists():
-        if not overwrite:
-            raise FileExistsError(f"{path} already exists (pass overwrite=True to replace it)")
-        path.unlink()
+    if path.exists() and not overwrite:
+        raise FileExistsError(f"{path} already exists (pass overwrite=True to replace it)")
+    # Check everything before touching any file. An existing database is only ever replaced by
+    # a finished build: the build goes to a temporary file beside it, which is renamed over it
+    # at the end and deleted if anything fails, so a failure leaves the old file as it was.
+    qs, row_sel = _parse_selection(quadrants, rows)
+    partial = qs != [0, 1, 2, 3] or row_sel is not None
     started = time.perf_counter()
     layout = GridLayout.from_spec()
     boundary = boundary or Boundary.default()
-    qs, row_sel = _parse_selection(quadrants, rows)
-    partial = qs != [0, 1, 2, 3] or row_sel is not None
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".partial")
-    if tmp.exists():
-        tmp.unlink()
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".partial", dir=path.parent)
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        n_cells, sha256 = _write_database(tmp, layout, boundary, qs, row_sel, partial, pakistan_only, places,
+                                          progress)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return BuildReport(path, n_cells, n_cells * SUB * SUB, sha256, time.perf_counter() - started,
+                       path.stat().st_size)
+
+
+def _write_database(tmp: Path, layout: GridLayout, boundary: Boundary, qs: list[int], row_sel: range | None,
+                    partial: bool, pakistan_only: bool, places: bool,
+                    progress: Callable[[str], None] | None) -> tuple[int, str]:
+    """Write a whole database to `tmp` and make sure it is on disk; returns (cells, content SHA-256)."""
     db = sqlite3.connect(tmp)
     try:
         db.execute("PRAGMA journal_mode = OFF")
@@ -224,9 +241,9 @@ def build_database(path: str | os.PathLike[str], quadrants: Iterable[Quadrant] |
         db.commit()
     finally:
         db.close()
-    os.replace(tmp, path)
-    return BuildReport(path, n_cells, n_cells * SUB * SUB, h.hexdigest(),
-                       time.perf_counter() - started, path.stat().st_size)
+    with open(tmp, "rb+") as f:                 # written with synchronous = OFF: flush it to disk
+        os.fsync(f.fileno())
+    return n_cells, h.hexdigest()
 
 
 def _flush(db: sqlite3.Connection, cells_buf: list[tuple[int, ...]], subs_buf: list[tuple[Any, ...]]) -> None:
