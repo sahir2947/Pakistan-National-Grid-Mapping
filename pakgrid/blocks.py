@@ -275,7 +275,7 @@ class BlockSet:
         assert zone is not None
         return dict(zone.masks)
 
-    def _claim(self, code: str, masks: Masks, take: bool) -> None:
+    def _claim(self, code: str, masks: Mapping[int, int], take: bool) -> None:
         """Record that `code` owns these sub-cells, refusing (or with take, moving) any another block owns."""
         clashes: dict[str, int] = {}
         for c, m in masks.items():

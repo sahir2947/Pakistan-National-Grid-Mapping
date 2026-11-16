@@ -35,6 +35,7 @@ from bisect import bisect_right
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, ClassVar
 
 from . import geodesy, ids, spec
@@ -222,14 +223,26 @@ def _rows_of(mask: int) -> list[int]:
 
 @dataclass(frozen=True, eq=False)
 class Zone:
-    """A set of grid sub-cells (see the module docstring). Immutable; combine with | & -."""
-    masks: Masks                # {cell ID: 25-bit mask of its sub-cells in the zone}; no zero masks
+    """A set of grid sub-cells (see the module docstring). Immutable; combine with | & -.
+
+    `masks` is a read-only view of a private copy, so a zone cannot change after it is made:
+    it stays a safe key in sets and dicts, and a ZoneIndex built from it stays correct."""
+    masks: Mapping[int, int]    # {cell ID: 25-bit mask of its sub-cells in the zone}; no zero masks
     # The grid layout, set on each zone made with one; zones made without one have None
     # (contains() needs it). Not a dataclass field: it is not part of a zone's value.
     _layout: ClassVar[GridLayout | None] = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "masks", {c: m for c, m in self.masks.items() if m})
+        object.__setattr__(self, "masks", MappingProxyType({c: m for c, m in self.masks.items() if m}))
+
+    # A read-only view cannot be pickled itself, so a zone is pickled (and copied) as a plain dict.
+    def __getstate__(self) -> dict[str, Any]:
+        return {"masks": dict(self.masks), "_layout": self.__dict__.get("_layout")}
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        object.__setattr__(self, "masks", MappingProxyType(dict(state["masks"])))
+        if state.get("_layout") is not None:
+            object.__setattr__(self, "_layout", state["_layout"])
 
     # -- Checks ----------------------------------------------------------------------
 
@@ -245,9 +258,9 @@ class Zone:
         return bool(self.masks.get(ids.cell_id(q, row, col), 0) >> (sr * SUB + sc) & 1)
 
     def __contains__(self, sub_cell_id: object) -> bool:
+        """`sub_cell_id in zone`."""
         if not isinstance(sub_cell_id, int):
             return False
-        """`sub_cell_id in zone`."""
         cid, sub = ids.split_sub_cell_id(sub_cell_id)
         return bool(self.masks.get(cid, 0) >> sub & 1)
 
@@ -403,7 +416,7 @@ class Zone:
         return out
 
 
-def make_zone(masks: Masks, layout: GridLayout | None) -> Zone:
+def make_zone(masks: Mapping[int, int], layout: GridLayout | None) -> Zone:
     z = Zone(masks)
     object.__setattr__(z, "_layout", layout)
     return z

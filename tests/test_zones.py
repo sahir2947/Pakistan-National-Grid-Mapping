@@ -247,3 +247,30 @@ def test_lat_lon_e7_rounding_matches_locate(grid):
     zone = grid.zone(cells=[grid.locate(*POINT).code])
     lat, lon = (v / SCALE for v in (to_e7(POINT[0]), to_e7(POINT[1])))
     assert zone.contains(lat, lon) and zone.contains(*POINT)
+
+
+def test_a_zone_cannot_change_after_it_is_made(grid):
+    source = {3289559: 1}
+    z = Zone(source)
+    seen, index = {z}, ZoneIndex({"a": z}, layout=grid.layout)
+    with pytest.raises(TypeError):
+        z.masks[2] = 1                               # the masks are read-only
+    with pytest.raises(TypeError):
+        del z.masks[3289559]
+    source[2] = 1                                    # changing the dict it was made from changes nothing
+    assert dict(z.masks) == {3289559: 1} and z in seen and hash(z) == hash(Zone({3289559: 1}))
+    assert index.at_sub_cell(ids.sub_cell_id(3289559, 0)) == ["a"]
+
+
+def test_a_zone_pickles_and_copies_with_its_layout(grid):
+    import copy
+    import pickle
+    zone = grid.zone(circle=(31.5204, 74.3587, 300))
+    for again in (pickle.loads(pickle.dumps(zone)), copy.copy(zone), copy.deepcopy(zone)):
+        assert again == zone and hash(again) == hash(zone)
+        assert again.contains(31.5204, 74.3587)      # the layout came along
+        with pytest.raises(TypeError):
+            again.masks[1] = 1
+    plain = pickle.loads(pickle.dumps(Zone({1: 1})))  # a zone made without a layout stays without one
+    with pytest.raises(ZoneError):
+        plain.contains(31.5, 74.3)
