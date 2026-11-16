@@ -155,6 +155,18 @@ first release. Pull request numbers are in brackets.
   [#26]
 
 ### Changed
+- Faster area searches, with exactly the same answers: a row's cells in a box
+  or circle are found as one run of columns, and search boxes are no larger
+  than needed. Lookups with a user places file (nearest street, what can drive
+  through) take ~110 µs instead of ~190 µs; `nearest_places` ~0.2 ms in a city
+  (was ~0.6 ms) and ~4 ms on average anywhere in Pakistan (was ~24 ms); a
+  `PointIndex` of a few points spread far apart is ~6× faster; `cells_in_area`
+  and `cells_within` are faster too. [#34]
+- `gridfeatures.md` logs the library-quality work (type hints, contributor
+  files, ruff, documentation, speed, licence, release), and project.md's
+  roadmap and open decisions are brought up to date, including the licence
+  choice; the docs no longer call pakgrid open source or say an app uses it
+  today (each app's developers integrate it themselves). [#34]
 - The walkthrough Django app's "sync" job takes photos straight from the
   uploaded file, and stores the video only if taking the photos fails. [#26]
 

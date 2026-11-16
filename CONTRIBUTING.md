@@ -13,7 +13,7 @@ Thank you for your interest in pakgrid. This page says what you can do, and how.
 - **Security problems are reported privately**, never in a public issue. See
   [SECURITY.md](SECURITY.md).
 
-The licence, *Pakgrid Org 1.0*, is being finalised. Until its file is in this
+The licence, *Pakgrid Org License 1.0*, is being finalised. Until its file is in this
 repository, all rights in pakgrid are reserved by the owner.
 
 ## Reporting a bug

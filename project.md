@@ -4,9 +4,9 @@
 |---|---|
 | **Status** | v0.1 library implemented (Python package `pakgrid`, see the README); scope will be refined as the project develops |
 | **Grid version** | v1 (proposed, not yet frozen) |
-| **First user** | Dukandaari app (delivery logistics) |
-| **Licence** | Open source (MIT or Apache-2.0, to be decided) |
-| **Last updated** | 2026-10-27 |
+| **Users** | Any app that needs it, using pakgrid as a standalone library; delivery logistics apps such as Dukandaari first |
+| **Licence** | *Pakgrid Org License 1.0* (the owner's own licence, under legal review; all rights reserved until it is published) — see §16 |
+| **Last updated** | 2026-11-16 |
 
 ![How a grid code is built: quadrants, rows and columns, sub-cells, and bit packing, worked through for central Lahore](docs/grid_schematic.png)
 
@@ -65,12 +65,13 @@ centre).
 
 ### 1.3 Long-term vision
 
-A **standalone, open-source mapping platform for Pakistan** built around the
+A **standalone mapping platform for Pakistan** built around the
 grid, with a public API that any app can use: delivery apps, courier companies,
-emergency services, government bodies. **Dukandaari is the first user.**
+emergency services, government bodies. Delivery apps such as **Dukandaari** come
+first. Each app's own developers decide how to use the platform in their app.
 
 ```
-        Pakistan Grid Platform (open source)
+        Pakistan Grid Platform
   ┌──────────────────────────────────────────┐
   │ Grid engine  ·  Map  ·  Search  ·  Routes │
   └───────────────────┬──────────────────────┘
@@ -1939,6 +1940,8 @@ the same data centre.
   SQLite file
 - 200,000 random points across the whole rectangle
 - Python 3.13 on one CPU core of a cloud machine, with no tuning
+- area searches, nearest lookup and the user places rows re-measured in
+  November 2026 after they were made faster (the same answers, less work)
 
 | Operation | Per call | Per second |
 |---|---|---|
@@ -1949,13 +1952,14 @@ the same data centre.
 | `locate(lat, lon)` | 22 µs | ~46,000 |
 | `locate(lat, lon, accuracy_m=8)`, including candidates | 25–30 µs | ~33,000–40,000 |
 | `locate()` in a border sub-cell (point tested against the border line) | ~26 µs | ~39,000 |
-| `cells_in_area(...)` 1° × 1°, `pakistan_only=True` (10,879 cells) | 17 ms | — |
-| `cells_within(...)` 5 km, cells (78) / 1 km, sub-cells (77) | 1.3 ms / 1.5 ms | — |
-| `cells_within(...)` 10 km, cells, `pakistan_only=True` (315) | 5.3 ms | — |
+| `cells_in_area(...)` 1° × 1°, `pakistan_only=True` (10,879 cells) | 9 ms | — |
+| `cells_within(...)` 5 km, cells (78) / 1 km, sub-cells (77) | 0.9 ms / 1.0 ms | — |
+| `cells_within(...)` 10 km, cells, `pakistan_only=True` (315) | 2.5 ms | — |
 | `distance(a, b)` | 15 µs | ~65,000 |
 | `zone.contains(lat, lon)` / `ZoneIndex.at` (100 zones) | ~3 µs / ~4 µs | — |
 | `place_geojson` Lahore district / Punjab; `zone.to_geojson()` 20 km² | 0.15 s / 1.5 s; 2 ms | — |
-| `PointIndex.nearest` 20,000 points / 20 sparse points; `nearest_places` | 0.3 ms / 5 ms; 1 ms | — |
+| `PointIndex.nearest` 20,000 points / 20 points across Pakistan | 0.2 ms / 7 ms | — |
+| `nearest_places` in a city / anywhere in Pakistan (average) | 0.2 ms / 4 ms | — |
 | `zone(polygon=...)` ~80,000 sub-cells / `zone(place="punjab")` 5.1 million | 16 ms / 0.6 s | — |
 
 **Build and verify:**
@@ -1965,7 +1969,8 @@ the same data centre.
 | `pakgrid build` (full grid, with border flags) | 36 s, 785 MB, ~51 MB peak memory |
 | `pakgrid build --pakistan-only` | 19 s, 275 MB, 872,146 cells |
 | Places layer (part of `pakgrid build`, or `pakgrid build-places`) | ~55 s extra, +52 MB, ~620 MB peak memory during the build |
-| `grid.place(sub_cell)` / extra cost of the place in `locate()` | ~23 µs / ~20 µs |
+| `grid.place(sub_cell)` / extra cost of the place in `locate()` | ~11 µs / ~10 µs |
+| `locate()` with a user places file of 200 roads and 100 access notes (nearest street and what can drive through) | ~110 µs |
 | `pakgrid verify --full` | about as long as a build; regenerates every record and flag and compares |
 | Content SHA-256, full database (grid v1) | `f8da541f3865862a18ac25dded339c2a84eeea4b5ff26e59d27676a4309e0109` |
 | Content SHA-256, Pakistan edition | `6c5c2ec492a38f93020b593c554e9d437b39d859948a2cc82e94e6605c30cb01` |
@@ -2106,9 +2111,12 @@ Django REST framework and Celery have no type information of their own, so in
 | **Radius search and distances** ✅ | Blocks within a radius of a point and cell-to-cell distances, in Python, the CLI and the viewer, plus a Grid show/hide toggle (§7.5) |
 | **What can drive through** ✅ | Shop owners and residents say with a tap what can drive through a street; riders see it on lookups (§5.9) |
 | **Walkthroughs** ✅ stages 1–2 | Photos from the road to the door with a rider rule for ports, the viewer's Walk tool, and an optional Django app (§5.10). Stage 3 (blurring, several per address, expiry, feedback) later. A standalone pakgrid feature: no app uses it yet |
-| **Documentation** ✅ | Every feature documented: this file, the feature table in the README, [docs/django.md](docs/django.md), [viewer/README.md](viewer/README.md) and [conformance/](conformance/) |
+| **Documentation** ✅ | Every feature documented: this file, the feature table in the README, [docs/django.md](docs/django.md), [viewer/README.md](viewer/README.md) and [conformance/](conformance/); every public class and method has a docstring |
+| **Code quality** ✅ | Type hints on every function with `py.typed` and `mypy`, the `ruff` linter, `CONTRIBUTING.md`, `SECURITY.md`, issue forms and a pull request checklist (§14) |
+| **Performance** ✅ | Area searches, nearest lookup and street lookups made faster with the same answers (§12) |
+| **Licence** 🚧 | *Pakgrid Org License 1.0*, with the owner's lawyer for review (§16) |
 | **v0.1.0 release** | First tagged GitHub release, with the databases attached |
-| **Pilot** | Dukandaari in one city (Lahore or Karachi): addresses, batching, rider navigation |
+| **Pilot** | A first app (for example Dukandaari) uses pakgrid in one city, such as Lahore or Karachi, for addresses, batching and rider navigation. The app's own developers integrate it in their code; pakgrid stays a standalone library, and is not changed for any one app |
 | **v1.0 — Public release** | Frozen grid v1, published database (full and Pakistan editions), documentation |
 | **Later** | Hosted HTTP API (§7.4) if wanted, map website, road routing |
 
@@ -2127,7 +2135,7 @@ to use them in their application.
 |---|---|
 | Final outer boundaries | **Decided:** east edge moved from 77.0° E to 78.0° E so all of Baltistan (up to the Karakoram Pass, ~77.8° E) is inside; other edges confirmed. Fixed from here on, because changing them changes every ID |
 | Boundary dataset for the border flags | **Decided:** geoBoundaries `PAK-ADM0` (OpenStreetMap, ODbL): administered territory including AJK and Gilgit-Baltistan, coastline as the edge (§5.6) |
-| Open-source licence | MIT or Apache-2.0 |
+| Licence | **Chosen:** the owner's own *Pakgrid Org License 1.0*, not an open-source licence: free non-commercial use, commercial use by paid licence, credit required, the grid never changed, and no changes, resale, hosted API or use of the name without the owner's permission. A draft is with the owner's lawyer; until a `LICENSE` file is published, all rights are reserved |
 | Readable code format | **Implemented:** `QQ-RRRR-CCCC-SS`, plus an optional offset `W23 S18` (the grid address, §4.4) |
 | Package and project name | `pakgrid` (working name) |
 | Accuracy threshold for accepting a pin | ~50 m |

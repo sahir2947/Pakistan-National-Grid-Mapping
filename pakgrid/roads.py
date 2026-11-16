@@ -244,15 +244,11 @@ def _cols(ql: Any, row: int, a: float, b: float) -> tuple[int, int]:
 
 def _subs_near(layout: GridLayout, lat: float, lon: float, r: float) -> list[int]:
     """IDs of the sub-cells with any part within r metres of the pin (no centroids worked out)."""
-    m_lat, m_lon = geodesy.metres_per_degree(lat)
-    pad = 1.02 * r + 300
     out: list[int] = []
-    for q, i, j in layout.items_in_area(to_e7(lat - pad / m_lat), to_e7(lon - pad / m_lon),
-                                        to_e7(lat + pad / m_lat), to_e7(lon + pad / m_lon), "sub"):
-        s, w, n, e = (v / SCALE for v in layout.quadrants[q].item_bounds_e7(i, j, "sub"))
-        if math.hypot(max(w - lon, 0.0, lon - e) * m_lon, max(s - lat, 0.0, lat - n) * m_lat) <= r:
-            row, col = i // SUB, j // SUB
-            out.append(ids.sub_cell_id(ids.cell_id(q, row, col), (i % SUB) * SUB + j % SUB))
+    for q, i, j0, j1 in layout.runs_within(lat, lon, r, "sub"):
+        row = i // SUB
+        out.extend(ids.sub_cell_id(ids.cell_id(q, row, j // SUB), (i % SUB) * SUB + j % SUB)
+                   for j in range(j0, j1 + 1))
     return out
 
 

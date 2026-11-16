@@ -217,26 +217,43 @@ class GridLayout:
             return 0, self.quadrants[0].level_rows(level) - 1
         return None
 
-    def _cols_touching(self, q: int, i: int, level: str, w_e7: int, e_e7: int,
-                       strict_west: bool = False) -> list[int]:
-        """Columns j of level row i in quadrant q whose span touches [w_e7, e_e7].
+    def _col_run(self, q: int, i: int, level: str, w_e7: int, e_e7: int,
+                 strict_west: bool = False) -> tuple[int, int]:
+        """(first, last) column j of level row i in quadrant q whose span touches [w_e7, e_e7]; the
+        columns between them all touch it, and first > last when none does.
 
         With strict_west, an item that only ends exactly at w_e7 is excluded
         (used for half-open items against a closed query box).
         """
         ql = self.quadrants[q]
         if e_e7 < ql.west_e7 or w_e7 > ql.east_e7:
-            return []
+            return 0, -1
         m = ql.level_cols(i, level)
         span = ql.east_e7 - ql.west_e7
         j0 = max((w_e7 - ql.west_e7) * m // span - 1, 0)
         j1 = min((e_e7 - ql.west_e7) * m // span + 1, m - 1)
-        out = []
-        for j in range(j0, j1 + 1):
-            _, a, _, b = ql.item_bounds_e7(i, j, level)
-            if a <= e_e7 and (b > w_e7 if strict_west else b >= w_e7):
-                out.append(j)
-        return out
+        # Column edges only increase, so the columns that touch form one run: trim the estimate
+        # at both ends instead of testing every column in it.
+        u = _unit(level)
+        row = i * u // SUB
+
+        def west_edge(j: int) -> int:
+            return ql.fine_lon_e7(row, j * u)
+
+        def east_edge(j: int) -> int:
+            return ql.fine_lon_e7(row, (j + 1) * u)
+
+        while j0 <= j1 and not (east_edge(j0) > w_e7 if strict_west else east_edge(j0) >= w_e7):
+            j0 += 1
+        while j1 >= j0 and west_edge(j1) > e_e7:
+            j1 -= 1
+        return j0, j1
+
+    def _cols_touching(self, q: int, i: int, level: str, w_e7: int, e_e7: int,
+                       strict_west: bool = False) -> list[int]:
+        """Columns j of level row i in quadrant q whose span touches [w_e7, e_e7] (see _col_run)."""
+        j0, j1 = self._col_run(q, i, level, w_e7, e_e7, strict_west)
+        return list(range(j0, j1 + 1))
 
     def neighbours(self, q: int, i: int, j: int, level: str) -> list[Item]:
         """Items sharing an edge or a corner with (q, i, j), across quadrant lines too."""
@@ -262,15 +279,44 @@ class GridLayout:
                 found.extend((nq, ni, nj) for nj in self._cols_touching(nq, ni, level, w, e))
         return found
 
+    def runs_within(self, lat: float, lon: float, r: float, level: str) -> list[tuple[int, int, int, int]]:
+        """The items with any part within r metres of (lat, lon), row by row as in row_runs.
+
+        Distance is measured flat, at the pin's latitude scale (geodesy.metres_per_degree), from
+        the pin to the nearest point of the item. Along a row it falls to the item holding the
+        pin's longitude and rises after it, so each row's items within r are one run.
+        """
+        m_lat, m_lon = geodesy.metres_per_degree(lat)
+        pad = r + 1.0                    # the box holds the circle; 1 m covers rounding to 1e-7 degree
+        out = []
+        for q, i, j0, j1 in self.row_runs(to_e7(lat - pad / m_lat), to_e7(lon - pad / m_lon),
+                                          to_e7(lat + pad / m_lat), to_e7(lon + pad / m_lon), level):
+            ql = self.quadrants[q]
+            while j0 <= j1 and not _item_within(ql, i, j0, level, lat, lon, m_lat, m_lon, r):
+                j0 += 1
+            while j1 >= j0 and not _item_within(ql, i, j1, level, lat, lon, m_lat, m_lon, r):
+                j1 -= 1
+            if j0 <= j1:
+                out.append((q, i, j0, j1))
+        return out
+
     def items_in_area(self, south_e7: int, west_e7: int, north_e7: int, east_e7: int,
                       level: str) -> list[Item]:
         """All items whose area overlaps the closed box, in ID order."""
+        return [(q, i, j) for q, i, j0, j1 in self.row_runs(south_e7, west_e7, north_e7, east_e7, level)
+                for j in range(j0, j1 + 1)]
+
+    def row_runs(self, south_e7: int, west_e7: int, north_e7: int, east_e7: int,
+                 level: str) -> list[tuple[int, int, int, int]]:
+        """The items overlapping the closed box, row by row: (q, i, first j, last j), in ID order.
+        A row's items in the box are always one run of columns, so this is items_in_area without
+        listing them one by one."""
         south_e7, north_e7 = max(south_e7, SOUTH_E7), min(north_e7, NORTH_E7)
         west_e7, east_e7 = max(west_e7, WEST_E7), min(east_e7, EAST_E7)
         if south_e7 > north_e7 or west_e7 > east_e7:
             return []
         u = _unit(level)
-        out: list[Item] = []
+        out: list[tuple[int, int, int, int]] = []
         for ql in self.quadrants:
             lines = ql.lat_e7
             if ql.west_e7 > east_e7 or ql.east_e7 < west_e7 or lines[0] > north_e7 or lines[-1] < south_e7:
@@ -281,11 +327,18 @@ class GridLayout:
             first_row = min(max(bisect_right(lines, south_e7) - 1, 0), last) // u
             last_row = min(max(bisect_right(lines, north_e7) - 1, 0), last) // u
             for i in range(first_row, last_row + 1):
-                cols = self._cols_touching(ql.q, i, level, west_e7, east_e7, strict_west=True)
-                if not cols and ql.east == spec.EAST and west_e7 == ql.east_e7:
-                    cols = [ql.level_cols(i, level) - 1]
-                out.extend((ql.q, i, j) for j in cols)
+                j0, j1 = self._col_run(ql.q, i, level, west_e7, east_e7, strict_west=True)
+                if j0 > j1 and ql.east == spec.EAST and west_e7 == ql.east_e7:
+                    j0 = j1 = ql.level_cols(i, level) - 1
+                if j0 <= j1:
+                    out.append((ql.q, i, j0, j1))
         return out
+
+
+def _item_within(ql: QuadrantLayout, i: int, j: int, level: str, lat: float, lon: float,
+                 m_lat: float, m_lon: float, r: float) -> bool:
+    s, w, n, e = (v / SCALE for v in ql.item_bounds_e7(i, j, level))
+    return math.hypot(max(w - lon, 0.0, lon - e) * m_lon, max(s - lat, 0.0, lat - n) * m_lat) <= r
 
 
 def compute_quadrant_rows(q: int) -> tuple[int, list[int]]:

@@ -39,6 +39,21 @@ Features asked for by the project owner. Add new requests here.
 | R9 | **What can drive through a street** | ✅ | Shop owners and residents answer "What can drive through this street?" with a tap: foot, bicycle, motorbike, rickshaw, car, pickup, truck (the largest that fits, or a list with exceptions). The answer is kept on a user road, or as an access note for any other street on the app's map (its line, ID and name), with author and history. Lookups within 25 m carry it (`Up to rickshaw size`) for riders. Also `pakgrid user-places access`, and the viewer's **Roads** tool (project.md §5.9) |
 | R10 | **Walkthroughs: photos from the road to the door** | 🚧 stages 1–2 ✅ | A shop owner films the walk from a road point to their door with the phone's GPS. **Stage 1 (done):** the library cleans the track, finds the turns, picks the photos (every 5 m and at turns, each with its video time and step text), and writes the walkthrough JSON; ffmpeg commands take the photos; the rider rule (which photo, distance to the door, next turn; swipes) with `conformance/WALKTHROUGH.md` and `walkthrough.json` for the Flutter port; `pakgrid walkthrough`; the viewer's **Walk** tool (project.md §5.10). **Stage 2 (done):** the optional Django app `pakgrid.contrib.walkthroughs` (`pakgrid[django]`): upload API that refuses bad recordings at once, the photo job with ffmpeg (Celery, cron command, thread or in the request) into Django's storage with the video deleted, owner approval (a new live walkthrough replaces the old), `GET walkthroughs/for/<place_ref>/` for riders with photo URLs, the app's own CAN_UPLOAD / CAN_VIEW rules, and the admin (docs/django.md). **Stage 3:** blurring faces and plates, several walkthroughs per address, expiry, rider feedback. **Scope:** an explicit pakgrid feature (library, rider rule, viewer tool, optional Django app); apps opt in by installing it. Not integrated into any app yet |
 
+## Library quality
+
+Work on the library itself rather than new features: how reliable, readable,
+fast and ready to release it is. Pull request numbers are in brackets.
+
+| # | Work | Status | What changed |
+|---|---|---|---|
+| Q1 | **Type hints** | ✅ | Every function in the package has type hints, checked by `mypy` on every push; the package ships `py.typed`, so an app's own type checker (mypy, Pyright) checks its calls into pakgrid. Found and tightened loose types along the way, with no behaviour change; the conformance files came out byte-for-byte the same [#30] |
+| Q2 | **Contributor files** | ✅ | `CONTRIBUTING.md` (bug reports and suggestions from anyone; code changes by the owner's permission only, and the rules a change must keep), `SECURITY.md` (private reporting), issue forms for bugs and feature requests, and a pull request checklist [#31] |
+| Q3 | **Linting with ruff** | ✅ | `ruff` replaces `pyflakes`: unused names, import order, 120-column lines, likely bugs and modern syntax, set in `pyproject.toml`. It found a test that never tested repeated vehicles (a set literal had already dropped them) and a test that accepted any error [#32] |
+| Q4 | **Documentation complete** | ✅ | Checked against the code: every public class and method has a docstring and is in project.md; every command and option is in §7.2; the `ids` helpers are described (§4.2); the package layout is current (§6.1) [#28, #33] |
+| Q5 | **Faster area searches** | ✅ | The same answers with less work: a row's cells in a box or circle are found as one run, and search boxes are no larger than needed. Lookups with user roads and access notes ~110 µs (was ~190 µs); `nearest_places` ~0.2 ms in a city (was ~0.6 ms) and ~4 ms anywhere (was ~24 ms); sparse `PointIndex` searches ~6× faster; checked identical to the old code on over 600,000 cases (project.md §12) [#34] |
+| Q6 | **Licence** | 🚧 | *Pakgrid Org License 1.0*: free non-commercial use, paid commercial licences, credit required, the grid never changed, no changes, resale, hosted API or use of the name without permission. A draft is with the owner's lawyer; until a `LICENSE` file is published, all rights are reserved |
+| Q7 | **v0.1.0 release** | ⬜ | Tag the first release, with the databases attached, once the licence is final (project.md §15) |
+
 ## Proposed
 
 Suggested features for delivery and logistics apps, built on what the grid
@@ -77,4 +92,9 @@ Features already in the library, for reference.
 | Custom blocks (R7) | `pakgrid/blocks.py`, `pakgrid/describe.py`, project.md §7.9 |
 | User roads (R8) | `pakgrid/roads.py`, project.md §5.9 |
 | What can drive through (R9) | `pakgrid/access.py`, project.md §5.9 |
+| Type hints, `py.typed` and `mypy` (Q1) | every module; `pyproject.toml`, `.github/workflows/tests.yml` |
+| Contributor files (Q2) | `CONTRIBUTING.md`, `SECURITY.md`, `.github/ISSUE_TEMPLATE/`, `.github/pull_request_template.md` |
+| Linting with ruff (Q3) | `pyproject.toml`, `.github/workflows/tests.yml` |
+| Documentation complete (Q4) | docstrings, project.md, README.md |
+| Faster area searches (Q5) | `pakgrid/layout.py` (`row_runs`, `runs_within`), `pakgrid/nearest.py`, `pakgrid/roads.py`, project.md §12 |
 | Walkthroughs, stages 1–2 (R10) | `pakgrid/walkthrough.py`, `pakgrid/contrib/walkthroughs/`, `conformance/WALKTHROUGH.md`, project.md §5.10, docs/django.md |
