@@ -431,6 +431,12 @@ for each quadrant 00, 01, 10, 11:
             write its 25 sub-cells: IDs, boundaries, centroids
 ```
 
+The arguments are checked before any file is touched. The database is written
+to a temporary file beside the target and renamed over it only once it is
+complete, so `pakgrid build --overwrite` never loses the old database: if the
+build fails (a bad argument, a full disk, an interruption), the old file is
+left byte for byte as it was, and the temporary file is removed.
+
 ### 5.2 Database schema (SQLite)
 
 SQLite is part of Python's standard library, needs no server, and is a single
@@ -641,7 +647,9 @@ with Grid.open("pakgrid_v1_pakistan.sqlite") as grid:
 ```
 
 `pakgrid build-places --db FILE` adds or rebuilds the layer in an existing
-database without touching the grid.
+database without touching the grid. The whole replacement is one database
+transaction: if it fails part-way (an error, a full disk, the process killed),
+SQLite rolls it back and the old layer is left as it was.
 
 ### 5.8 User places: localities drawn by an app's users
 
@@ -1378,7 +1386,10 @@ with Grid.open("pakgrid_v1_pakistan.sqlite") as grid:
 | `place=` | Every sub-cell tagged with the place (a province's or district's through its tehsils; localities and user localities too), as `cells_in_place(level="sub")` |
 
 `pakistan_only=True` keeps only sub-cells inside Pakistan or on its border.
-A zone's edge follows the ~200 m sub-cells, not the drawn line: a pin is in
+A zone never changes once made: `zone.masks` is read-only (writing to it
+raises `TypeError`), so a zone is safe as a key in sets and dicts and a
+`ZoneIndex` built from it stays correct. Zones pickle and copy with their grid
+layout. A zone's edge follows the ~200 m sub-cells, not the drawn line: a pin is in
 the zone when the sub-cell holding it is (the edge rule of §4). That is what
 makes the check fast and identical in Python, JavaScript and any port, and a
 pin within ~100 m of the drawn line can fall either side of it.
