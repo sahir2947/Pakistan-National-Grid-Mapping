@@ -75,8 +75,11 @@ a number and the field is listed in `field_tolerance`, your number must be
 within that tolerance (`tolerance[field_tolerance[field]]`); otherwise the
 value must be exactly equal (strings, `null`, and inputs passed through).
 
-**NaN.** JSON has no NaN, so an input that is NaN (a broken sensor reading) is
-written as the string `"NaN"`. Turn it into your language's NaN before calling.
+**NaN and infinity.** JSON has neither, so an input that is NaN or infinite (a
+broken sensor reading or clock) is written as the string `"NaN"`, `"Infinity"`
+or `"-Infinity"`. Turn those into your language's values before calling. Any
+other string is passed to the engine as it is: a time given as text, which the
+engine must ignore (NAVIGATION.md §5).
 
 **Ties.** Random cases never lie within 1e-6 of a decision threshold, so a
 correct port gets the same words on any platform. Exact ties are tested only

@@ -17,8 +17,9 @@ const libPath = process.argv[3] || path.join(here, "..", "..", "viewer", "pakgri
 const suite = JSON.parse(fs.readFileSync(suitePath, "utf8"));
 const P = require(path.resolve(libPath));
 
-// The file writes NaN as the string "NaN" (JSON has no NaN).
-function num(v) { return v === "NaN" ? NaN : v; }
+// JSON has no NaN or infinity, so the file writes them as the strings "NaN", "Infinity" and
+// "-Infinity". Any other string is passed on as it is (a time given as text, to be ignored).
+function num(v) { return v === "NaN" ? NaN : v === "Infinity" ? Infinity : v === "-Infinity" ? -Infinity : v; }
 
 let checked = 0;
 const failures = [];
@@ -67,10 +68,10 @@ suite.sessions.forEach((s, i) => {
     let state;
     switch (step.call) {
       case "add_fix":
-        state = nav.addFix(a.lat, a.lon, { accuracy: num(a.accuracy), speed: num(a.speed),
-                                           heading: num(a.heading), time: a.time });
+        state = nav.addFix(num(a.lat), num(a.lon), { accuracy: num(a.accuracy), speed: num(a.speed),
+                                                     heading: num(a.heading), time: num(a.time) });
         break;
-      case "add_compass": state = nav.addCompass(num(a.heading), a.time); break;
+      case "add_compass": state = nav.addCompass(num(a.heading), num(a.time)); break;
       case "set_position": state = nav.setPosition(a.lat, a.lon, num(a.heading)); break;
       case "set_target": state = nav.setTarget(a.lat, a.lon); break;
       case "reset": state = nav.reset(); break;

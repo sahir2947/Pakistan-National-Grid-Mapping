@@ -203,7 +203,7 @@ def _at(origin: tuple[float, float], east: float, north: float) -> dict[str, flo
 def _named_sessions() -> list[tuple[str, tuple[float, float], dict[str, Any], list[Step]]]:
     t = (31.5204, 74.3587)
 
-    def fix(e: float, n: float, time: float, **kw: Any) -> Step:
+    def fix(e: float, n: float, time: Any, **kw: Any) -> Step:
         return ("add_fix", {**_at(t, e, n), "time": time, **kw})
 
     def pos(e: float, n: float, **kw: Any) -> Step:
@@ -249,6 +249,15 @@ def _named_sessions() -> list[tuple[str, tuple[float, float], dict[str, Any], li
         ("set_target keeps the rider; reset forgets the rider but not the compass", t, {}, [
             fix(0, -500, 0.0), ("set_target", _at(t, 0, -1000)), ("add_compass", {"heading": 90.0, "time": 1.0}),
             ("reset", {}), fix(0, -500, 2.0)]),
+        ("a time that is not a finite number, or a late reading, is ignored", t, {}, [
+            fix(0, -500, 10.0, accuracy=10.0), fix(3, -500, float("nan"), accuracy=10.0),
+            fix(3, -500, float("inf"), accuracy=10.0), fix(3, -500, -float("inf"), accuracy=10.0),
+            fix(3, -500, "11", accuracy=10.0), fix(3, -500, True, accuracy=10.0),
+            fix(3, -500, 9.5, accuracy=10.0),                       # older than the last reading: late
+            fix(2, -500, 10.0, accuracy=10.0),                      # the same time is not late
+            ("add_compass", {"heading": 90.0, "time": float("nan")}),
+            ("add_compass", {"heading": 90.0, "time": 10.5}), ("add_compass", {"heading": 180.0, "time": 10.2}),
+            ("add_compass", {"heading": 200.0, "time": "11"}), fix(1, -500, 11.0, accuracy=10.0)]),
         ("custom thresholds", t, {"arrived_m": 5.0, "almost_m": 100.0, "moving_mps": 5.0, "compass_fresh_s": 1.0,
                                   "smoothing_window_s": 3.0, "smoothing_count": 2}, [
             fix(0, -80, 0.0, accuracy=10.0, speed=4.0, heading=0.0), fix(2, -80, 1.0, accuracy=10.0, speed=5.0,
@@ -325,7 +334,8 @@ def navigation_suite(n_direction: int = 300, n_random_sessions: int = 25, seed: 
 
 
 def navigation_json() -> str:
-    """The navigation suite as JSON text. NaN inputs are written as the string "NaN"."""
+    """The navigation suite as JSON text. NaN and infinite inputs are written as the strings "NaN",
+    "Infinity" and "-Infinity"."""
     def clean(o: Any) -> Any:
         if isinstance(o, dict):
             return {k: clean(v) for k, v in o.items()}
@@ -333,6 +343,8 @@ def navigation_json() -> str:
             return [clean(v) for v in o]
         if isinstance(o, float) and math.isnan(o):
             return "NaN"
+        if isinstance(o, float) and math.isinf(o):
+            return "Infinity" if o > 0 else "-Infinity"
         return o
     return json.dumps(clean(navigation_suite()), indent=1, allow_nan=False) + "\n"
 

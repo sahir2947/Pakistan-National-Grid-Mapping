@@ -580,28 +580,42 @@
   // A usable GPS position: finite numbers within -90..90 and -180..180 (as pakgrid.navigate).
   function validPoint(lat, lon) { return finite(lat) && finite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180; }
   function mod360(h) { return ((h % 360) + 360) % 360; }
-  function nowSeconds(t) { return t == null ? Date.now() / 1000 : +t; }
+  // A reading's time: the clock when not given, else the number given; null when that is not a
+  // finite number (the reading is then ignored), as pakgrid.navigate.
+  function readingTime(t) { return t == null ? Date.now() / 1000 : finite(t) ? t : null; }
+  function target(lat, lon) {
+    if (!validPoint(lat, lon)) throw new Error("the target must be a valid point (lat, lon), got (" + lat + ", " + lon + ")");
+    return [lat, lon];
+  }
 
   // Navigation engine (same as pakgrid.navigate.NavigationSession; see its docstring). Feed it
   // GPS fixes and compass readings; every method returns the new state, with the same keys as
   // Python's NavState.to_dict(). Options use the Python names: arrived_m, almost_m, moving_mps,
-  // compass_fresh_s, smoothing_window_s, smoothing_count. Times are in seconds.
+  // compass_fresh_s, smoothing_window_s, smoothing_count. Times are in seconds; a reading with a
+  // time that is not a finite number, or older than the newest of its kind, is ignored. Invalid
+  // options or an invalid target throw, as Python's ValueError.
   function NavigationSession(targetLat, targetLon, opts) {
     opts = opts || {};
     function opt(k, d) { return opts[k] == null ? d : opts[k]; }
-    this.arrived_m = opt("arrived_m", 15);
-    this.almost_m = opt("almost_m", 50);
-    this.moving_mps = opt("moving_mps", 2);
-    this.compass_fresh_s = opt("compass_fresh_s", 3);
-    this.smoothing_window_s = opt("smoothing_window_s", 10);
+    var self = this;
+    [["arrived_m", 15], ["almost_m", 50], ["moving_mps", 2], ["compass_fresh_s", 3], ["smoothing_window_s", 10]]
+      .forEach(function (kd) {
+        var v = opt(kd[0], kd[1]);
+        if (!(finite(v) && v >= 0)) throw new Error(kd[0] + " must be a finite number of at least 0, got " + v);
+        self[kd[0]] = v;
+      });
+    if (this.smoothing_window_s === 0) throw new Error("smoothing_window_s must be above 0");
     this.smoothing_count = opt("smoothing_count", 3);
+    if (!(Number.isInteger(this.smoothing_count) && this.smoothing_count >= 1)) {
+      throw new Error("smoothing_count must be a whole number of at least 1, got " + this.smoothing_count);
+    }
     this._compass = null;
-    this.target = [+targetLat, +targetLon];
+    this.target = target(targetLat, targetLon);
     this.reset();
   }
 
   NavigationSession.prototype.setTarget = function (lat, lon) {
-    this.target = [+lat, +lon];
+    this.target = target(lat, lon);
     return this.state();
   };
 
@@ -619,7 +633,11 @@
   NavigationSession.prototype.addFix = function (lat, lon, o) {
     o = o || {};
     if (!validPoint(lat, lon)) return this.state();    // a bad reading (NaN, out of range) is ignored
-    var now = nowSeconds(o.time), acc = Math.max(finite(o.accuracy) && o.accuracy > 0 ? o.accuracy : 20, 1), self = this;
+    var now = readingTime(o.time);
+    if (now === null || (this._fixes.length && now < this._fixes[this._fixes.length - 1][3])) {
+      return this.state();                             // a bad time, or a reading that arrived late
+    }
+    var acc = Math.max(finite(o.accuracy) && o.accuracy > 0 ? o.accuracy : 20, 1), self = this;
     if (!this._live || direction(this.position[0], this.position[1], lat, lon, null).distance_m > Math.max(acc, 5)) {
       this._fixes = [];
     }
@@ -645,7 +663,9 @@
   // A compass reading in degrees from north (already corrected for screen rotation).
   NavigationSession.prototype.addCompass = function (heading, time) {
     if (!validHeading(heading)) return this.state();
-    this._compass = [mod360(heading), nowSeconds(time)];
+    var now = readingTime(time);
+    if (now === null || (this._compass && now < this._compass[1])) return this.state();
+    this._compass = [mod360(heading), now];
     if (this._live && !(this.heading && this.heading[1] === "gps")) this.heading = [this._compass[0], "compass"];
     return this.state();
   };

@@ -552,6 +552,21 @@ for (const bad of [NaN, Infinity, -Infinity, -5, 0, null, "8"]) {
 }
 out.push(nav.addFix(31.5216, 74.3571, { accuracy: 8, speed: NaN, heading: 90, time: 2 }).heading_source === null);
 out.push(nav.addFix(31.5216, 74.3571, { accuracy: 8, speed: Infinity, heading: 90, time: 3 }).heading_source === null);
+// a bad or late time is ignored, as in Python
+for (const bad of [NaN, Infinity, -Infinity, "12", true]) {
+  out.push(new P.NavigationSession(31.5204, 74.3587).addFix(31.51, 74.34, { time: bad }).status === "waiting");
+}
+const before = JSON.stringify(nav.state());
+for (const bad of [NaN, "12", 2.5]) out.push(JSON.stringify(nav.addFix(31.5217, 74.3572, { accuracy: 8, time: bad })) === before);
+// bad options and targets throw, as Python's ValueError
+const throws = (f) => { try { f(); return false; } catch (e) { return true; } };
+for (const o of [{ arrived_m: -1 }, { almost_m: NaN }, { moving_mps: "2" }, { compass_fresh_s: Infinity },
+                 { smoothing_window_s: 0 }, { smoothing_count: 0 }, { smoothing_count: 2.5 }]) {
+  out.push(throws(() => new P.NavigationSession(31.5204, 74.3587, o)));
+}
+for (const [lat, lon] of [[NaN, 74], [95, 74], [31.5, "74"]]) {
+  out.push(throws(() => new P.NavigationSession(lat, lon)) && throws(() => nav.setTarget(lat, lon)));
+}
 process.stdout.write(JSON.stringify(out));
 """
 

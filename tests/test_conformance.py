@@ -38,7 +38,7 @@ def _compare(expected, actual, suite, where):
 
 
 def _num(v):
-    return math.nan if v == "NaN" else v
+    return {"NaN": math.nan, "Infinity": math.inf, "-Infinity": -math.inf}.get(v, v) if isinstance(v, str) else v
 
 
 def test_committed_file_is_up_to_date(suite):

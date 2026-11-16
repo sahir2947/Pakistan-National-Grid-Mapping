@@ -162,12 +162,26 @@ class NavigationSession:
     compass, if read within ``compass_fresh_s`` seconds; else none, and the arrow is north-up.
 
     Times are in seconds (any clock, as long as it is the same one throughout); by default
-    the current time.
+    the current time. A reading whose time is given but is not a finite number (NaN, infinity,
+    text) is ignored, and so is one older than the newest reading of its kind already used: it
+    arrived late, and must not move the rider back.
+
+    Options must be finite numbers of at least 0, with smoothing_window_s above 0 and
+    smoothing_count a whole number of at least 1, and the target a valid point; otherwise
+    ValueError.
     """
 
     def __init__(self, target_lat: float, target_lon: float, *, arrived_m: float = 15.0,
                  almost_m: float = 50.0, moving_mps: float = 2.0, compass_fresh_s: float = 3.0,
                  smoothing_window_s: float = 10.0, smoothing_count: int = 3) -> None:
+        for name, value in (("arrived_m", arrived_m), ("almost_m", almost_m), ("moving_mps", moving_mps),
+                            ("compass_fresh_s", compass_fresh_s), ("smoothing_window_s", smoothing_window_s)):
+            if not (_finite(value) and value >= 0):
+                raise ValueError(f"{name} must be a finite number of at least 0, got {value!r}")
+        if smoothing_window_s == 0:
+            raise ValueError("smoothing_window_s must be above 0")
+        if isinstance(smoothing_count, bool) or not isinstance(smoothing_count, int) or smoothing_count < 1:
+            raise ValueError(f"smoothing_count must be a whole number of at least 1, got {smoothing_count!r}")
         self.arrived_m = arrived_m
         self.almost_m = almost_m
         self.moving_mps = moving_mps
@@ -175,12 +189,12 @@ class NavigationSession:
         self.smoothing_window_s = smoothing_window_s
         self.smoothing_count = smoothing_count
         self._compass: tuple[float, float] | None = None            # (heading, time)
-        self.target = (float(target_lat), float(target_lon))
+        self.target = _target(target_lat, target_lon)
         self.reset()
 
     def set_target(self, lat: float, lon: float) -> NavState:
-        """Change the target; the rider's position and heading are kept."""
-        self.target = (float(lat), float(lon))
+        """Change the target; the rider's position and heading are kept. ValueError for an invalid point."""
+        self.target = _target(lat, lon)
         return self.state
 
     def reset(self) -> NavState:
@@ -198,7 +212,9 @@ class NavigationSession:
         """A GPS reading: position, accuracy in metres, speed in m/s, direction of travel in degrees."""
         if not _valid_point(lat, lon):
             return self.state                    # a bad reading (NaN, out of range) is ignored
-        now = _now(time)
+        now = _reading_time(time)
+        if now is None or (self._fixes and now < self._fixes[-1][3]):
+            return self.state                    # a bad time, or a reading that arrived late
         acc = max(accuracy if _finite(accuracy) and accuracy > 0 else 20.0, 1.0)
         if not self._live or self.position is None or direction(*self.position, lat, lon).distance_m > max(acc, 5.0):
             self._fixes = []
@@ -231,7 +247,10 @@ class NavigationSession:
         """
         if not _valid(heading):
             return self.state
-        self._compass = (heading % 360.0, _now(time))
+        now = _reading_time(time)
+        if now is None or (self._compass is not None and now < self._compass[1]):
+            return self.state                    # a bad time, or a reading that arrived late
+        self._compass = (heading % 360.0, now)
         if self._live and not (self.heading and self.heading[1] == "gps"):
             self.heading = (self._compass[0], "compass")
         return self.state
@@ -282,8 +301,18 @@ class NavigationSession:
                         "relative" if hdg is not None else "north-up")
 
 
-def _now(t: float | None) -> float:
-    return _time.time() if t is None else float(t)
+def _reading_time(t: object) -> float | None:
+    """A reading's time: the clock when not given, else the number given; None when that is not a
+    finite number (the reading is then ignored)."""
+    if t is None:
+        return _time.time()
+    return float(t) if _finite(t) else None
+
+
+def _target(lat: object, lon: object) -> tuple[float, float]:
+    if not (_finite(lat) and _finite(lon) and _valid_point(lat, lon)):
+        raise ValueError(f"the target must be a valid point (lat, lon), got ({lat!r}, {lon!r})")
+    return float(lat), float(lon)
 
 
 def _finite(x: object) -> TypeGuard[float]:
