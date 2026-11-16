@@ -155,7 +155,7 @@ first release. Pull request numbers are in brackets.
   than the last one, in Python and JavaScript alike, and refuses bad options
   and targets; the rules and conformance file cover it (CR-05). A `Zone` can no
   longer be changed after it is made, so sets, dicts and `ZoneIndex` stay
-  correct; zones still pickle and copy (CR-10).
+  correct; zones still pickle and copy (CR-10). [#35]
 - Verifier gaps, bad sensor readings in navigation, and documentation, from a
   review. [#18]
 - The JavaScript tests read output as UTF-8, which fixed the Windows run.
