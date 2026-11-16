@@ -1,8 +1,9 @@
 # Using pakgrid in a Django REST Framework backend
 
 This guide sets up `pakgrid` inside a Django + DRF backend, with a Flutter (or
-any other) app talking to that backend's API. It is how Dukaandari uses the
-grid, but nothing here is specific to Dukaandari.
+any other) app talking to that backend's API, the setup an app such as
+Dukaandari would use. Nothing here is specific to one app: each app's own
+developers decide how to use it in their backend.
 
 ```
 pakgrid (GitHub)              Your backend (Django DRF, container)                Your app (Flutter, …)

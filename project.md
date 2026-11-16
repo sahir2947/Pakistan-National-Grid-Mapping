@@ -4,9 +4,9 @@
 |---|---|
 | **Status** | v0.1 library implemented (Python package `pakgrid`, see the README); scope will be refined as the project develops |
 | **Grid version** | v1 (proposed, not yet frozen) |
-| **First user** | Dukandaari app (delivery logistics) |
-| **Licence** | Open source (MIT or Apache-2.0, to be decided) |
-| **Last updated** | 2026-10-27 |
+| **Users** | Any app that needs it, using pakgrid as a standalone library; delivery logistics apps such as Dukandaari first |
+| **Licence** | *Pakgrid Org License 1.0* (the owner's own licence, under legal review; all rights reserved until it is published) — see §16 |
+| **Last updated** | 2026-11-16 |
 
 ![How a grid code is built: quadrants, rows and columns, sub-cells, and bit packing, worked through for central Lahore](docs/grid_schematic.png)
 
@@ -65,12 +65,13 @@ centre).
 
 ### 1.3 Long-term vision
 
-A **standalone, open-source mapping platform for Pakistan** built around the
+A **standalone mapping platform for Pakistan** built around the
 grid, with a public API that any app can use: delivery apps, courier companies,
-emergency services, government bodies. **Dukandaari is the first user.**
+emergency services, government bodies. Delivery apps such as **Dukandaari** come
+first. Each app's own developers decide how to use the platform in their app.
 
 ```
-        Pakistan Grid Platform (open source)
+        Pakistan Grid Platform
   ┌──────────────────────────────────────────┐
   │ Grid engine  ·  Map  ·  Search  ·  Routes │
   └───────────────────┬──────────────────────┘
@@ -2115,7 +2116,7 @@ Django REST framework and Celery have no type information of their own, so in
 | **Performance** ✅ | Area searches, nearest lookup and street lookups made faster with the same answers (§12) |
 | **Licence** 🚧 | *Pakgrid Org License 1.0*, with the owner's lawyer for review (§16) |
 | **v0.1.0 release** | First tagged GitHub release, with the databases attached |
-| **Pilot** | Dukandaari in one city (Lahore or Karachi): addresses, batching, rider navigation |
+| **Pilot** | A first app (for example Dukandaari) uses pakgrid in one city, such as Lahore or Karachi, for addresses, batching and rider navigation. The app's own developers integrate it in their code; pakgrid stays a standalone library, and is not changed for any one app |
 | **v1.0 — Public release** | Frozen grid v1, published database (full and Pakistan editions), documentation |
 | **Later** | Hosted HTTP API (§7.4) if wanted, map website, road routing |
 

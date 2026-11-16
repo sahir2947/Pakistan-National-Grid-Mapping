@@ -165,7 +165,8 @@ first release. Pull request numbers are in brackets.
 - `gridfeatures.md` logs the library-quality work (type hints, contributor
   files, ruff, documentation, speed, licence, release), and project.md's
   roadmap and open decisions are brought up to date, including the licence
-  choice. [#34]
+  choice; the docs no longer call pakgrid open source or say an app uses it
+  today (each app's developers integrate it themselves). [#34]
 - The walkthrough Django app's "sync" job takes photos straight from the
   uploaded file, and stores the video only if taking the photos fails. [#26]
 
