@@ -1939,6 +1939,8 @@ the same data centre.
   SQLite file
 - 200,000 random points across the whole rectangle
 - Python 3.13 on one CPU core of a cloud machine, with no tuning
+- area searches, nearest lookup and the user places rows re-measured in
+  November 2026 after they were made faster (the same answers, less work)
 
 | Operation | Per call | Per second |
 |---|---|---|
@@ -1949,13 +1951,14 @@ the same data centre.
 | `locate(lat, lon)` | 22 µs | ~46,000 |
 | `locate(lat, lon, accuracy_m=8)`, including candidates | 25–30 µs | ~33,000–40,000 |
 | `locate()` in a border sub-cell (point tested against the border line) | ~26 µs | ~39,000 |
-| `cells_in_area(...)` 1° × 1°, `pakistan_only=True` (10,879 cells) | 17 ms | — |
-| `cells_within(...)` 5 km, cells (78) / 1 km, sub-cells (77) | 1.3 ms / 1.5 ms | — |
-| `cells_within(...)` 10 km, cells, `pakistan_only=True` (315) | 5.3 ms | — |
+| `cells_in_area(...)` 1° × 1°, `pakistan_only=True` (10,879 cells) | 9 ms | — |
+| `cells_within(...)` 5 km, cells (78) / 1 km, sub-cells (77) | 0.9 ms / 1.0 ms | — |
+| `cells_within(...)` 10 km, cells, `pakistan_only=True` (315) | 2.5 ms | — |
 | `distance(a, b)` | 15 µs | ~65,000 |
 | `zone.contains(lat, lon)` / `ZoneIndex.at` (100 zones) | ~3 µs / ~4 µs | — |
 | `place_geojson` Lahore district / Punjab; `zone.to_geojson()` 20 km² | 0.15 s / 1.5 s; 2 ms | — |
-| `PointIndex.nearest` 20,000 points / 20 sparse points; `nearest_places` | 0.3 ms / 5 ms; 1 ms | — |
+| `PointIndex.nearest` 20,000 points / 20 points across Pakistan | 0.2 ms / 7 ms | — |
+| `nearest_places` in a city / anywhere in Pakistan (average) | 0.2 ms / 4 ms | — |
 | `zone(polygon=...)` ~80,000 sub-cells / `zone(place="punjab")` 5.1 million | 16 ms / 0.6 s | — |
 
 **Build and verify:**
@@ -1965,7 +1968,8 @@ the same data centre.
 | `pakgrid build` (full grid, with border flags) | 36 s, 785 MB, ~51 MB peak memory |
 | `pakgrid build --pakistan-only` | 19 s, 275 MB, 872,146 cells |
 | Places layer (part of `pakgrid build`, or `pakgrid build-places`) | ~55 s extra, +52 MB, ~620 MB peak memory during the build |
-| `grid.place(sub_cell)` / extra cost of the place in `locate()` | ~23 µs / ~20 µs |
+| `grid.place(sub_cell)` / extra cost of the place in `locate()` | ~11 µs / ~10 µs |
+| `locate()` with a user places file of 200 roads and 100 access notes (nearest street and what can drive through) | ~110 µs |
 | `pakgrid verify --full` | about as long as a build; regenerates every record and flag and compares |
 | Content SHA-256, full database (grid v1) | `f8da541f3865862a18ac25dded339c2a84eeea4b5ff26e59d27676a4309e0109` |
 | Content SHA-256, Pakistan edition | `6c5c2ec492a38f93020b593c554e9d437b39d859948a2cc82e94e6605c30cb01` |

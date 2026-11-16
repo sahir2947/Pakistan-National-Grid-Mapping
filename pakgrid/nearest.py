@@ -27,13 +27,12 @@ enough within it. `where` keeps only the points it accepts (open shops, free rid
 
 from __future__ import annotations
 
-import math
 import threading
 from collections.abc import Callable, Hashable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from . import geodesy, ids, navigate
+from . import ids, navigate
 from .errors import OutsideGridError
 from .layout import SCALE, GridLayout, to_e7
 
@@ -96,14 +95,10 @@ def _cells_near(layout: GridLayout, lat: float, lon: float, r: float) -> list[in
     """IDs of the cells with any part within r metres of the pin: the cells
     Grid.cells_within(..., touching=True) finds, without working out their centroids."""
     lat, lon = to_e7(lat) / SCALE, to_e7(lon) / SCALE
-    m_lat, m_lon = geodesy.metres_per_degree(lat)
-    pad = 1.02 * r + 1500
     out: list[int] = []
-    for q, i, j in layout.items_in_area(to_e7(lat - pad / m_lat), to_e7(lon - pad / (m_lon * 0.98)),
-                                        to_e7(lat + pad / m_lat), to_e7(lon + pad / (m_lon * 0.98)), "cell"):
-        s, w, n, e = (v / SCALE for v in layout.quadrants[q].item_bounds_e7(i, j, "cell"))
-        if math.hypot(max(w - lon, 0.0, lon - e) * m_lon, max(s - lat, 0.0, lat - n) * m_lat) <= r:
-            out.append(ids.cell_id(q, i, j))
+    for q, i, j0, j1 in layout.runs_within(lat, lon, r, "cell"):
+        first = ids.cell_id(q, i, 0)                # a row's cell IDs are consecutive
+        out.extend(range(first + j0, first + j1 + 1))
     return out
 
 

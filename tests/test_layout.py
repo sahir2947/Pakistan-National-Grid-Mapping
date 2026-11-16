@@ -1,3 +1,4 @@
+import math
 import random
 
 import pytest
@@ -159,6 +160,39 @@ def test_items_in_area_matches_brute_force(layout, level):
             if w <= box[3] and e > box[1]:
                 expected.append((3, i, j))
     assert got == expected and got
+
+
+def test_row_runs_are_items_in_area_by_row(layout):
+    rng = random.Random(4)
+    for _ in range(300):
+        level = rng.choice(["cell", "sub"])
+        s, w = rng.randint(SOUTH_E7, NORTH_E7), rng.randint(WEST_E7, EAST_E7)
+        if rng.random() < 0.3:
+            s, w = rng.choice([MID_LAT_E7, s]), rng.choice([MID_LON_E7, EAST_E7, w])
+        box = (s, w, s + rng.randint(0, 200_000), w + rng.randint(0, 200_000))
+        runs = layout.row_runs(*box, level)
+        assert all(j0 <= j1 for _, _, j0, j1 in runs)
+        assert [(q, i, j) for q, i, j0, j1 in runs for j in range(j0, j1 + 1)] == layout.items_in_area(*box, level)
+
+
+@pytest.mark.parametrize("level", ["cell", "sub"])
+def test_runs_within_matches_brute_force(layout, level):
+    """Every item with a part within r of the pin (flat, at the pin's scale), in ID order."""
+    rng = random.Random(8 if level == "cell" else 9)
+    for _ in range(40):
+        lat = rng.choice([31.5204, spec.MID_LAT + 1e-4, rng.uniform(24, 36)])
+        lon = rng.choice([74.3587, spec.MID_LON - 1e-4, rng.uniform(62, 77)])
+        r = rng.choice([0.0, 25.0, 150.0, rng.uniform(0, 3000 if level == "cell" else 700)])
+        m_lat, m_lon = geodesy.metres_per_degree(lat)
+        wide = 2 * r + 3000
+        box = [round(v * 1e7) for v in (lat - wide / m_lat, lon - wide / m_lon, lat + wide / m_lat, lon + wide / m_lon)]
+        expected = []
+        for q, i, j in layout.items_in_area(*box, level):
+            s, w, n, e = (v / 1e7 for v in layout.quadrants[q].item_bounds_e7(i, j, level))
+            if math.hypot(max(w - lon, 0.0, lon - e) * m_lon, max(s - lat, 0.0, lat - n) * m_lat) <= r:
+                expected.append((q, i, j))
+        got = [(q, i, j) for q, i, j0, j1 in layout.runs_within(lat, lon, r, level) for j in range(j0, j1 + 1)]
+        assert got == expected and got
 
 
 def test_items_in_area_whole_grid_counts(layout):
