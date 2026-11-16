@@ -162,6 +162,10 @@ first release. Pull request numbers are in brackets.
   (was ~0.6 ms) and ~4 ms on average anywhere in Pakistan (was ~24 ms); a
   `PointIndex` of a few points spread far apart is ~6× faster; `cells_in_area`
   and `cells_within` are faster too. [#34]
+- `gridfeatures.md` logs the library-quality work (type hints, contributor
+  files, ruff, documentation, speed, licence, release), and project.md's
+  roadmap and open decisions are brought up to date, including the licence
+  choice. [#34]
 - The walkthrough Django app's "sync" job takes photos straight from the
   uploaded file, and stores the video only if taking the photos fails. [#26]
 

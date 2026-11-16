@@ -2110,7 +2110,10 @@ Django REST framework and Celery have no type information of their own, so in
 | **Radius search and distances** ✅ | Blocks within a radius of a point and cell-to-cell distances, in Python, the CLI and the viewer, plus a Grid show/hide toggle (§7.5) |
 | **What can drive through** ✅ | Shop owners and residents say with a tap what can drive through a street; riders see it on lookups (§5.9) |
 | **Walkthroughs** ✅ stages 1–2 | Photos from the road to the door with a rider rule for ports, the viewer's Walk tool, and an optional Django app (§5.10). Stage 3 (blurring, several per address, expiry, feedback) later. A standalone pakgrid feature: no app uses it yet |
-| **Documentation** ✅ | Every feature documented: this file, the feature table in the README, [docs/django.md](docs/django.md), [viewer/README.md](viewer/README.md) and [conformance/](conformance/) |
+| **Documentation** ✅ | Every feature documented: this file, the feature table in the README, [docs/django.md](docs/django.md), [viewer/README.md](viewer/README.md) and [conformance/](conformance/); every public class and method has a docstring |
+| **Code quality** ✅ | Type hints on every function with `py.typed` and `mypy`, the `ruff` linter, `CONTRIBUTING.md`, `SECURITY.md`, issue forms and a pull request checklist (§14) |
+| **Performance** ✅ | Area searches, nearest lookup and street lookups made faster with the same answers (§12) |
+| **Licence** 🚧 | *Pakgrid Org License 1.0*, with the owner's lawyer for review (§16) |
 | **v0.1.0 release** | First tagged GitHub release, with the databases attached |
 | **Pilot** | Dukandaari in one city (Lahore or Karachi): addresses, batching, rider navigation |
 | **v1.0 — Public release** | Frozen grid v1, published database (full and Pakistan editions), documentation |
@@ -2131,7 +2134,7 @@ to use them in their application.
 |---|---|
 | Final outer boundaries | **Decided:** east edge moved from 77.0° E to 78.0° E so all of Baltistan (up to the Karakoram Pass, ~77.8° E) is inside; other edges confirmed. Fixed from here on, because changing them changes every ID |
 | Boundary dataset for the border flags | **Decided:** geoBoundaries `PAK-ADM0` (OpenStreetMap, ODbL): administered territory including AJK and Gilgit-Baltistan, coastline as the edge (§5.6) |
-| Open-source licence | MIT or Apache-2.0 |
+| Licence | **Chosen:** the owner's own *Pakgrid Org License 1.0*, not an open-source licence: free non-commercial use, commercial use by paid licence, credit required, the grid never changed, and no changes, resale, hosted API or use of the name without the owner's permission. A draft is with the owner's lawyer; until a `LICENSE` file is published, all rights are reserved |
 | Readable code format | **Implemented:** `QQ-RRRR-CCCC-SS`, plus an optional offset `W23 S18` (the grid address, §4.4) |
 | Package and project name | `pakgrid` (working name) |
 | Accuracy threshold for accepting a pin | ~50 m |
