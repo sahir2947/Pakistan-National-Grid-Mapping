@@ -534,7 +534,17 @@ urlpatterns += [path("api/", include("pakgrid.contrib.walkthroughs.urls"))]
 
 then `python manage.py migrate`. Your app decides who may do what, with two
 small functions. Here `place_ref` is your own reference for the address; a
-shop ID is used below:
+shop ID is used below.
+
+**`CAN_UPLOAD` is required for addresses.** Without it, only staff may record a
+walkthrough for a `place_ref` (a signed-in user may still record one with no
+`place_ref`), because a walkthrough that goes live replaces the address's
+directions for every rider. `manage.py check` warns
+(`pakgrid_walkthroughs.W001`) until it is set. The same rule is checked again
+when a walkthrough is approved, and before `AUTO_APPROVE` publishes one, so
+only someone allowed for the address can make directions to it live. If
+`place_ref` values can repeat across your tenants, make them unique (for
+example `"<tenant>:<shop>"`) and check the tenant in the rule.
 
 ```python
 # shop/walkthroughs.py
@@ -551,7 +561,7 @@ def rider_can_view(user, walkthrough):        # only a rider with an active orde
 
 | Call | What it does |
 |---|---|
-| `POST walkthroughs/` | The shop app uploads, as multipart: `video`, the GPS `track` (JSON text `[{"t": 0.0, "lat": ..., "lon": ..., "accuracy": 6}, ...]`, `t` in seconds into the video; or GPX, or a `track_file`), `pin_lat`, `pin_lon`, `start_lat`, `start_lon` (the road point), `place_ref`. The walkthrough is made at once, so a bad recording is refused (400, with the reason) while the owner is still there. Answers `201` with `status: "processing"`, the length, the number of photos and the turns |
+| `POST walkthroughs/` | The shop app uploads, as multipart: `video`, the GPS `track` (JSON text `[{"t": 0.0, "lat": ..., "lon": ..., "accuracy": 6}, ...]`, `t` in seconds into the video; or GPX, or a `track_file`), `pin_lat`, `pin_lon`, `start_lat`, `start_lon` (the road point), `place_ref` (at most 100 characters). The walkthrough is made at once, so a bad recording is refused (400, with the reason and a `code`) while the owner is still there. Answers `201` with `status: "processing"`, the length, the number of photos and the turns; `403` if `CAN_UPLOAD` refuses; `429` past `UPLOAD_RATE` |
 | `GET walkthroughs/<id>/` | The owner's review screen: the status, and the walkthrough JSON with each photo's `url` |
 | `POST walkthroughs/<id>/approve/` · `reject/` | The owner approves (`live`, replacing the address's previous live walkthrough) or rejects, with an optional `note` |
 | `POST walkthroughs/<id>/retry/` · `DELETE walkthroughs/<id>/` | Retry a failed photo job · delete it with its photos |
@@ -560,6 +570,19 @@ def rider_can_view(user, walkthrough):        # only a rider with an active orde
 
 Anything a user may not see answers 404, so a walkthrough's existence is not
 given away. Its ID is a random UUID.
+
+**Refusals** are `400` with `{"detail": "...", "code": "..."}`, so the app can
+react without reading the words: `bad_track` (not JSON or GPX, bad XML, a
+point or time that cannot be read, not UTF-8), `track_too_large` (over
+`MAX_TRACK_BYTES`, 5 MB by default), `too_many_readings` (over 20,000),
+`bad_place_ref`, `no_video`, `video_too_large`, and `walkthrough` for a
+recording that cannot make a walkthrough (the reason says why: too short, the
+pin too far from the last reading, ...).
+
+**One live walkthrough per address** is a database rule (migration `0003`),
+so two approvals at the same moment cannot both go live: the later one
+replaces the other. The migration first marks extra live walkthroughs of an
+address as `replaced`, keeping the most recently approved.
 
 **Statuses:** `processing` (photos being taken) → `review` (waiting for the
 owner) → `live`; or `rejected`, `failed` (with the `error`, e.g. a video
@@ -592,7 +615,9 @@ set, walkthroughs are made without the grid. Everything works, but
 identifies the address by its own `place_ref`.
 
 **Other settings:** `AUTO_APPROVE` (no owner review), `PHOTO_WIDTH` (1280),
-`PHOTO_QUALITY` (3), `MAX_VIDEO_MB` (200), `FFMPEG`, `FFMPEG_TIMEOUT_S`, and
+`PHOTO_QUALITY` (3), `MAX_VIDEO_MB` (200), `MAX_TRACK_BYTES` (5,000,000),
+`UPLOAD_RATE` (uploads per user, `"30/hour"`; `None` for no limit, counted in
+Django's cache), `FFMPEG`, `FFMPEG_TIMEOUT_S`, and
 `CAN_MANAGE` (who may review, delete and retry: by default the uploader and
 staff). The Django admin lists walkthroughs with their photos and steps, and
 can approve or reject several at once. The steps are also plain functions
