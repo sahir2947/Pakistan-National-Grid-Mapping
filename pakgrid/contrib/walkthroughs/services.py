@@ -14,11 +14,11 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from django.core.files import File
-from django.db import close_old_connections, transaction
+from django.db import IntegrityError, close_old_connections, transaction
 from django.utils import timezone
 
+from pakgrid.walkthrough import MAX_READINGS, WalkthroughError, read_gpx
 from pakgrid.walkthrough import Walkthrough as WalkthroughData
-from pakgrid.walkthrough import WalkthroughError, read_gpx
 from pakgrid.walkthrough import build as build_walkthrough
 
 from . import conf
@@ -31,11 +31,28 @@ class PermissionDenied(Exception):
     """The user may not do this (the API answers 403, or 404 to hide that it exists)."""
 
 
+def _refused(message: str, code: str) -> WalkthroughError:
+    """A WalkthroughError with a machine-readable `code` (the API returns it with a 400)."""
+    exc = WalkthroughError(message)
+    exc.code = code                                     # type: ignore[attr-defined]
+    return exc
+
+
+PLACE_REF_MAX = 100                                     # Walkthrough.place_ref's max_length
+
+
 # -- Permissions ----------------------------------------------------------------------
 
 def can_upload(user: Any, place_ref: str) -> bool:
+    """May this user record, and publish, a walkthrough for this address? The app's CAN_UPLOAD
+    rule; without one, only staff for an address (it fails closed: otherwise any signed-in user
+    could replace the directions to someone else's door), and any signed-in user without one."""
     fn = conf.hook("CAN_UPLOAD")
-    return bool(fn(user, place_ref)) if fn else bool(user and user.is_authenticated)
+    if fn:
+        return bool(fn(user, place_ref))
+    if not (user and user.is_authenticated):
+        return False
+    return not place_ref or bool(user.is_staff)
 
 
 def can_manage(user: Any, wt: Walkthrough) -> bool:
@@ -54,21 +71,37 @@ def can_view(user: Any, wt: Walkthrough) -> bool:
 # -- Upload ----------------------------------------------------------------------------
 
 def parse_track(track: Any, video_start: datetime | str | None = None) -> list[Any]:
-    """Readings from a list, JSON text, or GPX text (or bytes / an uploaded file of either)."""
+    """Readings from a list, JSON text, or GPX text (or bytes / an uploaded file of either).
+    WalkthroughError (with a `code`) for a track larger than MAX_TRACK_BYTES, with too many
+    readings, or that cannot be read; nothing larger than the limit is read into memory."""
+    limit = conf.get("MAX_TRACK_BYTES")
+    too_big = _refused(f"the GPS track is larger than {limit:,} bytes", "track_too_large")
     if hasattr(track, "read"):
-        track = track.read()
+        if getattr(track, "size", 0) > limit:
+            raise too_big
+        track = track.read(limit + 1)
+    if isinstance(track, (bytes, str)) and len(track) > limit:
+        raise too_big
     if isinstance(track, bytes):
-        track = track.decode("utf-8-sig")
+        try:
+            track = track.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise _refused("the GPS track is not UTF-8 text", "bad_track") from None
     if isinstance(track, str):
         text = track.strip()
         if text.startswith("<"):
-            return read_gpx(text, video_start)
+            try:
+                return read_gpx(text, video_start)
+            except WalkthroughError as e:
+                raise _refused(str(e), "bad_track") from None
         try:
             track = json.loads(text)
         except ValueError:
-            raise WalkthroughError("the track is neither JSON nor GPX") from None
+            raise _refused("the track is neither JSON nor GPX", "bad_track") from None
     if not isinstance(track, list):
-        raise WalkthroughError("the track must be a list of readings")
+        raise _refused("the track must be a list of readings", "bad_track")
+    if len(track) > MAX_READINGS:
+        raise _refused(f"the track has more than {MAX_READINGS:,} readings", "too_many_readings")
     return track
 
 
@@ -80,14 +113,20 @@ def create(user: Any, *, video: Any, track: Any, pin: Sequence[float], start: Se
 
     With JOB "sync" the photos are taken straight from the uploaded file, and the video is
     stored only if that fails (so it can be retried) or KEEP_VIDEO is set."""
-    place_ref = (place_ref or "").strip()
+    if place_ref is None:
+        place_ref = ""
+    if not isinstance(place_ref, str):
+        raise _refused("place_ref must be text", "bad_place_ref")
+    place_ref = place_ref.strip()
+    if len(place_ref) > PLACE_REF_MAX:
+        raise _refused(f"place_ref is longer than {PLACE_REF_MAX} characters", "bad_place_ref")
     if not can_upload(user, place_ref):
         raise PermissionDenied("you may not record a walkthrough for this address")
     limit = conf.get("MAX_VIDEO_MB")
     if video is None:
-        raise WalkthroughError("the video is missing")
+        raise _refused("the video is missing", "no_video")
     if getattr(video, "size", 0) > limit * 1024 * 1024:
-        raise WalkthroughError(f"the video is {video.size / 1048576:.0f} MB; at most {limit} MB is allowed")
+        raise _refused(f"the video is {video.size / 1048576:.0f} MB; at most {limit} MB is allowed", "video_too_large")
     props = {**(properties or {}), **({"place_ref": place_ref} if place_ref else {})}
     grid = conf.get_grid()
     author = user.get_username() if user else "unknown"
@@ -173,11 +212,13 @@ def take_photos(pk: Any, upload: Any = None) -> Walkthrough:
                     photo = WalkthroughPhoto(walkthrough=wt, index=f["index"])
                     with open(os.path.join(tmp, f["image"]), "rb") as img:
                         photo.image.save(f["image"], File(img), save=True)
-                wt.status = Walkthrough.LIVE if conf.get("AUTO_APPROVE") else Walkthrough.REVIEW
                 wt.error = ""
-                wt.save(update_fields=["status", "error"])
-                if wt.status == Walkthrough.LIVE:
-                    _replace_others(wt)
+                # AUTO_APPROVE publishes only if the uploader may still publish for the address
+                if conf.get("AUTO_APPROVE") and (not wt.place_ref or can_upload(wt.owner, wt.place_ref)):
+                    _go_live(wt, ["status", "error"])
+                else:
+                    wt.status = Walkthrough.REVIEW
+                    wt.save(update_fields=["status", "error"])
         if not conf.get("KEEP_VIDEO") and wt.video:
             wt.video.delete(save=False)
             wt.save(update_fields=["video"])
@@ -230,12 +271,12 @@ def approve(user: Any, wt: Walkthrough, note: str = "") -> Walkthrough:
     """The owner approves the photos: the walkthrough goes live, replacing the address's live one."""
     if not can_manage(user, wt):
         raise PermissionDenied("you may not approve this walkthrough")
+    if wt.place_ref and not can_upload(user, wt.place_ref):        # approving publishes for the address
+        raise PermissionDenied("you may not publish a walkthrough for this address")
     if wt.status != Walkthrough.REVIEW:
         raise WalkthroughError(f"only a walkthrough waiting for approval can be approved (this one is {wt.status})")
-    with transaction.atomic():
-        wt.status, wt.reviewed_by, wt.reviewed_at, wt.review_note = Walkthrough.LIVE, user, timezone.now(), note or ""
-        wt.save(update_fields=["status", "reviewed_by", "reviewed_at", "review_note"])
-        _replace_others(wt)
+    wt.reviewed_by, wt.reviewed_at, wt.review_note = user, timezone.now(), note or ""
+    _go_live(wt, ["status", "reviewed_by", "reviewed_at", "review_note"])
     return wt
 
 
@@ -255,10 +296,24 @@ def delete(user: Any, wt: Walkthrough) -> None:
     wt.delete()                                     # its photos and video files go too
 
 
-def _replace_others(wt: Walkthrough) -> None:
-    if wt.place_ref:
-        Walkthrough.objects.filter(place_ref=wt.place_ref, status=Walkthrough.LIVE).exclude(pk=wt.pk) \
-            .update(status=Walkthrough.REPLACED)
+def _go_live(wt: Walkthrough, fields: list[str]) -> None:
+    """Make `wt` live (saving `fields`), replacing its address's live walkthrough.
+
+    At most one walkthrough per address is live: a database constraint guarantees it, even when
+    two are published at once. The one published second finds the constraint broken by the first
+    (which it could not yet see), so it tries once more, replacing it: the later one wins."""
+    wt.status = Walkthrough.LIVE
+    for attempt in (1, 2):
+        try:
+            with transaction.atomic():
+                if wt.place_ref:
+                    Walkthrough.objects.filter(place_ref=wt.place_ref, status=Walkthrough.LIVE) \
+                        .exclude(pk=wt.pk).update(status=Walkthrough.REPLACED)
+                wt.save(update_fields=fields)
+            return
+        except IntegrityError:
+            if attempt == 2:
+                raise
 
 
 # -- For riders --------------------------------------------------------------------------

@@ -15,12 +15,18 @@ pytest.importorskip("rest_framework")
 from django.conf import settings  # noqa: E402
 
 _TMP = tempfile.mkdtemp(prefix="pakgrid-django-")
+# PAKGRID_TEST_POSTGRES=host:port runs these tests on that PostgreSQL server (database "postgres",
+# user "postgres") instead of SQLite: the one-live-walkthrough rule is a constraint there too.
+_PG = os.environ.get("PAKGRID_TEST_POSTGRES")
+_DB = ({"ENGINE": "django.db.backends.postgresql", "NAME": "postgres", "USER": "postgres",
+        "HOST": _PG.rsplit(":", 1)[0], "PORT": _PG.rsplit(":", 1)[1]} if _PG else
+       {"ENGINE": "django.db.backends.sqlite3", "NAME": os.path.join(_TMP, "db.sqlite3")})
 if not settings.configured:
     settings.configure(
         INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth", "django.contrib.admin",
                         "django.contrib.sessions", "django.contrib.messages", "rest_framework",
                         "pakgrid.contrib.walkthroughs"],
-        DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": os.path.join(_TMP, "db.sqlite3")}},
+        DATABASES={"default": _DB},
         MEDIA_ROOT=os.path.join(_TMP, "media"), MEDIA_URL="/media/", ROOT_URLCONF=__name__, USE_TZ=True,
         SECRET_KEY="test", DEFAULT_AUTO_FIELD="django.db.models.BigAutoField", ALLOWED_HOSTS=["testserver"],
         PAKGRID_WALKTHROUGHS={},
@@ -46,6 +52,14 @@ REAL_RUN = subprocess.run
 def rider_can_view(user, wt):
     """An app's rider rule, e.g. an active order to the address: here, users named rider*."""
     return user.username.startswith("rider")
+
+
+def anyone_signed_in(user, place_ref):
+    """A permissive CAN_UPLOAD rule for these tests; an app sets its own (see test_upload_rule_fails_closed)."""
+    return user.is_authenticated
+
+
+ALLOWED = {"CAN_UPLOAD": f"{__name__}.anyone_signed_in"}
 
 
 def only_shop_owners(user, place_ref):
@@ -74,7 +88,7 @@ def database(lahore_db):
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_ffmpeg)
-    with override_settings(PAKGRID_WALKTHROUGHS={"FFMPEG": "fake-ffmpeg"}):
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg"}):
         yield
     Walkthrough.objects.all().delete()
     User.objects.all().delete()
@@ -136,7 +150,7 @@ def test_the_whole_flow():
 
     # riders: only those the app's rule allows
     assert rider.get("/api/walkthroughs/for/shop-42/").status_code == 404            # default: owner only
-    with override_settings(PAKGRID_WALKTHROUGHS={"CAN_VIEW": f"{__name__}.rider_can_view"}):
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "CAN_VIEW": f"{__name__}.rider_can_view"}):
         r = rider.get("/api/walkthroughs/for/shop-42/")
         assert r.status_code == 200
         p = r.json()
@@ -165,10 +179,10 @@ def test_refused_uploads():
     for fields, message in cases:
         r = upload(owner, **fields)
         assert r.status_code == 400 and message in r.json()["detail"], (fields, r.content)
-    with override_settings(PAKGRID_WALKTHROUGHS={"MAX_VIDEO_MB": 0}):
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "MAX_VIDEO_MB": 0}):
         assert "at most 0 MB" in upload(owner).json()["detail"]
     assert upload(client()).status_code in (401, 403)
-    with override_settings(PAKGRID_WALKTHROUGHS={"CAN_UPLOAD": f"{__name__}.only_shop_owners"}):
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "CAN_UPLOAD": f"{__name__}.only_shop_owners"}):
         assert upload(owner, place_ref="shop-42").status_code == 403
         assert upload(owner, place_ref="shop-of-ali").status_code == 201
     assert Walkthrough.objects.count() == 1
@@ -176,8 +190,8 @@ def test_refused_uploads():
 
 def test_sync_job_auto_approve_and_replacing():
     owner = client("ali")
-    with override_settings(PAKGRID_WALKTHROUGHS={"FFMPEG": "fake-ffmpeg", "JOB": "sync", "AUTO_APPROVE": True,
-                                                 "CAN_VIEW": f"{__name__}.rider_can_view"}):
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg", "JOB": "sync",
+                                                 "AUTO_APPROVE": True, "CAN_VIEW": f"{__name__}.rider_can_view"}):
         a = upload(owner).json()
         assert a["status"] == "live"                          # photos taken during the request ...
         assert not Walkthrough.objects.get(pk=a["id"]).video  # ... from the upload: no video stored
@@ -191,7 +205,7 @@ def test_sync_job_auto_approve_and_replacing():
 
 
 def test_thread_job():
-    with override_settings(PAKGRID_WALKTHROUGHS={"FFMPEG": "fake-ffmpeg", "JOB": "thread"}):
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg", "JOB": "thread"}):
         pk = upload(client("ali")).json()["id"]
         for _ in range(100):
             if Walkthrough.objects.get(pk=pk).status != "processing":
@@ -202,12 +216,12 @@ def test_thread_job():
 
 def test_failed_job_and_retry():
     owner = client("ali")
-    with override_settings(PAKGRID_WALKTHROUGHS={"FFMPEG": "broken-ffmpeg", "JOB": "sync"}):
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "broken-ffmpeg", "JOB": "sync"}):
         s = upload(owner).json()
     wt = Walkthrough.objects.get(pk=s["id"])
     assert wt.status == "failed" and "Invalid data found" in wt.error and wt.video     # the video is kept
     assert owner.get(f"/api/walkthroughs/{wt.pk}/").json()["error"].startswith("ffmpeg could not take frame-000.jpg")
-    with override_settings(PAKGRID_WALKTHROUGHS={"FFMPEG": "fake-ffmpeg", "JOB": "sync"}):
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg", "JOB": "sync"}):
         r = owner.post(f"/api/walkthroughs/{wt.pk}/retry/")
     assert r.status_code == 200 and r.json()["status"] == "review" and r.json()["error"] is None
     assert owner.post(f"/api/walkthroughs/{wt.pk}/retry/").status_code == 400
@@ -266,7 +280,7 @@ def test_real_ffmpeg(tmp_path):
     REAL_RUN(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i",
               f"testsrc=size=320x240:rate=5:duration={TRACK[-1][0] + 1}", "-pix_fmt", "yuv420p", str(video)],
              check=True)
-    with override_settings(PAKGRID_WALKTHROUGHS={"JOB": "sync", "PHOTO_WIDTH": 160}):
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "JOB": "sync", "PHOTO_WIDTH": 160}):
         r = upload(client("ali"), video=SimpleUploadedFile("walk.mp4", video.read_bytes(), content_type="video/mp4"))
     wt = Walkthrough.objects.get(pk=r.json()["id"])
     assert wt.status == "review", wt.error
@@ -287,7 +301,7 @@ class PrivateBucket:
 
 def test_own_storage_with_expiring_links():
     owner = client("ali")
-    with override_settings(PAKGRID_WALKTHROUGHS={"FFMPEG": "fake-ffmpeg", "JOB": "sync",
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg", "JOB": "sync",
                                                  "STORAGE": f"{__name__}.PrivateBucket"}):
         pk = upload(owner).json()["id"]
         frames = owner.get(f"/api/walkthroughs/{pk}/").json()["walkthrough"]["frames"]
@@ -319,9 +333,151 @@ class RefusingBucket:
 
 
 def test_storage_failure_fails_the_job_cleanly():
-    with override_settings(PAKGRID_WALKTHROUGHS={"FFMPEG": "fake-ffmpeg", "JOB": "sync",
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg", "JOB": "sync",
                                                  "STORAGE": f"{__name__}.RefusingBucket"}):
         r = upload(client("ali"))
     assert r.status_code == 201 and r.json()["status"] == "failed"
     assert r.json()["error"] == "the photos could not be stored (RuntimeError)"
     assert WalkthroughPhoto.objects.count() == 0
+
+
+# -- Codex review fixes: permissions fail closed, bounded tracks, one live per address ------
+
+def approve_now(c, place_ref, **settings_kw):
+    """Upload for place_ref, take the photos and approve: returns the upload's id."""
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg", "JOB": "sync", **settings_kw}):
+        wid = upload(c, place_ref=place_ref).json()["id"]
+        assert c.post(f"/api/walkthroughs/{wid}/approve/").json()["status"] == "live"
+    return wid
+
+
+def test_upload_rule_fails_closed():
+    from django.core import checks
+    attacker, staff = client("sara"), client("boss", is_staff=True)
+    with override_settings(PAKGRID_WALKTHROUGHS={"FFMPEG": "fake-ffmpeg"}):            # no CAN_UPLOAD rule
+        r = upload(attacker, place_ref="shop-42")
+        assert r.status_code == 403 and not Walkthrough.objects.exists()
+        assert upload(attacker, place_ref="").status_code == 201        # no address: nothing to take over
+        assert upload(staff, place_ref="shop-42").status_code == 201    # staff are trusted
+        assert any(w.id == "pakgrid_walkthroughs.W001" for w in checks.run_checks())
+    with override_settings(PAKGRID_WALKTHROUGHS=ALLOWED):
+        assert not any(w.id == "pakgrid_walkthroughs.W001" for w in checks.run_checks())
+
+
+def test_an_attacker_cannot_replace_the_owners_walkthrough():
+    rule = {"CAN_UPLOAD": f"{__name__}.only_shop_owners"}
+    owner, attacker, boss = client("ali"), client("sara"), client("boss", is_staff=True)
+    live = approve_now(owner, "shop-of-ali", **rule)
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg", "JOB": "sync", **rule}):
+        assert upload(attacker, place_ref="shop-of-ali").status_code == 403
+        # approving publishes for the address, so it needs the address too: staff may manage
+        # the walkthrough, but the app's rule says this address is not theirs
+        own = upload(attacker, place_ref="shop-of-sara").json()["id"]
+        Walkthrough.objects.filter(pk=own).update(place_ref="shop-of-ali")       # e.g. changed in the admin
+        assert attacker.post(f"/api/walkthroughs/{own}/approve/").status_code == 403
+        assert boss.post(f"/api/walkthroughs/{own}/approve/").status_code == 403
+    assert Walkthrough.objects.get(pk=live).status == "live"
+
+
+def test_auto_approve_checks_the_rule_again():
+    owner = client("ali")
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg", "AUTO_APPROVE": True}):
+        wid = upload(owner, place_ref="shop-of-ali").json()["id"]
+    # by the time the photo job runs, the app's rule no longer lets ali publish for shop-of-ali
+    with override_settings(PAKGRID_WALKTHROUGHS={"FFMPEG": "fake-ffmpeg", "AUTO_APPROVE": True,
+                                                 "CAN_UPLOAD": f"{__name__}.only_shop_owners_of_bilal"}):
+        call_command("process_walkthroughs", stdout=__import__("io").StringIO())
+    assert Walkthrough.objects.get(pk=wid).status == "review"             # waits for a person instead
+
+
+def only_shop_owners_of_bilal(user, place_ref):
+    return user is not None and user.username == "bilal"
+
+
+def test_one_live_walkthrough_per_address_is_a_database_rule():
+    from django.db import IntegrityError, transaction
+    owner = client("ali")
+    first = approve_now(owner, "shop-42")
+    second = Walkthrough.objects.get(pk=first)
+    second.pk, second.status = None, "review"
+    second.save()
+    with pytest.raises(IntegrityError), transaction.atomic():
+        Walkthrough.objects.filter(pk=second.pk).update(status="live")
+    # addresses with no place_ref are not limited
+    for _ in range(2):
+        Walkthrough.objects.create(place_ref="", length_m=1, data={}, status="live")
+
+
+def test_publishing_tries_again_when_it_hits_the_rule(monkeypatch):
+    """Two approvals at once: the second cannot see the first until it commits, so its save hits
+    the constraint, and it tries again. One connection cannot show the race itself (the other
+    approval made here is rolled back with the failed try); a real PostgreSQL race was run when
+    this was written, with the later approval live and the other replaced."""
+    owner = client("ali")
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg", "JOB": "sync"}):
+        a = Walkthrough.objects.get(pk=upload(owner, place_ref="shop-42").json()["id"])
+        b = Walkthrough.objects.get(pk=upload(owner, place_ref="shop-42").json()["id"])
+    real_save, calls = Walkthrough.save, []
+
+    def save(self, *args, **kwargs):
+        if self.pk == b.pk:
+            calls.append(1)
+            if len(calls) == 1:                            # the other approval lands first
+                Walkthrough.objects.filter(pk=a.pk).update(status="live")
+        return real_save(self, *args, **kwargs)
+    monkeypatch.setattr(Walkthrough, "save", save)
+    services.approve(User.objects.get(username="ali"), b)
+    monkeypatch.undo()
+    assert len(calls) == 2                                 # the save hit the rule, and was tried again
+    assert Walkthrough.objects.get(pk=b.pk).status == "live"
+    assert Walkthrough.objects.filter(place_ref="shop-42", status="live").count() == 1
+    assert services.live_for("shop-42").pk == b.pk
+
+
+def test_the_migration_keeps_the_newest_live_walkthrough():
+    from django.utils import timezone
+    call_command("migrate", "pakgrid_walkthroughs", "0002", verbosity=0)    # before the constraint
+    try:
+        now = timezone.now()
+        old, new, newest = (Walkthrough.objects.create(place_ref="shop-9", length_m=1, data={}, status="live",
+                                                       reviewed_at=now - timezone.timedelta(days=d))
+                            for d in (3, 2, 1))
+        other = Walkthrough.objects.create(place_ref="shop-10", length_m=1, data={}, status="live")
+    finally:
+        call_command("migrate", "pakgrid_walkthroughs", verbosity=0)
+    status = dict(Walkthrough.objects.values_list("pk", "status"))
+    assert (status[old.pk], status[new.pk], status[newest.pk], status[other.pk]) == \
+        ("replaced", "replaced", "live", "live")
+
+
+def test_bad_uploads_get_a_400_with_a_code_and_create_nothing():
+    owner = client("ali")
+    gpx = '<gpx><trk><trkseg><trkpt lat="31.5" lon="74.3"><time>{}</time></trkpt></trkseg></trk></gpx>'
+    cases = [(dict(track="<gpx><trk"), "bad_track"),                              # broken XML
+             (dict(track=gpx.format("not a time")), "bad_track"),
+             (dict(track=gpx.replace('lat="31.5"', 'lat="north"').format("2026-01-01T00:00:00Z")), "bad_track"),
+             (dict(track=None, track_file=SimpleUploadedFile("t.gpx", b"\xff\xfe<gpx")), "bad_track"),   # not UTF-8
+             (dict(track=json.dumps({"t": 1})), "bad_track"),
+             (dict(track=json.dumps([[0, 31.5, 74.3]] * 20_001)), "too_many_readings"),
+             (dict(place_ref="x" * 101), "bad_place_ref"),
+             (dict(video=None), "no_video")]
+    for fields, code in cases:
+        r = upload(owner, **fields)
+        assert r.status_code == 400 and r.json()["code"] == code, (code, r.content)
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "MAX_TRACK_BYTES": 1000}):
+        assert upload(owner).json()["code"] == "track_too_large"
+        big = SimpleUploadedFile("t.json", b"[" + b"[0, 31.5, 74.3]," * 200 + b"[1, 31.5, 74.3]]")
+        assert upload(owner, track=None, track_file=big).json()["code"] == "track_too_large"
+    assert not Walkthrough.objects.exists()
+
+
+def test_uploads_are_rate_limited():
+    from django.core.cache import cache
+    cache.clear()
+    owner = client("ali")
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "UPLOAD_RATE": "2/minute"}):
+        assert [upload(owner).status_code for _ in range(3)] == [201, 201, 429]
+        assert owner.get("/api/walkthroughs/").status_code == 200              # reading is not limited
+    cache.clear()
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "UPLOAD_RATE": None}):
+        assert all(upload(owner).status_code == 201 for _ in range(4))

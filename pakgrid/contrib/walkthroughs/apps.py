@@ -8,3 +8,6 @@ class WalkthroughsConfig(AppConfig):
     label = "pakgrid_walkthroughs"
     verbose_name = "Walkthroughs"
     default_auto_field = "django.db.models.BigAutoField"
+
+    def ready(self) -> None:
+        from . import checks  # noqa: F401  (registers the system checks)
