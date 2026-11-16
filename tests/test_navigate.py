@@ -178,3 +178,37 @@ def test_bad_sensor_readings_are_ignored_or_defaulted():
     assert s.heading_source is None
     s = nav.add_fix(31.5216, 74.3571, accuracy=8.0, speed=inf, heading=90.0, time=3.0)
     assert s.heading_source is None
+
+
+def test_a_bad_or_late_time_is_ignored():
+    nan, inf = float("nan"), float("inf")
+    # the first reading of a session with a bad time used to divide by zero
+    for bad in (nan, inf, -inf, "12", True):
+        assert NavigationSession(*TARGET).add_fix(31.51, 74.34, time=bad).status == "waiting"
+        assert NavigationSession(*TARGET).add_compass(90.0, time=bad).heading_deg is None
+    nav = NavigationSession(*TARGET)
+    good = nav.add_fix(31.5215, 74.3570, accuracy=8.0, time=10.0)
+    for bad in (nan, inf, -inf, "12", True, 9.0):                # 9.0: older than the last reading
+        assert nav.add_fix(31.5216, 74.3571, accuracy=8.0, time=bad) == good
+    assert nav.add_fix(31.5216, 74.3571, accuracy=8.0, time=10.0) != good   # the same time is not late
+    nav.add_compass(90.0, time=11.0)
+    assert nav.add_compass(180.0, time=10.5).heading_deg == 90.0          # a late compass reading
+    assert nav.add_compass(180.0, time=nan).heading_deg == 90.0
+
+
+@pytest.mark.parametrize("options", [{"arrived_m": -1}, {"almost_m": float("nan")}, {"moving_mps": "2"},
+                                     {"compass_fresh_s": float("inf")}, {"smoothing_window_s": 0},
+                                     {"smoothing_count": 0}, {"smoothing_count": 2.5}, {"smoothing_count": True}])
+def test_bad_options_are_refused(options):
+    with pytest.raises(ValueError):
+        NavigationSession(*TARGET, **options)
+
+
+def test_a_bad_target_is_refused():
+    for lat, lon in ((float("nan"), 74.0), (95.0, 74.0), (31.5, "74"), (None, 74.0)):
+        with pytest.raises(ValueError):
+            NavigationSession(lat, lon)
+        nav = NavigationSession(*TARGET)
+        with pytest.raises(ValueError):
+            nav.set_target(lat, lon)
+        assert nav.target == TARGET                              # nothing changed

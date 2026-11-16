@@ -785,6 +785,8 @@ table of rows is kept in memory.
   so a mismatch cannot go unnoticed.
 - A new **places version** (new names or boundaries) needs the places layer
   rebuilt: `pakgrid build-places --db FILE` on a copy, then `pakgrid verify`.
+  (A failed rebuild leaves the old layer in place, but servers still reading the
+  file should not see it change under them, hence the copy.)
   Until then the old layer is not used (`grid.has_places` is false and
   `verify` says so). After switching, run `pakgrid user-places refresh` so
   user localities pick up the new tehsils and reference points.

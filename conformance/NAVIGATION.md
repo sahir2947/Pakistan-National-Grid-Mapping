@@ -123,6 +123,11 @@ returns a **state** after every call.
 | `smoothing_window_s` | 10.0 | GPS readings younger than this are averaged |
 | `smoothing_count` | 3 | At most this many readings are averaged |
 
+Every option must be a finite number of at least 0, `smoothing_window_s` must
+be above 0, and `smoothing_count` must be a whole number of at least 1; the
+target must be a valid point (as in `add_fix`). Otherwise creating the session
+(or `set_target`) fails with an error, and nothing is changed.
+
 ### Session data
 
 ```
@@ -140,6 +145,11 @@ A new session: `target` set, `compass = none`, then `reset()`.
 
 A heading value is **valid** when it is given and finite (not NaN, not ±∞).
 
+A reading's **time** is in seconds, on any clock that stays the same through
+the session. When it is not given, it is the device's current time. When it is
+given, it must be a finite number (not NaN, not ±∞, not text, not a boolean);
+otherwise the whole reading is ignored.
+
 ### reset()
 
 `position = none; accuracy_m = none; heading = none; fixes = []; anchor = none; live = false`.
@@ -147,7 +157,8 @@ The last compass reading is kept.
 
 ### set_target(lat, lon)
 
-`target = (lat, lon)`. Nothing else changes.
+If (lat, lon) is not a valid point, fail with an error. Otherwise
+`target = (lat, lon)`; nothing else changes.
 
 ### add_fix(lat, lon, accuracy, speed, heading, time)
 
@@ -157,6 +168,8 @@ when it is a real number, not NaN or ±infinity (a boolean is not a number).
 ```
 if lat or lon is not finite, or lat is outside -90..90, or lon outside -180..180:
     return the state unchanged                   # a bad reading is ignored
+if time is given and is not finite, or fixes is not empty and time < the last fix's time:
+    return the state unchanged                   # a bad time, or a reading that arrived late
 acc = max(accuracy if accuracy is finite and > 0 else 20, 1)
 if not live, or direction(position, (lat, lon)).distance_m > max(acc, 5):
     fixes = []                                   # real movement: start afresh
@@ -182,6 +195,8 @@ Heading in degrees from north, already corrected for the screen's rotation.
 
 ```
 if heading is not valid: do nothing
+if time is given and is not finite, or compass is not none and time < compass.time:
+    do nothing                                   # a bad time, or a reading that arrived late
 compass = (heading mod 360, time)
 if live and not (heading is set and its source is "gps"):
     heading = (compass.degrees, "compass")

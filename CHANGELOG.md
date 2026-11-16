@@ -146,6 +146,16 @@ first release. Pull request numbers are in brackets.
   package layout. [#33]
 
 ### Fixed
+- From the Codex review of 16 November 2026: `pakgrid build --overwrite` no
+  longer deletes the old database before building; it builds a temporary file
+  and replaces the old one only when the build is complete, and refuses a bad
+  quadrant before starting (CR-04). Rebuilding the places layer is one
+  transaction, so a failure leaves the old layer (CR-11). Navigation ignores a
+  reading whose time is not a finite number (it crashed on NaN) or that is older
+  than the last one, in Python and JavaScript alike, and refuses bad options
+  and targets; the rules and conformance file cover it (CR-05). A `Zone` can no
+  longer be changed after it is made, so sets, dicts and `ZoneIndex` stay
+  correct; zones still pickle and copy (CR-10). [#35]
 - Verifier gaps, bad sensor readings in navigation, and documentation, from a
   review. [#18]
 - The JavaScript tests read output as UTF-8, which fixed the Windows run.

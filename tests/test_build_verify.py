@@ -28,6 +28,29 @@ def test_build_refuses_to_overwrite(tmp_path):
     build_database(path, quadrants=[0], rows=(0, 2), overwrite=True)
 
 
+def test_a_failed_overwrite_keeps_the_old_database(tmp_path, monkeypatch):
+    path = tmp_path / "g.sqlite"
+    build_database(path, quadrants=[0], rows=(0, 1), places=False)
+    before = path.read_bytes()
+    # a bad selection is refused before any file is touched
+    with pytest.raises(ValueError):
+        build_database(path, quadrants=[9], overwrite=True, places=False)
+    # a failure in the middle of the build (a full disk, an error) leaves the old file as it was
+    import pakgrid.builder as builder
+
+    def broken(*args, **kwargs):
+        yield from ()
+        raise OSError("disk full")
+    monkeypatch.setattr(builder, "iter_cell_records", broken)
+    with pytest.raises(OSError, match="disk full"):
+        build_database(path, quadrants=[0], rows=(0, 2), overwrite=True, places=False)
+    assert path.read_bytes() == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["g.sqlite"]       # no temporary file left
+    monkeypatch.undo()
+    build_database(path, quadrants=[0], rows=(0, 2), overwrite=True, places=False)
+    assert path.read_bytes() != before and sorted(p.name for p in tmp_path.iterdir()) == ["g.sqlite"]
+
+
 def test_build_creates_missing_folders(tmp_path):
     path = tmp_path / "new" / "folder" / "g.sqlite"
     build_database(path, quadrants=[0], rows=(0, 1))
