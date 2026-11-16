@@ -1,5 +1,6 @@
 """The places layer: province, district, tehsil and locality tags on cells and sub-cells."""
 
+import dataclasses
 import json
 import shutil
 import sqlite3
@@ -197,6 +198,26 @@ def test_build_without_places_then_add_them(tmp_path, capsys):
     with Grid.open(path) as g:
         assert g.has_places and g.locate(31.5204, 74.3587).place.label == LABEL
     assert build_places(path)["places_count"] == 33_256         # rebuilding replaces the layer
+    assert verify_database(path).ok
+
+
+def test_a_failed_places_rebuild_keeps_the_old_layer(tmp_path, lahore_db, monkeypatch):
+    path = tmp_path / "copy.sqlite"
+    path.write_bytes(lahore_db.read_bytes())
+    import pakgrid.places as places
+    real = places.build_places_data
+
+    def bad_rows(*args, **kwargs):          # the new layer fails part-way through being written
+        data = real(*args, **kwargs)
+        return dataclasses.replace(data, localities=[*data.localities, data.localities[0]])   # a repeated row
+    monkeypatch.setattr(places, "build_places_data", bad_rows)
+    before = path.read_bytes()
+    with pytest.raises(sqlite3.IntegrityError):
+        build_places(path)
+    assert path.read_bytes() == before                     # the old tables were not even dropped
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["copy.sqlite"]
+    with Grid.open(path) as g:
+        assert g.locate(31.5204, 74.3587).place.label == LABEL
     assert verify_database(path).ok
 
 

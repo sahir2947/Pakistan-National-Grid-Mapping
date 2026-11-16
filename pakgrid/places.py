@@ -724,10 +724,16 @@ def places_hash(places: Iterable[Sequence[Any]], cells: Iterable[tuple[int, int,
 
 
 def write_places(db: sqlite3.Connection, data: PlacesData, coverage: str) -> dict[str, Any]:
-    """Write (or replace) the places layer in an open, writable grid database."""
+    """Write (or replace) the places layer in an open, writable grid database.
+
+    Only plain statements are used (not executescript, which commits first), so when the caller
+    holds a transaction the whole replacement, old tables dropped included, commits or rolls
+    back as one (see build_places)."""
     for table in ("cell_localities", "cell_places", "places"):
         db.execute(f"DROP TABLE IF EXISTS {table}")
-    db.executescript(SCHEMA)
+    for statement in SCHEMA.split(";"):
+        if statement.strip():
+            db.execute(statement)
     db.executemany("INSERT INTO places VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", data.places)
     db.executemany("INSERT INTO cell_places VALUES (?,?,?)", data.cells)
     db.executemany("INSERT INTO cell_localities VALUES (?,?,?)", data.localities)
@@ -765,10 +771,17 @@ def build_places(path: str | os.PathLike[str], progress: Progress | None = None)
     qs = [int(x, 2) for x in m["quadrants_built"].split(",")]
     rows = None if m["rows_built"] == "all" else tuple(map(int, m["rows_built"].split(":")))
     data = build_places_data(layout, boundary, qs, rows, progress)
-    db = sqlite3.connect(path)
+    # One explicit transaction for the whole replacement: if anything fails (a full disk, an
+    # error, the process being killed), SQLite rolls back and the old places layer is untouched.
+    db = sqlite3.connect(path, isolation_level=None)
     try:
-        meta = write_places(db, data, m.get("coverage", "partial"))
-        db.commit()
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            meta = write_places(db, data, m.get("coverage", "partial"))
+            db.execute("COMMIT")
+        except BaseException:
+            db.execute("ROLLBACK")
+            raise
     finally:
         db.close()
     return meta
