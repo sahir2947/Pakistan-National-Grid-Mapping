@@ -951,3 +951,205 @@ The remaining qualifications are explicit release, repository and deployment wor
 
 **Final verdict:** Claude's two follow-up fixes withstand independent source review, adversarial performance measurement, focused regressions, the complete local test suite and the applicable GitHub Actions evidence. No further corrective code change is requested for CR-02 or the Windows UTF-8 finding.
 
+---
+
+## Dukaandaari production-readiness assessment — 17 November 2026
+
+### Overall assessment
+
+PakGrid is assessed as **approximately 88% production-ready for Dukaandaari's complete intended use**.
+
+This is not a test-pass percentage. It is a weighted engineering judgement covering library correctness, security, Dukaandaari integration, operational controls, frontend delivery, release governance and legal readiness.
+
+For a narrower deployment using only the core grid/address lookup library, readiness is approximately **95%**. For publicly enabling the complete static viewer and optional walkthrough service, **85–88%** is the more appropriate range until the application and operational work below is completed.
+
+### Component scores
+
+| Area | Readiness | Current position |
+|---|---:|---|
+| Core grid, identifiers, addresses, lookup and geometry | **96%** | Deterministic integer-coordinate design, broad geometry coverage and official checksums are in place. |
+| Database build, verification and publication | **95%** | Builds and places-layer replacement are failure-atomic and verified cross-platform. |
+| Python/JavaScript consistency | **95%** | 2,016 navigation and 610 walkthrough conformance cases pass with zero mismatches. |
+| Walkthrough backend security and reliability | **90%** | Original authorization, input, concurrency, storage and stale-worker findings are remediated; application policy and production limits remain. |
+| Packaging and cross-platform behavior | **94%** | Wheel/sdist clean installs and Windows UTF-8 output pass; release metadata remains incomplete. |
+| Static viewer and mobile delivery | **78%** | Initial payload is budgeted and places are deferred, but external dependencies and physical low-end-device evidence remain. |
+| Dukaandaari-specific integration and operations | **75%** | The library supplies hooks and controls, but Dukaandaari must configure, exercise and monitor them in its own environment. |
+| Legal and release governance | **60%** | The licence is not final and critical CI jobs are not yet confirmed as required branch checks. |
+
+### What the current score means
+
+The major correctness and security defects found in the source review are now closed. The remaining gap is primarily the work required to operate PakGrid as part of Dukaandaari safely and predictably: application authorization, resource limits, staging evidence, monitoring, rollback, frontend dependency decisions, release policy and licensing.
+
+No responsible production system is literally 100% ready or risk-free. The practical target is **98–99% readiness**, with known residual risks documented, owned and monitored.
+
+## Work required for approximately 98–99% readiness
+
+### 1. Complete Dukaandaari authorization integration
+
+Implement and test Dukaandaari-specific rules for:
+
+- `CAN_UPLOAD(user, place_ref)`: only the verified owner/operator of the relevant shop, address or tenant-scoped resource may record and publish;
+- `CAN_MANAGE(user, walkthrough)`: owner, explicitly delegated manager and narrowly authorized staff roles only;
+- `CAN_VIEW(user, walkthrough)`: only the rider/customer/order context intended by Dukaandaari's product policy;
+- `MANAGE_QUERYSET(user, queryset)`: database-level tenant and ownership narrowing before row-by-row permission checks; and
+- tenant-unique `place_ref` values so identifiers cannot collide across organizations or operating regions.
+
+Acceptance evidence:
+
+- owner, delegate, staff, rider and attacker permission-matrix tests;
+- cross-tenant negative tests for create, list, detail, approve, reject, delete and live retrieval;
+- authorization rechecked after role/ownership revocation; and
+- a Dukaandaari system check that refuses production startup when required hooks are missing.
+
+### 2. Establish production resource limits
+
+Set limits based on measured Dukaandaari demand rather than leaving them only at library defaults:
+
+- per-user and per-tenant upload rates;
+- daily storage and video-ingest quotas;
+- maximum active and queued jobs per user/tenant;
+- worker concurrency, CPU and memory limits;
+- job timeout and retry/backoff policy;
+- object retention and abandoned-generation cleanup; and
+- global circuit breakers for database, storage or ffmpeg degradation.
+
+Acceptance evidence:
+
+- load and abuse tests at and beyond each declared limit;
+- a queue-saturation test showing the web/API tier remains responsive;
+- alerts for queue age, failure rate, storage growth and repeated retries; and
+- an operator runbook for throttling or disabling walkthrough ingestion without disabling core grid lookups.
+
+### 3. Run a Dukaandaari staging qualification
+
+Exercise the actual deployment components together:
+
+- the production PostgreSQL major version and connection-pooling setup;
+- the selected S3/object-storage backend and signed-link configuration;
+- real ffmpeg and the chosen Celery/worker runtime;
+- Nginx/API upload limits and request timeouts;
+- Dukaandaari authentication, tenants, shops, orders and rider assignments;
+- backup, restore and immutable grid-database rollout; and
+- normal deploy and rollback paths.
+
+Minimum staging gates:
+
+- a sustained soak of at least 24–72 hours under representative traffic;
+- concurrent uploads, approvals, replacements and stale-worker takeover;
+- injected storage, worker and database failures with clean recovery;
+- no orphaned files, duplicate live walkthroughs or cross-tenant disclosure;
+- successful backup plus scratch restore; and
+- a rollback to the previous PakGrid/database version without data loss.
+
+### 4. Add production observability and operational ownership
+
+Define metrics, logs, dashboards and alerts for:
+
+- API request rate, latency and 4xx/5xx responses;
+- rejected tracks by stable error code;
+- upload bytes and quota consumption;
+- processing duration and frame extraction failures;
+- queue depth, oldest-job age, retries and stale claims;
+- live/replaced walkthrough transitions;
+- object-storage failures and cleanup failures;
+- grid database version/checksum loaded by each application instance; and
+- viewer asset and map-tile failures.
+
+Every alert needs an owner, severity, response time and linked runbook. Logs must avoid secrets, raw authorization tokens and unnecessary personal/location data.
+
+### 5. Make release gates enforceable
+
+Configure branch protection or repository rules so merges require the intended checks, particularly:
+
+- installed wheel/sdist verification;
+- Django on PostgreSQL with ffmpeg and Celery;
+- the supported Python/OS test matrix and Node conformance;
+- Ruff and mypy; and
+- official checksum builds whenever grid-building inputs change.
+
+Also require reviewed pull requests, block force-pushes to `main`, document the release/tag process and retain build/checksum evidence for every production release.
+
+### 6. Finalize licensing and package metadata
+
+Before distribution or production dependency approval:
+
+- publish the lawyer-approved `LICENSE`;
+- add matching SPDX/package licence metadata to `pyproject.toml`;
+- confirm attribution and redistribution obligations for boundary, place, OpenStreetMap and other source datasets;
+- include required notices in packaged artifacts and the viewer; and
+- record Dukaandaari's internal approval to use and redistribute the library.
+
+This is a release blocker even though it does not affect runtime correctness.
+
+### 7. Close the viewer/mobile qualification gap
+
+Decide and document whether Dukaandaari accepts the current external Leaflet and OpenStreetMap tile dependencies. If not, pin and self-host the approved frontend assets and use an approved tile provider or self-hosted tiles with a capacity and cache policy.
+
+Test on representative low-end Android hardware for:
+
+- first map paint and time to interaction;
+- memory during deferred `places.js` parsing;
+- search, selection, drawing and navigation responsiveness;
+- slow/unstable network behavior;
+- external dependency failure; and
+- supported-browser accessibility and usability.
+
+Set measurable budgets. If 2.83 MB compressed places data or parse memory is not acceptable, split/index it by region or fetch it on demand.
+
+### 8. Define immutable data rollout and rollback
+
+For every grid or places-data update:
+
+- build outside the running application path;
+- verify the expected version, counts and checksum;
+- publish under a versioned immutable filename;
+- switch application instances deliberately;
+- retain the previous verified edition for rollback; and
+- prohibit in-place mutation of a database currently used by application processes.
+
+The deployment receipt must identify the application SHA, PakGrid package version, database checksum and prior rollback target.
+
+### 9. Perform security and privacy review in Dukaandaari context
+
+The source review was not a penetration test. Before public rollout, test:
+
+- tenant and object-level authorization;
+- malicious multipart, JSON, GPX and video uploads;
+- decompression/parser and ffmpeg attack surfaces;
+- signed URL duration and object-bucket access policy;
+- CSRF, CORS, cookies and API authentication;
+- sensitive location/photo retention and deletion requirements;
+- auditability of publication and moderation actions; and
+- dependency and container vulnerability scanning.
+
+Document the data controller/processor position, retention period and deletion workflow for videos, photos and rider/customer location data.
+
+### 10. Controlled production rollout
+
+Use progressive exposure rather than enabling all tenants immediately:
+
+1. internal staff and synthetic data;
+2. one controlled tenant/region;
+3. a small percentage of eligible shops/orders;
+4. monitored expansion with predefined stop conditions; and
+5. general availability only after the soak and incident-free observation period pass.
+
+Rollback triggers should include authorization anomalies, duplicate live records, sustained job backlog, storage inconsistency, map dependency failure or material latency/error regression.
+
+## Near-100% acceptance checklist
+
+PakGrid can be assessed at approximately **98–99% ready for Dukaandaari** when all of the following are evidenced:
+
+- [ ] Lawyer-approved licence and package metadata are published.
+- [ ] Required GitHub checks and protected-branch rules are enabled.
+- [ ] All Dukaandaari ownership, tenant and view hooks have complete positive and negative permission tests.
+- [ ] Production quotas, queue limits, timeouts and circuit breakers are set.
+- [ ] PostgreSQL, object storage, ffmpeg and workers pass the staging soak and fault-injection plan.
+- [ ] Backup, scratch restore, immutable database rollout and rollback pass.
+- [ ] Monitoring dashboards, alerts, owners and runbooks are operational.
+- [ ] Security/privacy review and retention/deletion policies are approved.
+- [ ] Low-end Android and dependency-failure viewer tests meet declared budgets, or an explicitly approved product exception is recorded.
+- [ ] A limited production pilot completes without a severity-one or data-integrity incident and with rollback readiness demonstrated.
+
+At that point, remaining risk should consist of normal monitored production risk rather than known missing controls or unresolved review findings.
+
