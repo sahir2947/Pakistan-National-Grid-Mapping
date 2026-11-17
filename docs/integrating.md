@@ -308,8 +308,12 @@ def within_limits(place_ref: str) -> bool:
 
 
 def can_upload(user, place_ref):
-    return _is_shop_owner(user, place_ref) and within_limits(place_ref)
+    return owns_shop(user, place_ref) and within_limits(place_ref)
 ```
+
+Here `owns_shop` is the body of `can_upload` from 2.2, renamed. Keep the
+ownership check first, so a user who is not the owner never learns whether a
+shop is at its limit.
 
 A refusal here answers 403. Keep the reason in your own logs, and have the
 app show "try again later".
