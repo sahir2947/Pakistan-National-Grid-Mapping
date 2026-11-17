@@ -140,7 +140,8 @@ def test_the_whole_flow():
     # the owner reviews and approves; nobody else can
     d = owner.get(f"/api/walkthroughs/{wt.pk}/").json()
     assert d["status"] == "review" and d["walkthrough"]["frames"][0]["url"] == \
-        f"http://testserver/media/walkthroughs/{wt.pk}/frame-000.jpg"
+        f"http://testserver/media/{first.image.name}"
+    assert first.image.name.startswith(f"walkthroughs/{wt.pk}/") and first.image.name.endswith("/frame-000.jpg")
     assert stranger.get(f"/api/walkthroughs/{wt.pk}/").status_code == 404
     assert stranger.post(f"/api/walkthroughs/{wt.pk}/approve/").status_code == 404
     assert rider.get("/api/walkthroughs/for/shop-42/").status_code == 404
@@ -305,11 +306,12 @@ def test_own_storage_with_expiring_links():
                                                  "STORAGE": f"{__name__}.PrivateBucket"}):
         pk = upload(owner).json()["id"]
         frames = owner.get(f"/api/walkthroughs/{pk}/").json()["walkthrough"]["frames"]
-        assert frames[0]["url"] == f"https://bucket.example/walkthroughs/{pk}/frame-000.jpg?X-Amz-Expires=300"
-        assert os.path.exists(os.path.join(_TMP, "bucket", f"walkthroughs/{pk}/frame-000.jpg"))
-        assert not os.path.exists(media(f"walkthroughs/{pk}/frame-000.jpg"))
+        name = WalkthroughPhoto.objects.get(walkthrough_id=pk, index=0).image.name
+        assert frames[0]["url"] == f"https://bucket.example/{name}?X-Amz-Expires=300"
+        assert os.path.exists(os.path.join(_TMP, "bucket", name))
+        assert not os.path.exists(media(name))
         assert owner.delete(f"/api/walkthroughs/{pk}/").status_code == 204
-        assert not os.path.exists(os.path.join(_TMP, "bucket", f"walkthroughs/{pk}/frame-000.jpg"))
+        assert not os.path.exists(os.path.join(_TMP, "bucket", name))
 
 
 def test_without_the_grid_database():
@@ -435,14 +437,19 @@ def test_publishing_tries_again_when_it_hits_the_rule(monkeypatch):
 
 
 def test_the_migration_keeps_the_newest_live_walkthrough():
+    from django.db import connection
+    from django.db.migrations.loader import MigrationLoader
     from django.utils import timezone
     call_command("migrate", "pakgrid_walkthroughs", "0002", verbosity=0)    # before the constraint
     try:
+        # the model as it was at 0002 (today's has fields that table does not)
+        then = MigrationLoader(connection).project_state(("pakgrid_walkthroughs", "0002_configurable_storage"))
+        old_model = then.apps.get_model("pakgrid_walkthroughs", "Walkthrough")
         now = timezone.now()
-        old, new, newest = (Walkthrough.objects.create(place_ref="shop-9", length_m=1, data={}, status="live",
-                                                       reviewed_at=now - timezone.timedelta(days=d))
+        old, new, newest = (old_model.objects.create(place_ref="shop-9", length_m=1, data={}, status="live",
+                                                     reviewed_at=now - timezone.timedelta(days=d))
                             for d in (3, 2, 1))
-        other = Walkthrough.objects.create(place_ref="shop-10", length_m=1, data={}, status="live")
+        other = old_model.objects.create(place_ref="shop-10", length_m=1, data={}, status="live")
     finally:
         call_command("migrate", "pakgrid_walkthroughs", verbosity=0)
     status = dict(Walkthrough.objects.values_list("pk", "status"))
@@ -481,3 +488,188 @@ def test_uploads_are_rate_limited():
     cache.clear()
     with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "UPLOAD_RATE": None}):
         assert all(upload(owner).status_code == 201 for _ in range(4))
+
+
+# -- Codex review fixes: the list follows CAN_MANAGE, photo generations, job claims ----------
+
+def lead_or_owner(user, wt):
+    """A team rule: the team lead manages everyone's walkthroughs, others their own."""
+    return user.username == "lead" or wt.owner_id == user.pk
+
+
+def made_by_lead_team(user, qs):
+    return qs if user.username == "lead" else qs.filter(owner=user)
+
+
+_DATA = []
+
+
+def records(owner, n, place_ref="shop-42"):
+    if not _DATA:                                    # real walkthrough data, made once
+        from pakgrid.walkthrough import build
+        _DATA.append(build([(t, lat, lon, a) for t, lat, lon, a in TRACK], pin=PIN, start=REF, author="a").to_dict())
+    return [Walkthrough.objects.create(owner=owner, place_ref=place_ref, length_m=1, data=_DATA[0], status="review")
+            for _ in range(n)]
+
+
+def test_the_list_follows_can_manage_and_matches_the_detail_view():
+    lead, ali, sara = client("lead"), client("ali"), client("sara")
+    mine = records(User.objects.get(username="ali"), 2)
+    hers = records(User.objects.get(username="sara"), 3)
+    for extra in ({}, {"MANAGE_QUERYSET": f"{__name__}.made_by_lead_team"}):
+        with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "CAN_MANAGE": f"{__name__}.lead_or_owner",
+                                                     **extra}):
+            for c, expected in ((lead, mine + hers), (ali, mine), (sara, hers)):
+                listed = {w["id"] for w in c.get("/api/walkthroughs/").json()}
+                assert listed == {str(w.pk) for w in expected}, extra
+                for w in mine + hers:                        # the list and the detail view agree
+                    assert (c.get(f"/api/walkthroughs/{w.pk}/").status_code == 200) == (str(w.pk) in listed)
+
+
+def test_rows_a_user_may_not_see_do_not_crowd_out_the_list():
+    """A staff user whom the app's rule limits to their own: their 3 older walkthroughs must not be
+    pushed off the list by 210 newer ones they may not manage (the rule is applied before the limit)."""
+    sara = User.objects.get_or_create(username="sara")[0]
+    boss = client("boss", is_staff=True)
+    mine = records(User.objects.get(username="boss"), 3)         # the oldest
+    records(sara, 210)
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "CAN_MANAGE": f"{__name__}.lead_or_owner"}):
+        assert {w["id"] for w in boss.get("/api/walkthroughs/").json()} == {str(w.pk) for w in mine}
+
+
+class FlakyBucket:
+    """A file storage in its own folder whose writes start failing after `works` of them."""
+    works = None
+    root = os.path.join(_TMP, "flaky")
+
+    def __new__(cls):
+        from django.core.files.storage import FileSystemStorage
+
+        class _Storage(FileSystemStorage):
+            def _save(self, name, content):
+                if FlakyBucket.works is not None:
+                    if FlakyBucket.works == 0:
+                        raise RuntimeError("SlowDown")
+                    FlakyBucket.works -= 1
+                return super()._save(name, content)
+        return _Storage(location=cls.root)
+
+
+def files_in(root):
+    """The files under root, named as the storage names them (with /, on Windows too)."""
+    from pathlib import Path
+    return sorted(p.relative_to(root).as_posix() for p in Path(root).rglob("*") if p.is_file())
+
+
+def flaky(**kw):
+    return override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg", "KEEP_VIDEO": True,
+                                                   "STORAGE": f"{__name__}.FlakyBucket", **kw})
+
+
+def test_a_storage_failure_part_way_leaves_the_old_photos_and_no_new_files():
+    shutil.rmtree(FlakyBucket.root, ignore_errors=True)
+    FlakyBucket.works = None
+    with flaky():
+        pk = upload(client("ali")).json()["id"]
+        services.take_photos(pk)
+    wt = Walkthrough.objects.get(pk=pk)
+    before = files_in(FlakyBucket.root)
+    old = sorted(p.image.name for p in wt.photos.all())
+    assert wt.status == "review" and len(old) > 10 and set(old) < set(before)
+
+    # the job runs again (e.g. retried) and the storage fails after 5 of the new photos
+    Walkthrough.objects.filter(pk=pk).update(status="processing", photos_at=None)
+    FlakyBucket.works = 5
+    with flaky():
+        wt = services.take_photos(pk)
+    assert wt.status == "failed" and "could not be stored" in wt.error
+    assert sorted(p.image.name for p in wt.photos.all()) == old           # the records still point at...
+    assert files_in(FlakyBucket.root) == before                           # ...files that still exist; no orphans
+
+    # and when it works, the new set replaces the old one, records and files
+    Walkthrough.objects.filter(pk=pk).update(status="processing", photos_at=None)
+    FlakyBucket.works = None
+    with flaky():
+        wt = services.take_photos(pk)
+    new = sorted(p.image.name for p in wt.photos.all())
+    assert wt.status == "review" and len(new) == len(old) and not set(new) & set(old)
+    assert files_in(FlakyBucket.root) == sorted(new + [wt.video.name])
+
+
+def test_a_database_failure_while_switching_keeps_the_old_photos(monkeypatch):
+    shutil.rmtree(FlakyBucket.root, ignore_errors=True)
+    FlakyBucket.works = None
+    with flaky():
+        pk = upload(client("ali")).json()["id"]
+        services.take_photos(pk)
+        before = files_in(FlakyBucket.root)
+        old = sorted(p.image.name for p in Walkthrough.objects.get(pk=pk).photos.all())
+        Walkthrough.objects.filter(pk=pk).update(status="processing", photos_at=None)
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("connection lost")
+        monkeypatch.setattr(WalkthroughPhoto.objects, "bulk_create", broken)
+        wt = services.take_photos(pk)
+    assert wt.status == "failed"
+    assert sorted(p.image.name for p in wt.photos.all()) == old and files_in(FlakyBucket.root) == before
+
+
+def test_a_rolled_back_delete_keeps_the_files():
+    from django.db import transaction
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg", "JOB": "sync"}):
+        wt = Walkthrough.objects.get(pk=upload(client("ali")).json()["id"])
+    name = wt.photos.first().image.name
+    with pytest.raises(RuntimeError), transaction.atomic():
+        wt.photos.all().delete()
+        raise RuntimeError("something later failed")
+    assert os.path.exists(media(name)) and wt.photos.count() > 0
+    wt.delete()
+    assert not os.path.exists(media(name))                                 # a committed delete removes it
+
+
+def test_a_job_whose_claim_was_taken_over_stops_and_publishes_nothing(monkeypatch):
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg"}):
+        pk = upload(client("ali")).json()["id"]
+        frames = []
+
+        def slow_ffmpeg(cmd, *args, **kwargs):
+            frames.append(cmd[-1])
+            if len(frames) == 3:                 # meanwhile: thought stale, and claimed by another job
+                Walkthrough.objects.filter(pk=pk).update(job_token="another-job")
+            return fake_ffmpeg(cmd, *args, **kwargs)
+        monkeypatch.setattr(subprocess, "run", slow_ffmpeg)
+        wt = services.take_photos(pk)
+    assert len(frames) == 3                      # it stopped at once
+    assert wt.status == "processing" and wt.job_token == "another-job" and wt.photos.count() == 0
+    assert not os.path.exists(media(f"walkthroughs/{pk}")) or not any(
+        f.endswith(".jpg") for f in files_in(media(f"walkthroughs/{pk}")))
+
+
+def test_a_working_job_renews_its_claim_and_a_stale_one_is_started_again(monkeypatch):
+    from django.utils import timezone
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg", "KEEP_VIDEO": True}):
+        pk = upload(client("ali")).json()["id"]
+        long_ago = timezone.now() - timezone.timedelta(hours=1)
+        seen = []
+
+        def watching_ffmpeg(cmd, *args, **kwargs):
+            seen.append(Walkthrough.objects.get(pk=pk).photos_at)
+            Walkthrough.objects.filter(pk=pk).update(photos_at=long_ago)     # as if this frame took an hour
+            return fake_ffmpeg(cmd, *args, **kwargs)
+        monkeypatch.setattr(subprocess, "run", watching_ffmpeg)
+        services.take_photos(pk)
+        assert all(t > long_ago for t in seen[1:])                 # renewed after every photo
+        assert Walkthrough.objects.get(pk=pk).status == "review"
+        # a job that stopped renewing (its worker died) is handed to a new one
+        monkeypatch.setattr(subprocess, "run", fake_ffmpeg)
+        Walkthrough.objects.filter(pk=pk).update(status="processing", photos_at=long_ago, job_token="dead-worker")
+        done = services.process_pending(stale_minutes=30)
+        assert [w.pk for w in done] == [Walkthrough.objects.get(pk=pk).pk] and done[0].status == "review"
+
+
+def test_a_job_has_a_time_limit():
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg", "JOB_TIMEOUT_S": -1}):
+        r = upload(client("ali"))
+        wt = services.take_photos(r.json()["id"])
+    assert wt.status == "failed" and "took longer than" in wt.error and wt.video     # kept, to retry
+    assert wt.photos.count() == 0 and wt.job_token == ""

@@ -102,12 +102,8 @@ class WalkthroughListCreate(_Base):
         return throttles + [UploadRateThrottle()] if self.request.method == "POST" else throttles
 
     def get(self, request: Any) -> Response:
-        qs = Walkthrough.objects.all()
-        if request.GET.get("place_ref"):
-            qs = qs.filter(place_ref=request.GET["place_ref"])
-        if not request.user.is_staff:
-            qs = qs.filter(owner=request.user)
-        return Response([_summary(wt, request) for wt in qs[:200] if services.can_manage(request.user, wt)])
+        found = services.manageable(request.user, request.GET.get("place_ref") or None)
+        return Response([_summary(wt, request) for wt in found])
 
     def post(self, request: Any) -> Response:
         d = request.data

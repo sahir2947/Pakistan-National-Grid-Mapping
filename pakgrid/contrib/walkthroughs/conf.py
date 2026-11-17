@@ -16,7 +16,7 @@ PAKGRID_WALKTHROUGHS   a dict of any of:
                   record one with no place_ref): otherwise anyone could replace the directions
                   to someone else's door
     CAN_MANAGE    dotted path to f(user, walkthrough) -> bool (see the photos, approve, reject,
-                  delete); default: its owner (the uploader) or staff
+                  delete; and the list); default: its owner (the uploader) or staff
     CAN_VIEW      dotted path to f(user, walkthrough) -> bool, for a live walkthrough; default:
                   CAN_MANAGE only. Set it to your rider rule, e.g. an active order to the address
     AUTO_APPROVE  go live without the owner's approval (default False)
@@ -30,6 +30,12 @@ PAKGRID_WALKTHROUGHS   a dict of any of:
                   no limit. Counted in Django's cache
     FFMPEG        the ffmpeg program (default "ffmpeg")
     FFMPEG_TIMEOUT_S  seconds allowed per photo (default 60)
+    JOB_TIMEOUT_S seconds allowed for a whole photo job (default 1200); past it the job fails
+                  and can be retried
+    MANAGE_QUERYSET  dotted path to f(user, queryset) -> queryset: the walkthroughs the user may
+                  manage, filtered in the database, for the list endpoint. Set it with CAN_MANAGE
+                  when that rule lets users manage others' walkthroughs (a team): the list then
+                  needs no scan. Without it, the list checks CAN_MANAGE row by row
     STORAGE       where videos and photos are kept: a dotted path to a Django Storage class (or a
                   function returning a storage); default: Django's default storage. Its url()
                   gives the links in the API, so a private bucket's storage can give links
@@ -54,6 +60,7 @@ DEFAULTS = {
     "JOB": "command", "CAN_UPLOAD": None, "CAN_MANAGE": None, "CAN_VIEW": None, "AUTO_APPROVE": False,
     "KEEP_VIDEO": False, "PHOTO_WIDTH": 1280, "PHOTO_QUALITY": 3, "MAX_VIDEO_MB": 200, "FFMPEG": "ffmpeg",
     "FFMPEG_TIMEOUT_S": 60, "STORAGE": None, "MAX_TRACK_BYTES": 5_000_000, "UPLOAD_RATE": "30/hour",
+    "JOB_TIMEOUT_S": 1200, "MANAGE_QUERYSET": None,
 }
 JOBS = ("command", "celery", "thread", "sync")
 
