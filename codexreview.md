@@ -784,7 +784,11 @@ linear only when readings are sparse, as my benchmark happened to be (~67 per se
   Linear is about 4 and quadratic about 16; a ratio is used rather than seconds so CI speed can't
   make it flaky. It passes in ~1 s on the new code and **fails on the previous code** (two
   minutes, ratio far above 9).
-- Smoothing was the only quadratic step: the whole `build()` is timed above, and it scales linearly.
+- **The rest of `build()`:** the whole call is timed above. I also timed long, valid walks of 5,000
+  and 20,000 readings over 250 s, with 265–484 m of spiral, power-curve, zig-zag and circle shapes.
+  Four times the readings took 4.0–4.3 times as long for every shape. The other step that isn't
+  plainly linear, Douglas–Peucker simplification, costs about n·k, where k is the number of points
+  it keeps (5–31 in those walks); the 500 m walk limit keeps k small.
 
 ### 2. Windows: redirected CLI output with Urdu
 
