@@ -880,7 +880,9 @@ guide.next(); guide.previous(); guide.show(7)   # swiping through the photos by 
 **The track** is the phone's GPS readings, each `(t, lat, lon)` or
 `(t, lat, lon, accuracy_m)` (or a dict with those keys), where `t` is seconds
 into the video. `read_gpx()` reads a GPX file from a GPS logger app instead,
-with `video_start` lining its clock up with the video's.
+with `video_start` lining its clock up with the video's. A track has at most
+20,000 readings (`MAX_READINGS`; a phone records 1–10 a second), checked while
+it is read, and a GPX file that cannot be read raises `WalkthroughError`.
 
 **How it is made:**
 
@@ -889,7 +891,8 @@ with `video_start` lining its clock up with the video's.
    both readings' accuracy allows (a GPS jump) are dropped; `track` counts
    them.
 2. **Smooth:** each reading is averaged with those within 2 s of it,
-   weighted by 1 / accuracy².
+   weighted by 1 / accuracy². Only those neighbours are visited, so the time
+   grows with the number of readings, not its square.
 3. **Anchor:** the first reading moves to the **start** (the point on the
    road; the first reading if not given) and the last to the **pin**. Each
    must be within 30 m, or the walk is refused ("record from the start").
@@ -949,7 +952,11 @@ rider's GPS.
 - the upload API, refusing a bad recording at once;
 - the photo job (Celery, cron, a thread, or in the request), storing the
   photos in Django's storage and deleting the video;
-- the owner's approval (a new live walkthrough replaces the address's old one);
+- the owner's approval (a new live walkthrough replaces the address's old one;
+  a database rule keeps one live per address even when two are approved at once);
+- the app's own rule for who may record and publish for an address
+  (`CAN_UPLOAD`, required: without it only staff may), track and upload limits,
+  and refusals with a `code`;
 - `GET walkthroughs/for/<place_ref>/` for riders, with each photo's URL;
 - the Django admin.
 

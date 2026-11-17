@@ -10,7 +10,11 @@ PAKGRID_WALKTHROUGHS   a dict of any of:
                   "celery"   a Celery task (pakgrid.contrib.walkthroughs.tasks)
                   "thread"   a background thread in the web process (small sites)
                   "sync"     during the upload request (tests, development)
-    CAN_UPLOAD    dotted path to f(user, place_ref) -> bool; default: any signed-in user
+    CAN_UPLOAD    dotted path to f(user, place_ref) -> bool: may this user record (and publish)
+                  a walkthrough for this address? Set it to your app's rule, e.g. the user owns
+                  the shop. Without it, only staff may for an address (any signed-in user may
+                  record one with no place_ref): otherwise anyone could replace the directions
+                  to someone else's door
     CAN_MANAGE    dotted path to f(user, walkthrough) -> bool (see the photos, approve, reject,
                   delete); default: its owner (the uploader) or staff
     CAN_VIEW      dotted path to f(user, walkthrough) -> bool, for a live walkthrough; default:
@@ -20,6 +24,10 @@ PAKGRID_WALKTHROUGHS   a dict of any of:
     PHOTO_WIDTH   photo width in pixels (default 1280)
     PHOTO_QUALITY ffmpeg JPEG quality, 2 (best) to 31 (default 3)
     MAX_VIDEO_MB  the largest video accepted (default 200)
+    MAX_TRACK_BYTES  the largest GPS track accepted, JSON or GPX (default 5,000,000); a track
+                  also has at most pakgrid.walkthrough.MAX_READINGS readings
+    UPLOAD_RATE   uploads allowed per user, e.g. "30/hour" (the default) or "5/minute"; None for
+                  no limit. Counted in Django's cache
     FFMPEG        the ffmpeg program (default "ffmpeg")
     FFMPEG_TIMEOUT_S  seconds allowed per photo (default 60)
     STORAGE       where videos and photos are kept: a dotted path to a Django Storage class (or a
@@ -45,7 +53,7 @@ if TYPE_CHECKING:
 DEFAULTS = {
     "JOB": "command", "CAN_UPLOAD": None, "CAN_MANAGE": None, "CAN_VIEW": None, "AUTO_APPROVE": False,
     "KEEP_VIDEO": False, "PHOTO_WIDTH": 1280, "PHOTO_QUALITY": 3, "MAX_VIDEO_MB": 200, "FFMPEG": "ffmpeg",
-    "FFMPEG_TIMEOUT_S": 60, "STORAGE": None,
+    "FFMPEG_TIMEOUT_S": 60, "STORAGE": None, "MAX_TRACK_BYTES": 5_000_000, "UPLOAD_RATE": "30/hour",
 }
 JOBS = ("command", "celery", "thread", "sync")
 

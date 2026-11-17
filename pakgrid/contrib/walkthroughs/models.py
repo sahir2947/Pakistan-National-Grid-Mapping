@@ -11,6 +11,7 @@ from typing import Any
 from django.conf import settings
 from django.core.files.storage import Storage
 from django.db import models
+from django.db.models import Q
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 
@@ -103,6 +104,12 @@ class Walkthrough(models.Model):
     class Meta:
         ordering = ["-created_at"]
         indexes = [models.Index(fields=["place_ref", "status"])]
+        constraints = [
+            # At most one live walkthrough per address, even when two are approved at once
+            # (services._go_live publishes under this rule).
+            models.UniqueConstraint(fields=["place_ref"], condition=Q(status="live") & ~Q(place_ref=""),
+                                    name="pakgrid_one_live_walkthrough_per_place"),
+        ]
 
     def __str__(self) -> str:
         return f"Walkthrough {self.place_ref or self.pin_sub_cell} ({self.get_status_display()}, {self.length_m:.0f} m)"

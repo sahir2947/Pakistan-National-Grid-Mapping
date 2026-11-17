@@ -22,11 +22,12 @@ from django.shortcuts import get_object_or_404
 from rest_framework import permissions, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
 from pakgrid.walkthrough import WalkthroughError
 
-from . import services
+from . import conf, services
 from .models import Walkthrough
 
 
@@ -79,12 +80,26 @@ class _Base(APIView):
         if isinstance(exc, services.PermissionDenied):
             return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
         if isinstance(exc, WalkthroughError):
-            return Response({"detail": str(exc), "code": "walkthrough"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": str(exc), "code": getattr(exc, "code", "walkthrough")},
+                            status=status.HTTP_400_BAD_REQUEST)
         return super().handle_exception(exc)
+
+
+class UploadRateThrottle(UserRateThrottle):
+    """PAKGRID_WALKTHROUGHS['UPLOAD_RATE'] uploads per user (None: no limit)."""
+    scope = "pakgrid_walkthrough_upload"
+
+    def get_rate(self) -> str | None:
+        rate: str | None = conf.get("UPLOAD_RATE")
+        return rate
 
 
 class WalkthroughListCreate(_Base):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_throttles(self) -> list[Any]:
+        throttles: list[Any] = super().get_throttles()
+        return throttles + [UploadRateThrottle()] if self.request.method == "POST" else throttles
 
     def get(self, request: Any) -> Response:
         qs = Walkthrough.objects.all()

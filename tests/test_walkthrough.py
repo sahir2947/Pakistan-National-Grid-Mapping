@@ -217,3 +217,30 @@ def test_cli(lahore_db, tmp_path, capsys):
     assert main(["walkthrough", "build", "--db", str(lahore_db), "--track", str(tf), "--pin", "31.6", "74.4",
                  "--author", "ali"]) == 1
     assert "from the pin" in capsys.readouterr().err
+
+
+def test_too_many_readings_are_refused_before_any_work():
+    endless = ({"t": i, "lat": 31.5, "lon": 74.3} for i in range(10**9))      # never fully read
+    with pytest.raises(WalkthroughError, match="more than"):
+        W.build(endless, pin=(31.5, 74.3), author="a")
+    many = "".join(f'<trkpt lat="31.5" lon="74.3"><time>2026-01-01T00:00:{i % 60:02d}Z</time></trkpt>'
+                   for i in range(W.MAX_READINGS + 1))
+    with pytest.raises(WalkthroughError, match="more than"):
+        W.read_gpx(f"<gpx><trk><trkseg>{many}</trkseg></trk></gpx>")
+
+
+@pytest.mark.parametrize("text", [
+    "<gpx><trk",                                                                         # broken XML
+    '<gpx><trkpt lat="north" lon="74.3"><time>2026-01-01T00:00:00Z</time></trkpt></gpx>',
+    '<gpx><trkpt lon="74.3"><time>2026-01-01T00:00:00Z</time></trkpt></gpx>',              # no lat
+    '<gpx><trkpt lat="31.5" lon="74.3"><time>yesterday</time></trkpt></gpx>',
+])
+def test_a_bad_gpx_file_is_a_walkthrough_error(text):
+    with pytest.raises(WalkthroughError):
+        W.read_gpx(text)
+
+
+def test_a_bad_video_start_is_a_walkthrough_error():
+    gpx = '<gpx><trkpt lat="31.5" lon="74.3"><time>2026-01-01T00:00:00Z</time></trkpt></gpx>'
+    with pytest.raises(WalkthroughError, match="video_start"):
+        W.read_gpx(gpx, video_start="soon")

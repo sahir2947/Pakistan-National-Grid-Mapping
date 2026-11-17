@@ -32,7 +32,8 @@ How a walkthrough is made (build):
    SIMPLIFY_M), so GPS wobble does not become zig-zags. Each point keeps its video time.
 5. **Measure:** all distances use one flat frame: metres east and north of the start, at the
    start's scale (geodesy.local_offset). length_m is the path's length; at most MAX_LENGTH_M,
-   and the walk at most MAX_DURATION_S long.
+   and the walk at most MAX_DURATION_S long. A track has at most MAX_READINGS readings (a
+   phone records 1-10 a second, so a 5-minute walk has at most a few thousand).
 6. **Turns:** at a point of the path where the direction changes by TURN_DEG or more, measured
    from TURN_ARM_M before the point to TURN_ARM_M after it; of turns closer than TURN_GAP_M,
    only the sharpest counts. Each has the words of navigate.turn_words ('turn left', 'bear
@@ -83,6 +84,7 @@ MIN_FRAME_GAP_M = 2.0
 MIN_LENGTH_M = 5.0
 MAX_LENGTH_M = 500.0
 MAX_DURATION_S = 300.0
+MAX_READINGS = 20_000        # more readings than this are refused before any work is done
 
 # The rider rule
 WEAK_GPS_M = 30.0            # a reading less accurate than this does not move the rider
@@ -168,8 +170,13 @@ def _num(v: object) -> TypeGuard[float]:
 
 def read_gpx(text: str | bytes, video_start: datetime | str | None = None) -> list[dict[str, float]]:
     """Readings [{'t', 'lat', 'lon'}] from a GPX file's track points. t is seconds from
-    video_start (an aware datetime or ISO text), or from the first point when not given."""
-    root = ET.fromstring(text)
+    video_start (an aware datetime or ISO text), or from the first point when not given.
+    WalkthroughError when the file is not valid GPX (bad XML, a point's lat, lon or time that
+    cannot be read) or has more than MAX_READINGS points."""
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as e:
+        raise WalkthroughError(f"the GPX file is not valid XML ({e})") from None
     points: list[tuple[datetime, float, float]] = []
     for el in root.iter():
         if el.tag.rsplit("}", 1)[-1] != "trkpt":
@@ -177,11 +184,20 @@ def read_gpx(text: str | bytes, video_start: datetime | str | None = None) -> li
         when = next((c.text for c in el if c.tag.rsplit("}", 1)[-1] == "time"), None)
         if when is None:
             continue
-        points.append((_parse_time(when), float(cast(str, el.get("lat"))), float(cast(str, el.get("lon")))))
+        if len(points) == MAX_READINGS:
+            raise WalkthroughError(f"the GPX file has more than {MAX_READINGS:,} track points")
+        try:
+            points.append((_parse_time(when), float(cast(str, el.get("lat"))), float(cast(str, el.get("lon")))))
+        except (TypeError, ValueError, OverflowError):
+            raise WalkthroughError(f"track point {len(points) + 1} of the GPX file has a lat, lon or time that "
+                                   "cannot be read") from None
     if not points:
         raise WalkthroughError("the GPX file has no track points with times")
-    t0 = _parse_time(video_start) if video_start is not None else points[0][0]
-    return [{"t": (when - t0).total_seconds(), "lat": lat, "lon": lon} for when, lat, lon in points]
+    try:
+        t0 = _parse_time(video_start) if video_start is not None else points[0][0]
+        return [{"t": (when - t0).total_seconds(), "lat": lat, "lon": lon} for when, lat, lon in points]
+    except (TypeError, ValueError, OverflowError):
+        raise WalkthroughError(f"video_start is not a time: {video_start!r}") from None
 
 
 def _parse_time(v: datetime | str) -> datetime:
@@ -206,7 +222,12 @@ def build(track: Iterable[Any], *, pin: Sequence[float], author: str, start: Seq
     start_p = _point(start, "start") if start is not None else None
 
     # 1. Clean
-    raw = [_reading(r) for r in track]
+    raw: list[tuple[Any, Any, Any, Any]] = []
+    for r in track:
+        if len(raw) == MAX_READINGS:
+            raise WalkthroughError(f"the track has more than {MAX_READINGS:,} readings; a walkthrough is at most "
+                                   f"{MAX_DURATION_S:g} s long")
+        raw.append(_reading(r))
     dropped = {"invalid": 0, "inaccurate": 0, "repeated_time": 0, "jump": 0}
     good: list[tuple[float, float, float, float]] = []
     for t, lat, lon, acc in sorted((r for r in raw if _num(r[0])), key=lambda r: r[0]):
@@ -235,13 +256,21 @@ def build(track: Iterable[Any], *, pin: Sequence[float], author: str, start: Seq
     # 2. Smooth, in metres from the first reading
     ref0 = good[0][1:3]
     pts = [(t, *_xy(ref0, lat, lon)) for t, lat, lon, _ in good]
+    # The readings within SMOOTH_S of one are a run of neighbours (times only increase), so only
+    # that run is visited, in the same order: the same sums, in time proportional to the readings.
     smooth: list[TimedPoint] = []
-    for t, _, _ in pts:
+    lo = hi = 0
+    for i, (t, _, _) in enumerate(pts):
+        while abs(pts[lo][0] - t) > SMOOTH_S:
+            lo += 1
+        hi = max(hi, i)
+        while hi + 1 < len(pts) and abs(pts[hi + 1][0] - t) <= SMOOTH_S:
+            hi += 1
         sw = sx = sy = 0.0
-        for (u, x, y), r in zip(pts, good):
-            if abs(u - t) <= SMOOTH_S:
-                w = 1.0 / (r[3] * r[3])
-                sw, sx, sy = sw + w, sx + w * x, sy + w * y
+        for k in range(lo, hi + 1):
+            _, x, y = pts[k]
+            w = 1.0 / (good[k][3] * good[k][3])
+            sw, sx, sy = sw + w, sx + w * x, sy + w * y
         smooth.append((t, sx / sw, sy / sw))
     m_lat, m_lon = geodesy.metres_per_degree(ref0[0])
     as_lat_lon = [(t, ref0[0] + y / m_lat, ref0[1] + x / m_lon) for t, x, y in smooth]

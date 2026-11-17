@@ -156,6 +156,17 @@ first release. Pull request numbers are in brackets.
   and targets; the rules and conformance file cover it (CR-05). A `Zone` can no
   longer be changed after it is made, so sets, dicts and `ZoneIndex` stay
   correct; zones still pickle and copy (CR-10). [#35]
+- From the same review, the walkthrough Django app: an upload for an address
+  needs the app's `CAN_UPLOAD` rule (without one, only staff may; a system
+  check warns), and approving or auto-approving re-checks it, so nobody can
+  replace the directions to someone else's door (CR-01). Tracks are limited
+  (`MAX_TRACK_BYTES`, 20,000 readings, checked while reading), uploads are
+  throttled (`UPLOAD_RATE`), and smoothing takes time in proportion to the
+  readings: a 20,000-reading track takes ~0.9 s instead of ~26 s, with the same
+  results (CR-02). One live walkthrough per address is a database constraint
+  (migration `0003`), and the later of two simultaneous approvals wins, tested
+  on PostgreSQL (CR-03). Malformed tracks and over-long `place_ref`s answer
+  400 with a `code` instead of 500 (CR-06). [#36]
 - Verifier gaps, bad sensor readings in navigation, and documentation, from a
   review. [#18]
 - The JavaScript tests read output as UTF-8, which fixed the Windows run.
@@ -165,6 +176,9 @@ first release. Pull request numbers are in brackets.
   [#26]
 
 ### Changed
+- **The walkthrough Django app now needs `CAN_UPLOAD` for addresses:** without
+  it, only staff may record a walkthrough with a `place_ref` (it used to be any
+  signed-in user). Set it to your app's rule before upgrading. [#36]
 - Faster area searches, with exactly the same answers: a row's cells in a box
   or circle are found as one run of columns, and search boxes are no larger
   than needed. Lookups with a user places file (nearest street, what can drive
