@@ -146,6 +146,12 @@ first release. Pull request numbers are in brackets.
   package layout. [#33]
 
 ### Fixed
+- Release checks from the Codex review: CI now installs the wheel and the
+  source package into clean environments and checks them from outside the
+  checkout; runs the walkthrough app on PostgreSQL 16 (with two-connection race
+  tests), with real ffmpeg and Celery; keeps a size budget for the viewer; and
+  `PAKGRID_REQUIRE` makes a job fail rather than skip tests whose tool is
+  missing (Node.js for the viewer and conformance tests). [#38]
 - From the Codex review of 16 November 2026: `pakgrid build --overwrite` no
   longer deletes the old database before building; it builds a temporary file
   and replaces the old one only when the build is complete, and refuses a bad
@@ -186,6 +192,11 @@ first release. Pull request numbers are in brackets.
   [#26]
 
 ### Changed
+- The map viewer loads the places data (`places.js`, ~2.8 MB compressed) after
+  the map is painted, instead of before it: the grid shows at once, and taps,
+  searches, links and tools that need places wait for them. With the CPU slowed
+  6× the map is painted after ~1.0 s instead of ~1.2 s, and a slow places
+  download no longer holds the map back at all (Codex review CR-12). [#38]
 - The walkthrough Django app stores photos under
   `walkthroughs/<id>/<generation>/` (each photo job's own folder); records made
   earlier keep their paths. Migration `0004` adds the job's claim token. [#37]

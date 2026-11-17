@@ -2113,6 +2113,19 @@ in `pyproject.toml`: every function typed, checked as Python 3.10). Django,
 Django REST framework and Celery have no type information of their own, so in
 `pakgrid.contrib` their objects are not checked.
 
+Three more jobs guard a release:
+
+| Job | What it proves |
+|---|---|
+| **Official checksums** (`checksums.yml`) | Both complete databases, built from scratch on Linux, macOS and Windows, match the official checksums |
+| **Django on PostgreSQL, with ffmpeg and Celery** | The walkthrough app on a real PostgreSQL 16 server, including two-connection races (simultaneous approvals; a stalled photo job overtaken by another), real ffmpeg photos and the Celery task |
+| **Installed package** | The wheel and the source package, each installed into a clean environment, have their data, typing marker, Django app and migrations, run the command line, and build and answer a small grid (`scripts/check_installed_package.py`, run from outside the checkout) |
+
+A test that needs a tool skips without it; a CI job lists the tools it must
+have in `PAKGRID_REQUIRE` (`node`, `ffmpeg`, `celery`, `postgres`), and then a
+missing one is an error, so no job skips them silently. The Django tests run on
+PostgreSQL with `PAKGRID_TEST_POSTGRES=host:port`.
+
 ---
 
 ## 15. Roadmap

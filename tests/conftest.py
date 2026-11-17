@@ -1,3 +1,6 @@
+import os
+import shutil
+
 import pytest
 
 from pakgrid import Grid
@@ -38,3 +41,22 @@ def north_edge_db(tmp_path_factory):
 def grid(lahore_db):
     with Grid.open(lahore_db) as g:
         yield g
+
+
+def pytest_sessionstart(session):
+    """PAKGRID_REQUIRE=node,ffmpeg,celery,postgres (any of them) makes a missing tool an error, so a
+    CI job that is meant to run the tests needing it cannot skip them silently."""
+    missing = []
+    for tool in filter(None, (t.strip() for t in os.environ.get("PAKGRID_REQUIRE", "").split(","))):
+        if tool in ("node", "ffmpeg"):
+            ok = shutil.which(tool) is not None
+        elif tool == "celery":
+            ok = __import__("importlib.util").util.find_spec("celery") is not None
+        elif tool == "postgres":
+            ok = bool(os.environ.get("PAKGRID_TEST_POSTGRES"))
+        else:
+            raise pytest.UsageError(f"PAKGRID_REQUIRE: unknown tool {tool!r} (node, ffmpeg, celery, postgres)")
+        if not ok:
+            missing.append(tool)
+    if missing:
+        raise pytest.UsageError(f"PAKGRID_REQUIRE: not available: {', '.join(missing)}")

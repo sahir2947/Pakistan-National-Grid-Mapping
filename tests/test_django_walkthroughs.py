@@ -87,6 +87,8 @@ def database(lahore_db):
 
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
+    Walkthrough.objects.all().delete()           # also before: a reused database may hold old rows
+    User.objects.all().delete()
     monkeypatch.setattr(subprocess, "run", fake_ffmpeg)
     with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg"}):
         yield
@@ -673,3 +675,87 @@ def test_a_job_has_a_time_limit():
         wt = services.take_photos(r.json()["id"])
     assert wt.status == "failed" and "took longer than" in wt.error and wt.video     # kept, to retry
     assert wt.photos.count() == 0 and wt.job_token == ""
+
+
+# -- Real concurrency, on PostgreSQL only (two connections; SQLite cannot show these races) --
+
+needs_postgres = pytest.mark.skipif(not _PG, reason="set PAKGRID_TEST_POSTGRES=host:port to run on PostgreSQL")
+
+
+def _approve_both_at_once(ali, a, b):
+    """Approve a and b from two connections, both reaching their save together; returns any errors."""
+    import threading
+
+    from django.db import connections
+    barrier, real_save, first, errors = threading.Barrier(2, timeout=10), Walkthrough.save, set(), []
+
+    def save(self, *args, **kwargs):
+        if threading.get_ident() not in first:          # first try: both reach the save together
+            first.add(threading.get_ident())
+            barrier.wait()
+        return real_save(self, *args, **kwargs)
+
+    def approve(wt):
+        try:
+            services.approve(ali, Walkthrough.objects.get(pk=wt.pk))
+        except Exception as e:  # noqa: BLE001
+            errors.append(repr(e))
+        finally:
+            connections.close_all()
+    Walkthrough.save = save
+    try:
+        threads = [threading.Thread(target=approve, args=(w,)) for w in (a, b)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        Walkthrough.save = real_save
+    return errors
+
+
+@needs_postgres
+def test_two_approvals_at_once_leave_one_live():
+    ali = User.objects.get_or_create(username="ali")[0]
+    for _ in range(5):
+        Walkthrough.objects.all().delete()
+        assert _approve_both_at_once(ali, *records(ali, 2)) == []
+        assert sorted(Walkthrough.objects.values_list("status", flat=True)) == ["live", "replaced"]
+
+
+@needs_postgres
+def test_a_stalled_worker_cannot_publish_over_the_one_that_replaced_it(monkeypatch):
+    import threading
+
+    from django.db import connections
+    from django.utils import timezone
+    with override_settings(PAKGRID_WALKTHROUGHS={**ALLOWED, "FFMPEG": "fake-ffmpeg", "KEEP_VIDEO": True}):
+        pk = upload(client("ali")).json()["id"]
+        stalled, go = threading.Event(), threading.Event()
+
+        def ffmpeg(cmd, *args, **kwargs):
+            if threading.current_thread().name == "A" and not stalled.is_set():
+                stalled.set()
+                go.wait(30)                              # worker A stalls on its first photo
+            return fake_ffmpeg(cmd, *args, **kwargs)
+        monkeypatch.setattr(subprocess, "run", ffmpeg)
+        result = {}
+
+        def worker_a():
+            try:
+                result["a"] = services.take_photos(pk).status
+            finally:
+                connections.close_all()
+        a = threading.Thread(target=worker_a, name="A")
+        a.start()
+        assert stalled.wait(30)
+        Walkthrough.objects.filter(pk=pk).update(photos_at=timezone.now() - timezone.timedelta(hours=1))
+        done = services.process_pending(stale_minutes=30)        # worker B takes over and finishes
+        b_photos = sorted(p.image.name for p in Walkthrough.objects.get(pk=pk).photos.all())
+        go.set()
+        a.join(30)
+    final = Walkthrough.objects.get(pk=pk)
+    assert done[0].status == "review" and final.status == "review" and len(b_photos) > 10
+    assert sorted(p.image.name for p in final.photos.all()) == b_photos       # A published nothing
+    photos_on_disk = [f"walkthroughs/{pk}/{n}" for n in files_in(media(f"walkthroughs/{pk}")) if n.endswith(".jpg")]
+    assert photos_on_disk == b_photos                                         # and left no files

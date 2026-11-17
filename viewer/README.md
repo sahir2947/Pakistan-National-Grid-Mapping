@@ -152,6 +152,32 @@ To use it on a phone, publish the repository with **GitHub Pages**
 (Settings → Pages → deploy from the `main` branch). The viewer is then at
 `https://<user>.github.io/<repository>/viewer/`.
 
+## Loading on a phone
+
+The page itself (the grid, border and code: ~390 KB compressed) is all the map
+needs, so it shows at once. The places data, `places.js` (9.4 MB, ~2.8 MB
+compressed), is loaded **after** the map is painted. Until it arrives the panel
+says "Loading place names…", and a tap, a search, a link such as `#Taxila` or
+the Roads, Blocks and Draw tools wait for it and then run (the latest of each).
+Serve the files compressed (GitHub Pages does) and with long cache lifetimes:
+they change only when `pakgrid export-layout` regenerates them.
+
+Measured in Chromium with the CPU slowed 6× (about a low-end phone): the map is
+painted after ~1.0 s (it was ~1.2 s with places loaded first), and when places
+are slow to download the map no longer waits for them (0.2 s instead of the
+whole download). `tests/test_viewer_js.py` keeps a size budget (450 KB
+compressed for the page, 3.2 MB for places) and checks that places stay out of
+the first load. `scripts/check_viewer_in_browser.js` repeats the browser check
+offline (see its header).
+
+**Map tiles** come from `tile.openstreetmap.org`, whose
+[tile usage policy](https://operations.osmfoundation.org/policies/tiles/)
+allows light use only: no heavy or bulk use, and an app must show the
+attribution. For an app's own users at any scale, switch the tile layer to a
+provider (or your own tile server) that allows it. Leaflet itself is loaded
+from unpkg, pinned to 1.9.4 with an integrity hash; to run the viewer without
+the internet, copy Leaflet beside it and change the two links.
+
 ## How it stays correct
 
 - `layout.js` holds the exact row and column counts, `boundary.js` holds
@@ -171,4 +197,5 @@ To use it on a phone, publish the repository with **GitHub Pages**
 Map data, border data and localities © OpenStreetMap contributors (border via
 geoBoundaries, localities via the Humanitarian OpenStreetMap Team; ODbL).
 Tehsils, districts and provinces: UN OCHA (CC BY-IGO 3.0). Map tiles are loaded from
-`tile.openstreetmap.org`; for heavy use, switch to a tile provider that allows it.
+`tile.openstreetmap.org`; for heavy use, switch to a tile provider that allows it
+(see "Loading on a phone").

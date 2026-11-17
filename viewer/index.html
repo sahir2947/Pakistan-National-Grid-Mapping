@@ -113,7 +113,6 @@
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script src="layout.js"></script>
 <script src="boundary.js"></script>
-<script src="places.js"></script>
 <script src="pakgrid.js"></script>
 <script src="navigation.js"></script>
 <script>
@@ -121,7 +120,9 @@
   "use strict";
   var grid = new PakGrid.Grid(PAKGRID_LAYOUT);
   var border = new PakGrid.Boundary(PAKGRID_BOUNDARY);
-  var places = new PakGrid.Places(PAKGRID_PLACES);
+  // The places data (places.js, ~9 MB, ~2.8 MB compressed) is loaded after the map is up, so a
+  // phone shows the grid at once. Anything that needs it waits for it (see withPlaces).
+  var places = null, placesWaiting = {};
   var B = grid.bounds, M = grid.mid;
   var FLAG = PakGrid.FLAG_NAMES;
   // cell and sub-cell line styles by border flag: outside, border, inside
@@ -262,7 +263,7 @@
     // sub-cells first, so the cell lines stay on top; with Places on, the smallest boxes drawn are
     // coloured by tehsil
     // with Grid off, no lines or labels are drawn (Places still colours the blocks)
-    var byPlace = document.getElementById("placeson").checked, lines = gridOn();
+    var byPlace = document.getElementById("placeson").checked && !!places, lines = gridOn();
     if (map.hasLayer(frame) !== lines) { if (lines) frame.addTo(map); else map.removeLayer(frame); }
     if (!lines && !byPlace) msg = "Grid hidden: tick Grid to show the cells";
     if (subs) drawBoxes(subs, "sub", SUB_STYLE, byPlace, lines);
@@ -274,7 +275,7 @@
       drawLabels(subs, false, "sub-label", [20, 12], function (r) { return String(r.subRow * 5 + r.subCol); });
     }
     var c = map.getCenter(), here = grid.locate(c.lat, c.lng);
-    var at = here && places.of(here.q, here.row, here.col, here.subRow * 5 + here.subCol, grid);
+    var at = here && places && places.of(here.q, here.row, here.col, here.subRow * 5 + here.subCol, grid);
     if (at) msg += " · Centre: " + at.label;
     else if (document.getElementById("placeson").checked && z < CELL_ZOOM) msg += " · Places: zoom in to colour blocks by tehsil";
     statusEl.textContent = msg;
@@ -426,14 +427,14 @@
       "<div><span style='border-color:#7c3aed'></span>Cell on the border</div>" +
       "<div><span style='border-color:#9ca3af;border-style:dashed'></span>Cell outside Pakistan</div>" +
       "<div style='margin-top:4px'>" + border.attribution + "</div></div>" +
-      "<h3>Places</h3>" + rowsHtml([
+      "<h3>Places</h3>" + (places ? rowsHtml([
         ["Provinces", countLevel("province")], ["Districts", countLevel("district")], ["Tehsils", countLevel("tehsil")],
         ["Localities", countLevel("locality")],
         ["Places version", String(places.version)]]) +
       "<div class='sub'>Every cell and sub-cell is tagged with its tehsil, district and province, and with " +
       "a locality (city, town, village, neighbourhood) where one is near. Tick " +
       "<b>Places</b> to colour blocks by tehsil, or search for a place such as <i>Taxila</i> or <i>Kot Addu</i>. " +
-      esc(places.attribution) + ".</div>" +
+      esc(places.attribution) + ".</div>" : "<p class='sub' id='places-loading'>Loading place names…</p>") +
       "<p class='sub'>Tap the map to see the cell and sub-cell at that point. " +
       "Cells appear from zoom " + CELL_ZOOM + ", sub-cells from zoom " + SUB_ZOOM + ".</p>";
   }
@@ -1522,9 +1523,49 @@
     { enableHighAccuracy: true, timeout: 15000 });
   });
 
+  // -- Places, loaded after the map ------------------------------------------
+  // Calls that need the places data made before it arrives wait for it; only the latest call of
+  // each kind is kept (ten quick taps run once, for the last one).
+  function withPlaces(name, fn) {
+    return function () {
+      var self = this, args = arguments;
+      if (places) return fn.apply(self, args);
+      placesWaiting[name] = function () { fn.apply(self, args); };
+      flash("Loading place names…");
+    };
+  }
+  select = withPlaces("select", select);
+  showPlace = withPlaces("showPlace", showPlace);
+  runQuery = withPlaces("runQuery", runQuery);
+  startRoad = withPlaces("startRoad", startRoad);
+  startBlocks = withPlaces("startBlocks", startBlocks);
+  startDrawing = withPlaces("startDrawing", startDrawing);
+
+  function loadPlaces() {
+    var s = document.createElement("script");
+    s.src = "places.js";
+    s.async = true;
+    s.onload = function () {
+      places = new PakGrid.Places(PAKGRID_PLACES);
+      var waiting = placesWaiting;
+      placesWaiting = {};
+      if (document.getElementById("places-loading")) showSummary();
+      drawGrid();
+      Object.keys(waiting).forEach(function (k) { waiting[k](); });
+    };
+    s.onerror = function () {
+      flash("Place names could not be loaded: reload the page to try again");
+      var el = document.getElementById("places-loading");
+      if (el) el.textContent = "Place names could not be loaded. Reload the page to try again.";
+    };
+    document.body.appendChild(s);
+  }
+
   showSummary();
   drawGrid();
   if (location.hash.length > 1) runQuery(decodeURIComponent(location.hash.slice(1)), true);
+  // after the first frame with the map is painted, so reading ~9 MB never holds it back
+  requestAnimationFrame(function () { setTimeout(loadPlaces, 0); });
 })();
 </script>
 </body>
