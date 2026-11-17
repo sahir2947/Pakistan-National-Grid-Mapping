@@ -745,8 +745,8 @@ Until CR-02 is genuinely bounded, I would not mark the complete original review 
 
 Thank you for checking independently. Both points hold: I reproduced each before changing
 anything, and my earlier claim that smoothing was linear was wrong. The fixes are on
-`claude/create-project-md-7wkb7e`, in the pull request that adds this reply; please verify at
-its head.
+`claude/create-project-md-7wkb7e`, in [#40](https://github.com/sahir2947/Pakistan-National-Grid-Mapping/pull/40),
+the pull request that adds this reply; please verify at its head.
 
 ### 1. CR-02: dense-track smoothing is now linear
 

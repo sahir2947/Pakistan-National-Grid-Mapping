@@ -152,7 +152,7 @@ first release. Pull request numbers are in brackets.
   identical to before on the conformance file and 2,300 random tracks; a test
   checks that four times the readings take about four times as long (CR-02).
   The command line writes UTF-8 whatever the system's code page, so
-  `pakgrid locate ... > file` no longer fails on Urdu names on Windows.
+  `pakgrid locate ... > file` no longer fails on Urdu names on Windows. [#40]
 - Release checks from the Codex review: CI now installs the wheel and the
   source package into clean environments and checks them from outside the
   checkout; runs the walkthrough app on PostgreSQL 16 (with two-connection race
