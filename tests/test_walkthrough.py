@@ -244,3 +244,25 @@ def test_a_bad_video_start_is_a_walkthrough_error():
     gpx = '<gpx><trkpt lat="31.5" lon="74.3"><time>2026-01-01T00:00:00Z</time></trkpt></gpx>'
     with pytest.raises(WalkthroughError, match="video_start"):
         W.read_gpx(gpx, video_start="soon")
+
+
+def test_smoothing_time_grows_linearly_even_for_dense_readings():
+    """20,000 readings packed into 3 seconds (all within each other's smoothing window): four times
+    the readings must take about four times as long, not sixteen (it used to be quadratic)."""
+    import time
+
+    def dense(n):                # a valid recording: 9 m north in 3 s, every reading kept
+        return [{"t": i * 3.0 / n, "lat": 31.5201 + 8.1e-5 * i / (n - 1), "lon": 74.3571, "accuracy": 5.0}
+                for i in range(n)]
+
+    def seconds(n):
+        track = dense(n)
+        best = math.inf
+        for _ in range(3):
+            t0 = time.perf_counter()
+            wt = W.build(track, pin=(track[-1]["lat"], track[-1]["lon"]), author="a")
+            best = min(best, time.perf_counter() - t0)
+        assert wt.data["track"]["kept"] == n
+        return best
+    ratio = seconds(20_000) / seconds(5_000)
+    assert ratio < 9, f"4x the readings took {ratio:.1f}x as long (linear is about 4, quadratic 16)"
