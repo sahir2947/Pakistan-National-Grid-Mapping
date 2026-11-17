@@ -9,6 +9,8 @@ import os
 import subprocess
 import tempfile
 import threading
+import time
+import uuid
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
 from typing import Any
@@ -22,7 +24,7 @@ from pakgrid.walkthrough import Walkthrough as WalkthroughData
 from pakgrid.walkthrough import build as build_walkthrough
 
 from . import conf
-from .models import Walkthrough, WalkthroughPhoto
+from .models import Walkthrough, WalkthroughPhoto, walkthrough_storage
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +62,28 @@ def can_manage(user: Any, wt: Walkthrough) -> bool:
     if fn:
         return bool(fn(user, wt))
     return bool(user and user.is_authenticated and (user.is_staff or wt.owner_id == user.pk))
+
+
+def manageable(user: Any, place_ref: str | None = None, limit: int = 200) -> list[Walkthrough]:
+    """The walkthroughs this user may manage (CAN_MANAGE), newest first, at most `limit`; only
+    those of place_ref when given. The same answer as checking each one with can_manage: the
+    rule is applied before the limit, so records the user may not see cannot crowd out ones
+    they may. MANAGE_QUERYSET, when set, narrows the rows in the database first."""
+    qs = Walkthrough.objects.all()
+    if place_ref:
+        qs = qs.filter(place_ref=place_ref)
+    narrow = conf.hook("MANAGE_QUERYSET")
+    if narrow:
+        qs = narrow(user, qs)
+    elif not conf.get("CAN_MANAGE") and not (user and user.is_staff):
+        qs = qs.filter(owner=user) if user and user.is_authenticated else qs.none()   # the default rule
+    out: list[Walkthrough] = []
+    for wt in qs.iterator(chunk_size=500):
+        if can_manage(user, wt):
+            out.append(wt)
+            if len(out) == limit:
+                break
+    return out
 
 
 def can_view(user: Any, wt: Walkthrough) -> bool:
@@ -170,19 +194,46 @@ def _in_thread(pk: Any) -> None:
 
 # -- The photo job ---------------------------------------------------------------------
 
+class _ClaimLost(Exception):
+    """This job's claim was taken over (it was thought stale): it must not publish anything."""
+
+
+def _renew(pk: Any, token: str, deadline: float) -> None:
+    """Keep this job's claim fresh, so it is not thought stale while it works; stop when the
+    claim was taken over or the job ran past JOB_TIMEOUT_S."""
+    if time.monotonic() > deadline:
+        raise WalkthroughError(f"the photo job took longer than {conf.get('JOB_TIMEOUT_S')} s")
+    if not Walkthrough.objects.filter(pk=pk, job_token=token).update(photos_at=timezone.now()):
+        raise _ClaimLost
+
+
 def take_photos(pk: Any, upload: Any = None) -> Walkthrough:
     """Take a processing walkthrough's photos from its video with ffmpeg, store them, and move it
-    to review (or live, with AUTO_APPROVE). Safe to run twice: only a 'processing' record is
-    taken, and claimed first. Returns the record (status 'failed', with `error`, if it failed).
+    to review (or live, with AUTO_APPROVE). Returns the record (status 'failed', with `error`, if
+    it failed).
+
+    Safe to run twice and against a stale worker: the job claims the record with its own token
+    (photos_at and job_token), renews the claim after every photo, and publishes only if it still
+    holds it, checked inside the transaction that publishes. A job whose claim was taken over
+    stops and changes nothing. The whole job may take at most JOB_TIMEOUT_S.
+
+    The photos are stored as a complete new set (walkthroughs/<id>/<generation>/) before the
+    database is touched; one transaction then points the records at them, and the previous set's
+    files are deleted only after it commits. Any failure deletes the new files and leaves the
+    previous photos as they were, records and files.
 
     `upload`: the uploaded video file itself, read instead of the stored video (JOB "sync").
     If the photos then fail, it is stored, so the walkthrough can be retried."""
-    with transaction.atomic():
-        claimed = Walkthrough.objects.filter(pk=pk, status=Walkthrough.PROCESSING, photos_at__isnull=True) \
-            .update(photos_at=timezone.now())
+    token = uuid.uuid4().hex
+    claimed = Walkthrough.objects.filter(pk=pk, status=Walkthrough.PROCESSING, photos_at__isnull=True) \
+        .update(photos_at=timezone.now(), job_token=token)
     wt = Walkthrough.objects.get(pk=pk)
     if not claimed:
         return wt
+    deadline = time.monotonic() + conf.get("JOB_TIMEOUT_S")
+    storage = walkthrough_storage()
+    staged: list[str] = []                      # new files, not yet referenced by any record
+    published = False
     try:
         if not wt.video and upload is None:
             raise WalkthroughError("the video is missing")
@@ -206,60 +257,92 @@ def take_photos(pk: Any, upload: Any = None) -> Walkthrough:
                 if done.returncode != 0 or not os.path.exists(cmd[-1]) or os.path.getsize(cmd[-1]) == 0:
                     tail = (done.stderr or b"").decode("utf-8", "replace").strip()[-300:]
                     raise WalkthroughError(f"ffmpeg could not take {os.path.basename(cmd[-1])}: {tail or 'no output'}")
+                _renew(pk, token, deadline)
+            # 1. Store the complete new set, before the database is touched.
+            generation = token[:12]
+            for f in data.frames:
+                with open(os.path.join(tmp, f["image"]), "rb") as img:
+                    staged.append(storage.save(f"walkthroughs/{wt.pk}/{generation}/{f['image']}", File(img)))
+                _renew(pk, token, deadline)
+            # 2. Point the records at it in one transaction, if this job still holds the claim.
             with transaction.atomic():
-                wt.photos.all().delete()
-                for f in data.frames:
-                    photo = WalkthroughPhoto(walkthrough=wt, index=f["index"])
-                    with open(os.path.join(tmp, f["image"]), "rb") as img:
-                        photo.image.save(f["image"], File(img), save=True)
-                wt.error = ""
+                if not Walkthrough.objects.select_for_update() \
+                        .filter(pk=pk, job_token=token, status=Walkthrough.PROCESSING).exists():
+                    raise _ClaimLost
+                wt.photos.all().delete()                    # the old set's files go after the commit
+                WalkthroughPhoto.objects.bulk_create(
+                    [WalkthroughPhoto(walkthrough=wt, index=f["index"], image=saved)
+                     for f, saved in zip(data.frames, staged)])
+                wt.error, wt.job_token = "", ""
+                fields = ["status", "error", "job_token"]
                 # AUTO_APPROVE publishes only if the uploader may still publish for the address
                 if conf.get("AUTO_APPROVE") and (not wt.place_ref or can_upload(wt.owner, wt.place_ref)):
-                    _go_live(wt, ["status", "error"])
+                    _go_live(wt, fields)
                 else:
                     wt.status = Walkthrough.REVIEW
-                    wt.save(update_fields=["status", "error"])
+                    wt.save(update_fields=fields)
+            published = True
         if not conf.get("KEEP_VIDEO") and wt.video:
             wt.video.delete(save=False)
             wt.save(update_fields=["video"])
+    except _ClaimLost:
+        log.warning("walkthrough %s: another photo job took this one over; this one stops", pk)
+        _discard(storage, staged)
+        return Walkthrough.objects.get(pk=pk)
     except Exception as exc:  # noqa: BLE001 - any failure (ffmpeg, storage, ...) fails this job only
+        if published:                           # the photos are in; only deleting the video failed
+            log.warning("walkthrough %s: photos stored, but the video could not be deleted: %s", pk, exc)
+            return wt
+        _discard(storage, staged)
         if isinstance(exc, (OSError, subprocess.SubprocessError, WalkthroughError, ValueError)):
             log.warning("walkthrough %s: photos failed: %s", pk, exc)
             reason = str(exc)
         else:                                   # e.g. the storage refused: say what, not a traceback
             log.exception("walkthrough %s: photos failed", pk)
             reason = f"the photos could not be stored ({type(exc).__name__})"
-        wt.status, wt.error = Walkthrough.FAILED, reason[:2000]
-        fields = ["status", "error"]
+        if not Walkthrough.objects.filter(pk=pk, job_token=token).exists():
+            return Walkthrough.objects.get(pk=pk)       # taken over meanwhile: the other job decides
+        failed: dict[str, Any] = {"status": Walkthrough.FAILED, "error": reason[:2000], "job_token": ""}
         if upload is not None and not wt.video:
             try:                                    # keep it, so the walkthrough can be retried
                 upload.seek(0)
                 wt.video.save(getattr(upload, "name", None) or "video.mp4", upload, save=False)
-                fields.append("video")
+                failed["video"] = wt.video.name
             except Exception as keep:  # noqa: BLE001
                 log.warning("walkthrough %s: could not keep the video for a retry: %s", pk, keep)
-        wt.save(update_fields=fields)
+        Walkthrough.objects.filter(pk=pk, job_token=token).update(**failed)
+        wt = Walkthrough.objects.get(pk=pk)
     return wt
+
+
+def _discard(storage: Any, names: list[str]) -> None:
+    """Delete files a failed or overtaken job stored but no record refers to."""
+    for name in names:
+        try:
+            storage.delete(name)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not delete the unused file %s: %s", name, exc)
 
 
 def retry(wt: Walkthrough) -> Walkthrough:
     """Put a failed walkthrough back to processing (its video must still be there) and start the job."""
     if wt.status != Walkthrough.FAILED or not wt.video:
         raise WalkthroughError("only a failed walkthrough that still has its video can be retried")
-    wt.status, wt.error, wt.photos_at = Walkthrough.PROCESSING, "", None
-    wt.save(update_fields=["status", "error", "photos_at"])
+    wt.status, wt.error, wt.photos_at, wt.job_token = Walkthrough.PROCESSING, "", None, ""
+    wt.save(update_fields=["status", "error", "photos_at", "job_token"])
     transaction.on_commit(lambda: start_job(wt.pk))
     return wt
 
 
 def process_pending(limit: int | None = None, stale_minutes: float | None = 30) -> list[Walkthrough]:
-    """Take the photos of every walkthrough still processing (the 'command' job). A job that
-    started more than stale_minutes ago and never finished (its worker died) is started again.
-    Returns the records."""
+    """Take the photos of every walkthrough still processing (the 'command' job). A job whose
+    claim was not renewed for stale_minutes (its worker died; a working job renews it after every
+    photo) is started again: the old worker, if it is somehow still running, loses its claim and
+    publishes nothing. Returns the records."""
     if stale_minutes is not None:
         Walkthrough.objects.filter(status=Walkthrough.PROCESSING,
                                    photos_at__lt=timezone.now() - timedelta(minutes=stale_minutes)) \
-            .update(photos_at=None)
+            .update(photos_at=None, job_token="")
     pks = list(Walkthrough.objects.filter(status=Walkthrough.PROCESSING, photos_at__isnull=True)
                .order_by("created_at").values_list("pk", flat=True)[:limit])
     return [take_photos(pk) for pk in pks]

@@ -10,7 +10,7 @@ from typing import Any
 
 from django.conf import settings
 from django.core.files.storage import Storage
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Q
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
@@ -95,7 +95,8 @@ class Walkthrough(models.Model):
     status = models.CharField(max_length=12, choices=STATUSES, default=PROCESSING, db_index=True)
     error = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    photos_at = models.DateTimeField(null=True, blank=True)
+    photos_at = models.DateTimeField(null=True, blank=True)     # the photo job's claim, renewed as it works
+    job_token = models.CharField(max_length=32, blank=True, editable=False)   # which job holds the claim
     reviewed_at = models.DateTimeField(null=True, blank=True)
     reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
                                     related_name="+")
@@ -128,10 +129,11 @@ class WalkthroughPhoto(models.Model):
         return f"{self.walkthrough_id} photo {self.index}"
 
 
-# Files go with their records (storage does not delete them by itself).
+# Files go with their records (storage does not delete them by itself), once the deletion is
+# committed: if the transaction rolls back, the records still point at files that still exist.
 @receiver(post_delete)
 def _delete_files(sender: Any, instance: Any, **kwargs: Any) -> None:
-    if sender is WalkthroughPhoto and instance.image:
-        instance.image.delete(save=False)
-    elif sender is Walkthrough and instance.video:
-        instance.video.delete(save=False)
+    field = instance.image if sender is WalkthroughPhoto else instance.video if sender is Walkthrough else None
+    if field:
+        storage, name = field.storage, field.name
+        transaction.on_commit(lambda: storage.delete(name), using=kwargs.get("using"))
