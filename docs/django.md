@@ -29,6 +29,10 @@ Contents: [1. Install](#1-install) · [2. Build the database](#2-build-and-verif
 [8. Errors](#8-errors) · [9. Testing](#9-testing) · [10. Performance](#10-performance) ·
 [11. Upgrading](#11-upgrading-pakgrid) · [12. Checklist](#12-checklist)
 
+Going to production? [integrating.md](integrating.md) continues from here:
+permission rules and their tests, limits, monitoring, rollout and rollback,
+staging, and a security review.
+
 ---
 
 ## 1. Install

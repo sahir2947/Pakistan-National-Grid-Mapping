@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         # The grid must come out identical on every operating system.
         include:
           - os: macos-latest
@@ -76,9 +76,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The newest Python, as apps' backends tend to run it (Dukaandaari: 3.14); the other
+      # versions run the same Django tests on SQLite in the matrix above.
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Install
         run: |

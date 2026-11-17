@@ -798,7 +798,7 @@ def test_javascript_street_access_matches_python():
 
 def test_viewer_size_budget():
     """The viewer's download budget, measured compressed as a web server sends it. The page itself
-    (everything before the map shows) must stay small; the places data loads after the map, so it
+    (everything before the map shows, Leaflet included) must stay small; the places data loads after the map, so it
     must not be a <script> of the page, and has its own, larger budget."""
     import gzip
     import re
@@ -806,8 +806,46 @@ def test_viewer_size_budget():
     page_scripts = re.findall(r'<script src="([^"]+\.js)"', html)
     assert "pakgrid.js" in page_scripts and "boundary.js" in page_scripts   # the scripts were found
     assert "places.js" not in page_scripts and "loadPlaces" in html       # loaded after the map
-    first = ["index.html"] + [s for s in page_scripts if not s.startswith("http")]
+    styles = re.findall(r'<link rel="stylesheet" href="([^"]+)"', html)
+    first = ["index.html"] + styles + page_scripts           # all local: see the test below
     size = {name: len(gzip.compress((VIEWER / name).read_bytes(), 6)) for name in first + ["places.js"]}
     page = sum(size[n] for n in first)
     assert page <= 450_000, f"the page before the map is {page:,} bytes compressed (budget 450,000): {size}"
     assert size["places.js"] <= 3_200_000, f"places.js is {size['places.js']:,} bytes compressed (budget 3,200,000)"
+
+
+def test_viewer_loads_its_code_from_its_own_files():
+    """Leaflet is vendored: the page loads no script or stylesheet from another host, and each
+    vendored file is exactly the one its integrity hash names (so the copy cannot drift)."""
+    import base64
+    import hashlib
+    import re
+    html = (VIEWER / "index.html").read_text(encoding="utf-8")
+    tags = re.findall(r'<(?:script|link)\b[^>]*>', html)
+    assert tags and not [t for t in tags if re.search(r'(?:src|href)="(?:https?:)?//', t)], tags
+    pinned = re.findall(r'(?:src|href)="(vendor/[^"]+)"\s+integrity="sha256-([^"]+)"', html)
+    assert sorted(name for name, _ in pinned) == ["vendor/leaflet/leaflet.css", "vendor/leaflet/leaflet.js"]
+    for name, digest in pinned:
+        assert base64.b64encode(hashlib.sha256((VIEWER / name).read_bytes()).digest()).decode() == digest, name
+    css = (VIEWER / "vendor/leaflet/leaflet.css").read_text(encoding="utf-8")
+    for image in set(re.findall(r'url\((images/[^)]+)\)', css)):
+        assert (VIEWER / "vendor/leaflet" / image).is_file(), image
+    assert "BSD 2-Clause" in (VIEWER / "vendor/leaflet/LICENSE").read_text(encoding="utf-8")
+
+
+def test_viewer_tile_provider_is_set_in_one_file():
+    """The background map is configured in tiles.js, loaded before the page's own code; the page
+    itself names no tile server, and handles no tiles at all (url "")."""
+    import re
+    html = (VIEWER / "index.html").read_text(encoding="utf-8")
+    scripts = re.findall(r'<script src="([^"]+)"', html)
+    assert scripts.index("tiles.js") == scripts.index("vendor/leaflet/leaflet.js") + 1
+    assert "tile.openstreetmap.org" not in html and "PAKGRID_TILES" in html
+    if NODE is None:
+        pytest.skip("node is not installed")
+    out = subprocess.run([NODE, "-e", "eval(require('fs').readFileSync(process.argv[1], 'utf8'));"
+                          "console.log(JSON.stringify(PAKGRID_TILES))", str(VIEWER / "tiles.js")],
+                         capture_output=True, encoding="utf-8", check=True).stdout
+    tiles = json.loads(out)
+    assert "{z}" in tiles["url"] and "{x}" in tiles["url"] and "{y}" in tiles["url"]
+    assert "OpenStreetMap" in tiles["attribution"] and tiles["maxZoom"] == 19
