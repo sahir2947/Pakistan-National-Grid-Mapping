@@ -361,3 +361,284 @@ above. Production PostgreSQL/S3 concurrency and mobile viewer performance were
 reasoned about from code and documentation, not exercised against live
 infrastructure.
 
+
+---
+
+## Reply from Claude: fixes for verification
+
+**Written:** 17 November 2026
+**Reviewed commit:** `e2b9b5a`. **Fixes merged up to:** [`e1fe433`](https://github.com/sahir2947/Pakistan-National-Grid-Mapping/tree/e1fe433) (`main`)
+**Pull requests:** [#35](https://github.com/sahir2947/Pakistan-National-Grid-Mapping/pull/35) (core: CR-04, 05, 10, 11),
+[#36](https://github.com/sahir2947/Pakistan-National-Grid-Mapping/pull/36) (walkthrough app: CR-01, 02, 03, 06),
+[#37](https://github.com/sahir2947/Pakistan-National-Grid-Mapping/pull/37) (walkthrough app: CR-07, 08, 09),
+[#38](https://github.com/sahir2947/Pakistan-National-Grid-Mapping/pull/38) (CR-12 and the release gates)
+
+Every finding was reproduced or confirmed in the code before it was changed. Each new test was
+also run against the code from before the fix, and fails there: that was checked for every test
+named below, except where a note says otherwise. Where I did something other than the recommendation, or left part of it
+undone, that is said under the finding and summed up in "Not done, and why" at the end. Please
+verify against `e1fe433` or later.
+
+### Summary
+
+| Finding | Status | Pull request | Main commits |
+|---|---|---|---|
+| CR-01 P1: default walkthrough permissions | Fixed | #36 | `e7874bc` |
+| CR-02 P1: unbounded tracks, quadratic smoothing | Fixed (quotas: see below) | #36, #37 | `9d4d374`, `e7874bc`, `533410f` |
+| CR-03 P1: one live walkthrough per address | Fixed | #36 | `e7874bc` |
+| CR-04 P1: overwrite deletes the database first | Fixed | #35 | `cb4bcf6` |
+| CR-05 P2: non-finite navigation time | Fixed (Python and JavaScript) | #35 | `c744460` |
+| CR-06 P2: malformed tracks give 500 | Fixed | #36 | `9d4d374`, `e7874bc` |
+| CR-07 P2: list ignores `CAN_MANAGE` | Fixed | #37 | `533410f` |
+| CR-08 P2: photo files and rows not consistent | Fixed | #37 | `533410f`, `4616f1c` |
+| CR-09 P2: stale-job recovery is not a lease | Fixed | #37 | `533410f` |
+| CR-10 P2: `Zone` is mutable | Fixed | #35 | `0270549` |
+| CR-11 P2: places replacement not failure-atomic | Fixed (transaction, not a copy) | #35 | `10eceeb` |
+| CR-12 P3: viewer heavy on phones | Improved (places load after the map) | #38 | `19af571` |
+| Test and release gaps | Mostly done | #38 | `41befb9`, `b84af2b` |
+
+**At `e1fe433`:**
+- Local: 444 passed, 2 skipped. The 2 skips are the PostgreSQL-only tests, which pass on PostgreSQL 16.15: 32/32 Django tests, three runs.
+- `ruff check .` and `mypy` (47 files) are clean.
+- CI was green on every job of #38, including the two new jobs.
+- `conformance/navigation.json` only gained one session; the existing cases are unchanged. `walkthrough.json` regenerates byte-identical.
+
+### CR-01: uploads for an address fail closed
+
+- **Default rule:** `services.can_upload` uses the app's `CAN_UPLOAD` rule when one is set. Without one:
+  - only staff may record for a non-empty `place_ref`;
+  - a signed-in user may record one with no `place_ref`, since it can't replace anything.
+- **Publishing re-checks the rule.** `approve()` refuses unless the approver passes `can_upload(user, wt.place_ref)`, because approving publishes for the address. `AUTO_APPROVE` checks the uploader the same way before publishing; if that fails, the walkthrough goes to review instead.
+- **System check:** `pakgrid_walkthroughs.W001` (`checks.py`) warns until `CAN_UPLOAD` is set.
+- **Tenants:** scoping is left to the app's rule. `docs/django.md` says to make `place_ref` tenant-unique (for example `"<tenant>:<shop>"`) and to check the tenant in `CAN_UPLOAD`.
+- **Tests** (`tests/test_django_walkthroughs.py`):
+  - `test_upload_rule_fails_closed`
+  - `test_an_attacker_cannot_replace_the_owners_walkthrough` (attacker against owner; staff who manage but don't own the address can't approve)
+  - `test_auto_approve_checks_the_rule_again`
+- **Different from the recommendation:** the rule is checked just *before* the publishing transaction, not inside a locked one. `CAN_UPLOAD` is a function of the user and the `place_ref`, not of rows that transaction changes; the "one live" invariant itself is enforced by the database (CR-03).
+- **Behaviour change**, noted in `CHANGELOG.md` under Changed: apps must set `CAN_UPLOAD` before non-staff users can upload for addresses.
+
+### CR-02: bounded tracks, linear smoothing, throttled uploads
+
+- **Readings limit:** `pakgrid.walkthrough.MAX_READINGS = 20_000`, counted while the track is read, so an endless iterable is refused before any work. `read_gpx` counts its points the same way.
+- **Linear smoothing:** only the readings within `SMOOTH_S` are visited, summed in the same order as before, so the results are bit-identical:
+  - `walkthrough.json` is unchanged;
+  - 300 random tracks (0.1–3 s sampling) gave identical `to_dict()` from the old and new code.
+  - A 20,000-reading track builds in **0.9 s instead of 26 s**.
+- **App limits:**
+  - `MAX_TRACK_BYTES` (default 5,000,000): an uploaded file is read only up to the limit plus one byte, and text is length-checked.
+  - `UPLOAD_RATE` (default `"30/hour"` per user, `None` for no limit): a DRF throttle on POST only.
+- **Total job deadline:** `JOB_TIMEOUT_S` (default 1,200 s), in #37 with the job claims (CR-09).
+- **Tests:**
+  - `test_too_many_readings_are_refused_before_any_work` (`tests/test_walkthrough.py`). On the old code it exhausted memory, which is the finding itself.
+  - `test_bad_uploads_get_a_400_with_a_code_and_create_nothing` (oversized text and file, 20,001 readings)
+  - `test_uploads_are_rate_limited`
+  - `test_a_job_has_a_time_limit`
+- **Not done:** per-user quotas beyond the rate limit, and queue-level resource limits. Those belong to each app's deployment (Celery or cron worker limits), not to the library.
+
+### CR-03: one live walkthrough per address
+
+- **Constraint:** a `UniqueConstraint` on `place_ref` where `status = "live"` and `place_ref != ""`, named `pakgrid_one_live_walkthrough_per_place`. Migration `0003` first marks any extra live walkthroughs of an address `replaced`, keeping the most recently approved, then adds the constraint.
+- **Publishing:** `services._go_live` replaces the address's live walkthrough first, then saves. If a concurrent approval it could not yet see commits first, the save hits the constraint and retries once, replacing that one: **the later approval wins**, deterministically. `approve()` and the `AUTO_APPROVE` path both use it. No advisory lock is used; the constraint is the guarantee.
+- **Proven on PostgreSQL 16:** a real two-connection race, with a barrier holding both approvals at their save.
+  - The old code left **both live** on the first race.
+  - The new code left exactly one live and one `replaced` in 20/20 races.
+  - This is now a CI test: `test_two_approvals_at_once_leave_one_live` (5 rounds, PostgreSQL only).
+- **Other tests:**
+  - `test_one_live_walkthrough_per_address_is_a_database_rule`
+  - `test_publishing_tries_again_when_it_hits_the_rule`: one connection; it checks that the retry happens.
+  - `test_the_migration_keeps_the_newest_live_walkthrough`: migrates back to `0002`, inserts duplicates, migrates forward.
+- **Exception:** the race test is not checked against the old code in CI, because it can't run there; the hand-run race above is that check.
+
+### CR-04: `build --overwrite` keeps the old database
+
+`build_database`:
+- checks its arguments first;
+- builds into a uniquely named temporary file beside the target (`tempfile.mkstemp`), and fsyncs it;
+- `os.replace`s it over the target only when complete;
+- on any exception (`BaseException`) deletes only the temporary file.
+
+`_quadrant_number` now also refuses an out-of-range integer such as `9`. Before, it passed the argument check and failed part-way through the build.
+
+**Test:** `test_a_failed_overwrite_keeps_the_old_database` (`tests/test_build_verify.py`). A bad quadrant and a failure injected mid-build each leave the old file byte-identical, with no temporary file left behind; a successful overwrite then replaces it. Builds stay deterministic and still match the official checksums.
+
+### CR-05: navigation times, in both ports
+
+- **The contract**, written in `conformance/NAVIGATION.md` §5:
+  - A reading's time, when given, must be a finite number (not NaN, ±∞, text or a boolean), or the reading is ignored.
+  - A GPS reading older than the newest kept fix is ignored; so is a compass reading older than the stored one. A late reading must not move the rider back.
+  - Options must be finite and at least 0, `smoothing_window_s` above 0, and `smoothing_count` an integer of at least 1; the target must be a valid point. Otherwise creating the session, or `set_target`, raises `ValueError` in Python and throws in JavaScript.
+- **Both ports:** `pakgrid/navigate.py` and `viewer/pakgrid.js` implement it.
+- **Conformance file:**
+  - `navigation.json` gains a session with NaN, ±∞, `"11"`, `true`, late and equal times for GPS and compass readings.
+  - The file writes infinity as `"Infinity"` and `"-Infinity"`, as it already did NaN.
+  - Both runners now convert those three strings and pass any other string through as text.
+  - 2,016 cases pass in JavaScript.
+- **Tests:**
+  - `test_a_bad_or_late_time_is_ignored`, which includes your exact reproduction
+  - `test_bad_options_are_refused`
+  - `test_a_bad_target_is_refused`
+  - the JavaScript equivalents in `test_javascript_ignores_bad_sensor_readings_like_python`
+- **Behaviour change:** a time given as text is now ignored; Python used to convert it.
+
+### CR-06: malformed uploads are a 400 with a code
+
+- **Library:** `read_gpx` raises `WalkthroughError` for bad XML, an unreadable lat, lon or time, and a bad `video_start`.
+- **App:** `parse_track` adds non-UTF-8 text, oversized tracks and too many readings. `create()` checks that `place_ref` is text of at most 100 characters.
+- **API response:** `{"detail", "code"}`, with these codes:
+
+  | Code | Meaning |
+  |---|---|
+  | `bad_track` | the track can't be read |
+  | `track_too_large` | over `MAX_TRACK_BYTES` |
+  | `too_many_readings` | over `MAX_READINGS` |
+  | `bad_place_ref` | not text, or too long |
+  | `no_video` | the video is missing |
+  | `video_too_large` | over `MAX_VIDEO_MB` |
+  | `walkthrough` | a recording that can't make a walkthrough |
+
+- **Tests:**
+  - `test_bad_uploads_get_a_400_with_a_code_and_create_nothing`: each case is a 400 with its code, and no record is created.
+  - `test_a_bad_gpx_file_is_a_walkthrough_error`
+  - `test_a_bad_video_start_is_a_walkthrough_error`
+
+### CR-07: the list follows `CAN_MANAGE`
+
+- **New `services.manageable(user, place_ref=None, limit=200)`,** used by `GET walkthroughs/`:
+  - The owner-only filter applies only when there is no `CAN_MANAGE` rule.
+  - `CAN_MANAGE` is applied row by row *before* the limit, using `iterator()`.
+- **New optional `MANAGE_QUERYSET`** (`f(user, queryset) -> queryset`) narrows the rows in the database for large tables.
+- **Tests:**
+  - `test_the_list_follows_can_manage_and_matches_the_detail_view`: list and detail agree for a team lead, an owner and another user, with and without `MANAGE_QUERYSET`.
+  - `test_rows_a_user_may_not_see_do_not_crowd_out_the_list`: a staff user limited by the rule keeps their 3 older walkthroughs behind 210 newer ones they may not manage.
+- **Not done:** a full owner/delegate/staff/denied matrix across every endpoint. The detail endpoints were already covered.
+
+### CR-08: photo generations
+
+- **Staging:** a job stores the complete new set under `walkthroughs/<id>/<generation>/` (where `generation` comes from the job token) before touching the database.
+- **Switch:** one transaction checks the claim, deletes the old rows, `bulk_create`s the new ones and publishes.
+- **Deletion after commit:** the `post_delete` signal deletes files with `transaction.on_commit`, so a rolled-back deletion keeps its files. This covers deleting a walkthrough too.
+- **Failure:** the job deletes only the new, unreferenced files (`_discard`).
+- **Fixed in passing:** a failure after publishing (deleting the video) no longer marks a published walkthrough `failed`.
+- **Tests:**
+  - `test_a_storage_failure_part_way_leaves_the_old_photos_and_no_new_files`: storage fails after 5 new photos; then a successful re-run fully replaces the old set, records and files.
+  - `test_a_database_failure_while_switching_keeps_the_old_photos`: `bulk_create` fails.
+  - `test_a_rolled_back_delete_keeps_the_files`
+- **Notes:**
+  - `4616f1c` fixed a Windows-only failure in the test helper itself: backslash paths compared with storage names.
+  - A staged file that can't be deleted after a failure is logged and left. That is the only way a stray file can remain.
+  - New photos are one folder deeper; existing records keep their paths.
+
+### CR-09: job claims, renewed
+
+- **Claim:** `take_photos` claims the record with a random `job_token` (migration `0004`) and `photos_at`.
+- **Renewal:** after every photo and every stored file, the job renews its claim with an update filtered on its own token. If that updates nothing, the claim is lost and the job stops.
+- **Publishing:** the job publishes only if `select_for_update()` still finds its token on a `processing` record, inside the publishing transaction.
+- **Stale reset:** `process_pending` clears the token as well as `photos_at`.
+- **Failure path:** an overtaken job removes what it stored and changes nothing; the failed status is written only while the job still holds the claim.
+- **Time limit:** `JOB_TIMEOUT_S` caps the whole job.
+- **Tests:**
+  - `test_a_job_whose_claim_was_taken_over_stops_and_publishes_nothing`
+  - `test_a_working_job_renews_its_claim_and_a_stale_one_is_started_again`
+  - `test_a_job_has_a_time_limit`
+  - on PostgreSQL, `test_a_stalled_worker_cannot_publish_over_the_one_that_replaced_it`: worker A stalls, B takes over and finishes, A wakes, publishes nothing and leaves no files.
+
+### CR-10: `Zone` cannot change
+
+- `zone.masks` is now a `MappingProxyType` over a private copy, so writing to it raises `TypeError`, and changing the dict a zone was made from changes nothing.
+- Hash and equality are stable, so a `ZoneIndex` stays correct.
+- Zones pickle, `copy` and `deepcopy` with their layout (`__getstate__` / `__setstate__`).
+- Also fixed: `Zone.__contains__`'s docstring sat after the first statement.
+- **Tests:** `test_a_zone_cannot_change_after_it_is_made` (your reproduction) and `test_a_zone_pickles_and_copies_with_its_layout`.
+
+### CR-11: rebuilding the places layer is one transaction
+
+- `write_places` runs the schema statement by statement instead of with `executescript()`, which committed first.
+- `build_places` wraps the whole replacement, dropping the old tables included, in `BEGIN IMMEDIATE … COMMIT`, and `ROLLBACK` on any exception.
+- **Different from the recommendation:** SQLite's DDL is transactional, so the rollback journal restores the old layer without building in new tables or a copied database. A crash mid-rebuild is recovered from the journal on the next open.
+- **Test:** `test_a_failed_places_rebuild_keeps_the_old_layer`. A failure part-way through writing the new layer leaves the file byte-identical, with lookups and `verify` working.
+- `docs/django.md` still recommends rebuilding on a copy, so running servers don't see the file change under them.
+
+### CR-12: viewer delivery
+
+- **Places after the map:** `places.js` is no longer a blocking script. It loads after the first frame with the map is painted (`requestAnimationFrame` then `setTimeout`).
+- **Waiting calls:** `select`, `showPlace`, `runQuery`, `startRoad`, `startBlocks` and `startDrawing` wait for it, keeping only the latest call of each.
+- **Meanwhile:** the summary panel and the grid colouring show without places and refresh when they arrive.
+- **Measured in Chromium** (`scripts/check_viewer_in_browser.js`: Playwright, Leaflet served locally, no tiles; three runs each, old page against new):
+
+  | | Before | After |
+  |---|---|---|
+  | Map, with `places.js` held back 4 s | 4.4 s | **0.2 s** |
+  | Map painted, CPU slowed 6× | 1.14–1.30 s | **0.95–1.06 s** |
+
+  - A search during loading completes on Lahore.
+  - `#Taxila` opens Taxila.
+  - There were no page errors.
+- **Budget:** `test_viewer_size_budget` caps the compressed page (everything before the map) at 450 KB, now 388 KB, and places at 3.2 MB, now 2.83 MB, and keeps `places.js` out of the first load.
+- **Docs:** `viewer/README.md` covers the OpenStreetMap tile policy and how to run offline.
+- **Not done:**
+  - region-split or indexed places data;
+  - measurement on a real low-end Android device (Chromium CPU throttling stood in for one);
+  - self-hosting Leaflet. It is still loaded from unpkg, pinned with SRI; the README says how to copy it beside the viewer.
+
+### Test and release gaps
+
+| Gap | Status |
+|---|---|
+| PostgreSQL integration and real concurrency tests | **Done.** CI job "Django on PostgreSQL, with ffmpeg and Celery" (PostgreSQL 16 service), with the two two-connection tests. `PAKGRID_TEST_POSTGRES=host:port` runs the Django tests on any PostgreSQL. |
+| Wheel/sdist build, clean install, import, packaged data, CLI | **Done.** CI job "Installed package" builds both, installs each into a clean venv, and runs `scripts/check_installed_package.py` from outside the checkout: data, `py.typed`, Django app and migrations, the `pakgrid` command installed beside that Python, a small build, a lookup and `verify`. Its first CI run caught a bug in the check itself (`b84af2b`). |
+| Malformed/unbounded input, storage-failure-after-N, job lease, permission matrix | Done: CR-02, 06, 08, 09 and 07. The permission matrix is partial (see CR-07). |
+| Node parity tests mandatory | **Done.** `PAKGRID_REQUIRE` (`tests/conftest.py`) makes a missing tool an error; the test matrix sets `node`. |
+| Real ffmpeg, Celery and fork in CI | ffmpeg and Celery: done, required in the PostgreSQL job (`PAKGRID_REQUIRE=postgres,ffmpeg,celery`). Fork tests already run on the Linux and macOS jobs. |
+| Full official builds as a release gate | The existing "Official checksums" workflow builds and verifies both editions on Linux, macOS and Windows for every PR that changes `pakgrid/**` or `pyproject.toml`. It is not a *required* check: because of its path filter it would block unrelated PRs. The owner is asked to mark the two new jobs as required. |
+| Publish the reviewed `LICENSE` | **Not done.** Waiting on the owner's lawyer. `project.md` §16 and `CONTRIBUTING.md` say all rights are reserved until it is published. |
+
+### Release acceptance criteria
+
+| Criterion | Status |
+|---|---|
+| No create, approve, replace or view without authorisation | Met for create, approve and auto-approve (CR-01); viewing was already behind `CAN_VIEW` / `CAN_MANAGE` |
+| Large tracks refused before full parsing; processing O(n) or O(n log n) | Met: limits checked while reading; smoothing linear, the sort O(n log n) (CR-02) |
+| Database constraint: one live per non-empty reference under concurrency | Met, proven on PostgreSQL (CR-03) |
+| Failed `--overwrite` and places rebuild keep the prior database byte for byte | Met, both tested byte-for-byte (CR-04, CR-11) |
+| Invalid timestamps can't crash Python or poison JavaScript; same conformance cases | Met (CR-05) |
+| Every malformed upload is a stable 4xx with no partial record | Met for the cases listed under CR-06 |
+| Delegated `CAN_MANAGE` users see the same records in list and detail | Met (CR-07) |
+| Storage failures and stale workers leave no orphans, broken references or duplicate publishers | Met (CR-08, CR-09); an undeletable staged file is logged |
+| `Zone` can't change after hashing or indexing | Met (CR-10) |
+| PostgreSQL, Node, ffmpeg, Celery, fork, packaging and checksum gates pass | Pass on #38; the checksum gate runs only for package changes, and the new jobs are not yet *required* (an owner setting) |
+
+### Found and fixed along the way
+
+- `build_database` accepted an out-of-range quadrant number (CR-04).
+- `Zone.__contains__`'s docstring was not a docstring (CR-10).
+- A failure while deleting the video, *after* publishing, marked a published walkthrough `failed` (CR-08).
+- Two weak tests, tightened before merging:
+  - A race unit test passed on the old code; it now checks that the retry happens.
+  - The viewer size test's regex matched nothing; it now checks it found the page's scripts.
+
+### Not done, and why
+
+- **Licence:** waiting on legal review.
+- **Per-user quotas and queue limits:** deployment concerns for each app; the library has the rate limit and `JOB_TIMEOUT_S`.
+- **Advisory lock for publishing:** not needed; the database constraint and one retry make the outcome deterministic.
+- **Places rebuild via new tables or a copy:** SQLite's transactional DDL gives the same guarantee, and it is tested byte-for-byte.
+- **Viewer:** region-split data, a real-device measurement and self-hosted Leaflet. These are follow-ups if CR-12 needs more than the lazy loading.
+- **Required checks:** making CI checks *required* is a repository setting for the owner.
+
+### How to verify
+
+```
+git checkout e1fe433          # or later
+python -m pip install -e ".[test]" ruff==0.17.5 mypy==2.4.1 "psycopg[binary]" celery
+python -m ruff check . && python -m mypy
+PAKGRID_REQUIRE=node,ffmpeg,celery python -m pytest -q                         # 444 passed, 2 skipped
+PAKGRID_TEST_POSTGRES=localhost:5432 python -m pytest -q tests/test_django_walkthroughs.py   # 32 passed
+node conformance/runners/javascript.js && node conformance/runners/walkthrough.js            # 2,016 and 610 cases
+python -m build && python -m venv /tmp/v && /tmp/v/bin/pip install dist/*.whl \
+  && (cd /tmp && /tmp/v/bin/python "$OLDPWD/scripts/check_installed_package.py" 0.1.0)
+```
+
+To see a test fail on the code it fixes, check out the file under test from `e2b9b5a` (for
+example `git checkout e2b9b5a -- pakgrid/zones.py`) and run that test. Migrations `0003` and
+`0004` are new, so remove them when checking out the old walkthrough app.
