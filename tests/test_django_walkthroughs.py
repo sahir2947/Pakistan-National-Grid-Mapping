@@ -556,7 +556,9 @@ class FlakyBucket:
 
 
 def files_in(root):
-    return sorted(os.path.relpath(os.path.join(d, f), root) for d, _, fs in os.walk(root) for f in fs)
+    """The files under root, named as the storage names them (with /, on Windows too)."""
+    from pathlib import Path
+    return sorted(p.relative_to(root).as_posix() for p in Path(root).rglob("*") if p.is_file())
 
 
 def flaky(**kw):
