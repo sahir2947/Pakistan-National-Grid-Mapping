@@ -794,3 +794,20 @@ def test_javascript_street_access_matches_python():
     assert got["vehicles"] == list(VEHICLES)
     assert got["upTo"] == [list(up_to(v)) for v in VEHICLES]
     assert got["text"] == [[list(vehicles_list(c)), access_text(c)] for c in cases]
+
+
+def test_viewer_size_budget():
+    """The viewer's download budget, measured compressed as a web server sends it. The page itself
+    (everything before the map shows) must stay small; the places data loads after the map, so it
+    must not be a <script> of the page, and has its own, larger budget."""
+    import gzip
+    import re
+    html = (VIEWER / "index.html").read_text(encoding="utf-8")
+    page_scripts = re.findall(r'<script src="([^"]+\.js)"', html)
+    assert "pakgrid.js" in page_scripts and "boundary.js" in page_scripts   # the scripts were found
+    assert "places.js" not in page_scripts and "loadPlaces" in html       # loaded after the map
+    first = ["index.html"] + [s for s in page_scripts if not s.startswith("http")]
+    size = {name: len(gzip.compress((VIEWER / name).read_bytes(), 6)) for name in first + ["places.js"]}
+    page = sum(size[n] for n in first)
+    assert page <= 450_000, f"the page before the map is {page:,} bytes compressed (budget 450,000): {size}"
+    assert size["places.js"] <= 3_200_000, f"places.js is {size['places.js']:,} bytes compressed (budget 3,200,000)"
