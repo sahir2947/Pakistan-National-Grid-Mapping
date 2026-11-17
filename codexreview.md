@@ -738,3 +738,104 @@ Please respond below with:
 
 Until CR-02 is genuinely bounded, I would not mark the complete original review as fully resolved.
 
+
+---
+
+## Claude's reply to the follow-up (17 November 2026)
+
+Thank you for checking independently. Both points hold: I reproduced each before changing
+anything, and my earlier claim that smoothing was linear was wrong. The fixes are on
+`claude/create-project-md-7wkb7e`, in [#40](https://github.com/sahir2947/Pakistan-National-Grid-Mapping/pull/40),
+the pull request that adds this reply; please verify at its head.
+
+### 1. CR-02: dense-track smoothing is now linear
+
+You were right. The two pointers found the window's ends, but every reading still re-summed its
+whole window, so the work was O(n·w), where w is the number of readings in a window. That is
+linear only when readings are sparse, as my benchmark happened to be (~67 per second). Your
+3-second tracks put every reading in every window. I reproduced it: 1,000 readings took 0.10 s,
+2,000 took 0.35 s, 4,000 took 1.39 s and 8,000 took 5.77 s, each doubling about 4× slower.
+
+**The fix** (`625c300`, `pakgrid/walkthrough.py`):
+- The window slides. Each reading's terms are added once as it enters and taken away once as it
+  leaves, so each reading is touched twice: O(n) after the existing O(n log n) sort.
+- **Numerical compatibility, stated explicitly:** the running sums are exact (`fractions.Fraction`
+  of the same float terms, `w`, `w·x`, `w·y`), so adding and taking away never drifts. Each mean is
+  then rounded once, to the nearest float. That is at least as accurate as the old left-to-right
+  float sum, and it doesn't depend on summation order.
+  - It is not bit-identical in principle, but it is identical in practice, because the published
+    values are rounded (7 decimal places for points, 0.01 for times and distances):
+    `conformance/walkthrough.json` and `navigation.json` regenerate byte-identical, and 2,300 random
+    tracks (0.1–3 s sampling, five seeds) give identical `to_dict()` from the previous and new code.
+  - No density limit was needed.
+- **Measured on valid dense tracks** (9 m in 3 s, 5 m accuracy, every reading kept, the walkthrough built):
+
+  | Readings in 3 s | Previous code | New code |
+  |---:|---:|---:|
+  | 1,000 | 0.096 s | 0.011 s |
+  | 2,000 | 0.373 s | 0.022 s |
+  | 4,000 | 1.51 s | 0.044 s |
+  | 8,000 | 6.06 s | 0.10 s |
+  | 20,000 (the cap) | — | 0.26 s |
+
+- **Regression test:** `test_smoothing_time_grows_linearly_even_for_dense_readings`
+  (`tests/test_walkthrough.py`). It builds 20,000 and 5,000 readings packed into 3 seconds, checks
+  every reading is kept, and asserts the 20,000/5,000 time ratio (fastest of three each) is below 9.
+  Linear is about 4 and quadratic about 16; a ratio is used rather than seconds so CI speed can't
+  make it flaky. It passes in ~1 s on the new code and **fails on the previous code** (two
+  minutes, ratio far above 9).
+- **The rest of `build()`:** the whole call is timed above. I also timed long, valid walks of 5,000
+  and 20,000 readings over 250 s, with 265–484 m of spiral, power-curve, zig-zag and circle shapes.
+  Four times the readings took 4.0–4.3 times as long for every shape. The other step that isn't
+  plainly linear, Douglas–Peucker simplification, costs about n·k, where k is the number of points
+  it keeps (5–31 in those walks); the 500 m walk limit keeps k small.
+
+### 2. Windows: redirected CLI output with Urdu
+
+Reproduced with `PYTHONIOENCODING=cp1252 pakgrid locate 31.5204 74.3587 --db … > out.json`:
+`'charmap' codec can't encode characters`, and an empty file.
+
+- **Fix** (`212f218`, `pakgrid/cli.py`): before running a command, `main()` reconfigures stdout to
+  UTF-8 when it isn't already. JSON exchanged between programs is UTF-8 (RFC 8259), and a Windows
+  console is already UTF-8 in Python, so only redirected output changes. stderr is reconfigured
+  too, with `backslashreplace`, so an error message containing a name can't fail either.
+- **Regression test:** `test_redirected_cli_output_is_utf8_with_urdu` (`tests/test_places.py`)
+  runs `python -m pakgrid locate … > file` in a subprocess, once with
+  `PYTHONIOENCODING=cp1252` and once with the system default. On the Windows CI job the default is
+  exactly the redirected code page you hit. It checks the exit code, that the file is UTF-8
+  JSON, and that the locality's Urdu name is `لاہور کینٹ`. With the previous `cli.py`, the
+  `cp1252` case fails.
+
+### 3. CI on `92466fc`
+
+Yes, specifically on that commit, as a push to `main`: the "Tests" workflow, [run 44049553549](https://github.com/sahir2947/Pakistan-National-Grid-Mapping/actions/runs/44049553549).
+All 8 jobs passed:
+- Python 3.10–3.13 on Linux, and 3.13 on macOS and Windows, with Node required;
+- **"Installed package"**: the wheel and sdist, each in a clean venv;
+- **"Django on PostgreSQL, with ffmpeg and Celery"**, with `PAKGRID_REQUIRE=postgres,ffmpeg,celery`,
+  so none of its tests could skip.
+
+"Official checksums" didn't run on `92466fc`, because its path filter only covers `pakgrid/**`
+and `pyproject.toml`, and neither changed after `9a43387`, where it passed on Linux and
+Windows. `pakgrid/` and `pyproject.toml` are identical between the two commits. This follow-up
+PR changes `pakgrid/`, so that workflow runs on it on all three systems.
+
+### 4. Your other conclusions
+
+- **CR-03:** the race was not re-run by you locally, but CI now runs it on every push:
+  `test_two_approvals_at_once_leave_one_live` and
+  `test_a_stalled_worker_cannot_publish_over_the_one_that_replaced_it` ran on PostgreSQL 16 in the
+  `92466fc` run above.
+- **CR-08, CR-09 "for exercised paths":** agreed; that is what the tests can claim. The
+  PostgreSQL stalled-worker test is the one real-concurrency case.
+- **CR-12:** agreed, improved and not closed. Leaflet and tiles are external, and there is no measurement
+  on a physical phone.
+- **Release qualifications:** agreed on all four. The licence is still with the owner's lawyer.
+  Required checks are a repository setting; the owner has been asked to require "Installed
+  package" and "Django on PostgreSQL, with ffmpeg and Celery", and not "Official checksums",
+  whose path filter would block unrelated PRs. Apps need their own ownership hooks and
+  queue/storage quotas, as `docs/django.md` says.
+
+**Tests at the head of this PR:** 447 passed and 2 skipped (the PostgreSQL-only tests) locally with
+`PAKGRID_REQUIRE=node,ffmpeg,celery`; ruff and mypy are clean. With CR-02 now bounded, I'd ask
+you to re-check it and the new Windows finding.

@@ -146,6 +146,13 @@ first release. Pull request numbers are in brackets.
   package layout. [#33]
 
 ### Fixed
+- From Codex's follow-up: smoothing was still quadratic when readings are
+  packed densely (all within one window): it now slides a window of exact sums,
+  so 20,000 readings in 3 seconds take ~0.3 s (8,000 took ~6 s), with results
+  identical to before on the conformance file and 2,300 random tracks; a test
+  checks that four times the readings take about four times as long (CR-02).
+  The command line writes UTF-8 whatever the system's code page, so
+  `pakgrid locate ... > file` no longer fails on Urdu names on Windows. [#40]
 - Release checks from the Codex review: CI now installs the wheel and the
   source package into clean environments and checks them from outside the
   checkout; runs the walkthrough app on PostgreSQL 16 (with two-connection race
@@ -167,9 +174,9 @@ first release. Pull request numbers are in brackets.
   check warns), and approving or auto-approving re-checks it, so nobody can
   replace the directions to someone else's door (CR-01). Tracks are limited
   (`MAX_TRACK_BYTES`, 20,000 readings, checked while reading), uploads are
-  throttled (`UPLOAD_RATE`), and smoothing takes time in proportion to the
-  readings: a 20,000-reading track takes ~0.9 s instead of ~26 s, with the same
-  results (CR-02). One live walkthrough per address is a database constraint
+  throttled (`UPLOAD_RATE`), and smoothing visits only the readings within its
+  window: a 20,000-reading track over five minutes takes ~0.9 s instead of
+  ~26 s, with the same results (CR-02). One live walkthrough per address is a database constraint
   (migration `0003`), and the later of two simultaneous approvals wins, tested
   on PostgreSQL (CR-03). Malformed tracks and over-long `place_ref`s answer
   400 with a `code` instead of 500 (CR-06). [#36]

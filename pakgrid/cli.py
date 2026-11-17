@@ -293,11 +293,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("-o", "--output-dir", default="conformance")
 
     args = parser.parse_args(argv)
+    _utf8_output()
     try:
         return _COMMANDS[args.command](args)
     except (PakgridError, FileNotFoundError, FileExistsError, ValueError) as exc:
         print(f"pakgrid: error: {exc}", file=sys.stderr)
         return 1
+
+
+def _utf8_output() -> None:
+    """Write the output as UTF-8, whatever the system's code page: place names include Urdu, and
+    JSON exchanged between programs is UTF-8. On Windows, output redirected to a file or a pipe
+    otherwise uses the legacy code page (e.g. cp1252) and fails on the first Urdu name. (A Windows
+    console is already UTF-8 in Python, so it is left alone.)"""
+    for stream, errors in ((sys.stdout, "strict"), (sys.stderr, "backslashreplace")):
+        encoding = (getattr(stream, "encoding", None) or "").lower().replace("-", "").replace("_", "")
+        if encoding != "utf8" and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors=errors)
 
 
 def _build(args: Args) -> int:

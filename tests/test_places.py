@@ -242,3 +242,23 @@ def test_cli(lahore_db, capsys):
 def test_places_table_does_not_depend_on_the_part_built(lahore_db, south_edge_db):
     with Grid.open(lahore_db) as a, Grid.open(south_edge_db) as b:
         assert a.store.places_rows() == b.store.places_rows()
+
+
+@pytest.mark.parametrize("encoding", ["cp1252", None])
+def test_redirected_cli_output_is_utf8_with_urdu(lahore_db, tmp_path, encoding):
+    """`pakgrid locate ... > file` must work whatever the output encoding: on Windows a redirected
+    output uses the legacy code page (cp1252 here; None is the system's own default, which on the
+    Windows CI job is that case), and Urdu place names could not be written in it."""
+    import os
+    import subprocess
+    import sys
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+    if encoding:
+        env["PYTHONIOENCODING"] = encoding
+    out = tmp_path / "out.json"
+    with open(out, "wb") as f:
+        done = subprocess.run([sys.executable, "-m", "pakgrid", "locate", "31.5204", "74.3587", "--db",
+                               str(lahore_db)], stdout=f, stderr=subprocess.PIPE, env=env)
+    assert done.returncode == 0, done.stderr
+    place = json.loads(out.read_bytes().decode("utf-8"))["place"]
+    assert place["label"] == LABEL and place["locality"]["local_name"] == "لاہور کینٹ"

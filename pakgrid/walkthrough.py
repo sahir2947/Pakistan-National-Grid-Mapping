@@ -55,6 +55,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from fractions import Fraction
 from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 from . import geodesy, ids, navigate, spec
@@ -256,22 +257,24 @@ def build(track: Iterable[Any], *, pin: Sequence[float], author: str, start: Seq
     # 2. Smooth, in metres from the first reading
     ref0 = good[0][1:3]
     pts = [(t, *_xy(ref0, lat, lon)) for t, lat, lon, _ in good]
-    # The readings within SMOOTH_S of one are a run of neighbours (times only increase), so only
-    # that run is visited, in the same order: the same sums, in time proportional to the readings.
+    # The readings within SMOOTH_S of one are a run of neighbours (times only increase), and the
+    # run slides forward: each reading's terms are added once as it enters the window and taken
+    # away once as it leaves, so the work grows with the number of readings, however densely they
+    # are packed. The sums are exact fractions, so adding and taking away never drifts; each mean
+    # is then rounded once, to the nearest float.
+    terms = [(Fraction(w), Fraction(w * x), Fraction(w * y))
+             for (_, x, y), w in ((p, 1.0 / (g[3] * g[3])) for p, g in zip(pts, good))]
     smooth: list[TimedPoint] = []
-    lo = hi = 0
+    lo, hi = 0, -1
+    sw = sx = sy = Fraction(0)
     for i, (t, _, _) in enumerate(pts):
-        while abs(pts[lo][0] - t) > SMOOTH_S:
-            lo += 1
-        hi = max(hi, i)
-        while hi + 1 < len(pts) and abs(pts[hi + 1][0] - t) <= SMOOTH_S:
+        while hi < i or (hi + 1 < len(pts) and abs(pts[hi + 1][0] - t) <= SMOOTH_S):
             hi += 1
-        sw = sx = sy = 0.0
-        for k in range(lo, hi + 1):
-            _, x, y = pts[k]
-            w = 1.0 / (good[k][3] * good[k][3])
-            sw, sx, sy = sw + w, sx + w * x, sy + w * y
-        smooth.append((t, sx / sw, sy / sw))
+            sw, sx, sy = sw + terms[hi][0], sx + terms[hi][1], sy + terms[hi][2]
+        while abs(pts[lo][0] - t) > SMOOTH_S:
+            sw, sx, sy = sw - terms[lo][0], sx - terms[lo][1], sy - terms[lo][2]
+            lo += 1
+        smooth.append((t, float(sx / sw), float(sy / sw)))
     m_lat, m_lon = geodesy.metres_per_degree(ref0[0])
     as_lat_lon = [(t, ref0[0] + y / m_lat, ref0[1] + x / m_lon) for t, x, y in smooth]
 
