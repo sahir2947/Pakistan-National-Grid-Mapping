@@ -214,7 +214,8 @@ first release. Pull request numbers are in brackets.
   attribution, deepest zoom); with its URL set to `""` the viewer runs fully
   offline, and the data sources stay credited. `scripts/check_viewer_in_browser.js`
   now fails if the page asks another host for anything but tiles, and checks
-  the no-tiles setting. [#41]
+  the no-tiles setting. `.gitattributes` keeps the vendored files byte-exact
+  on Windows checkouts, where converted line endings would break the hashes. [#41]
 - The map viewer loads the places data (`places.js`, ~2.8 MB compressed) after
   the map is painted, instead of before it: the grid shows at once, and taps,
   searches, links and tools that need places wait for them. With the CPU slowed

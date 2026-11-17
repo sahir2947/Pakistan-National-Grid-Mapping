@@ -1,0 +1,2 @@
+# Vendored files are served with integrity hashes: never convert their line endings.
+viewer/vendor/** -text
