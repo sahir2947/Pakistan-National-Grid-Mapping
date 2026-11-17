@@ -176,7 +176,7 @@ first release. Pull request numbers are in brackets.
   previous photos intact and no stray files (CR-08). A photo job holds a
   renewed claim and publishes only while it still holds it, so a worker
   thought dead cannot overwrite the one that replaced it; a whole job may take
-  `JOB_TIMEOUT_S` (CR-09).
+  `JOB_TIMEOUT_S` (CR-09). [#37]
 - Verifier gaps, bad sensor readings in navigation, and documentation, from a
   review. [#18]
 - The JavaScript tests read output as UTF-8, which fixed the Windows run.
@@ -188,7 +188,7 @@ first release. Pull request numbers are in brackets.
 ### Changed
 - The walkthrough Django app stores photos under
   `walkthroughs/<id>/<generation>/` (each photo job's own folder); records made
-  earlier keep their paths. Migration `0004` adds the job's claim token.
+  earlier keep their paths. Migration `0004` adds the job's claim token. [#37]
 - **The walkthrough Django app now needs `CAN_UPLOAD` for addresses:** without
   it, only staff may record a walkthrough with a `place_ref` (it used to be any
   signed-in user). Set it to your app's rule before upgrading. [#36]
