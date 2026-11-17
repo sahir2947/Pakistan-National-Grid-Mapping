@@ -2109,7 +2109,7 @@ app's permission rules, limits, monitoring, rollout and a checklist):
 
 
 All tests run automatically on GitHub Actions (`.github/workflows/tests.yml`)
-for Python 3.10, 3.11, 3.12 and 3.13 on Linux, and Python 3.13 on macOS and
+for Python 3.10, 3.11, 3.12, 3.13 and 3.14 on Linux, and Python 3.13 on macOS and
 Windows, on every push to `main` and every pull request. The workflow also runs the `ruff` linter (settings in `pyproject.toml`), and checks that the viewer's
 `layout.js` and `boundary.js` match the library.
 

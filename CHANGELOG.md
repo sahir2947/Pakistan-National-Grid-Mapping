@@ -133,7 +133,9 @@ first release. Pull request numbers are in brackets.
   describes using pakgrid in any app [#28].
 - Continuous integration on GitHub Actions: Python 3.10–3.13 on Linux, and
   3.13 on macOS and Windows [#5]; official checksums built on all three
-  [#10, #12].
+  [#10, #12]. Python 3.14 added, and the Django, PostgreSQL, ffmpeg and Celery
+  job moved to it, since apps' backends run it (Dukaandaari does); on 3.14 the
+  Pakistan edition matches the official checksum exactly. [#41]
 - Type hints on every function, a `py.typed` marker so apps' type checkers
   check their calls into pakgrid, and `mypy` in continuous integration. [#30]
 - `CONTRIBUTING.md` (bug reports and suggestions from anyone, code changes by

@@ -297,7 +297,7 @@ For tests or a pilot, build part of the grid, for example
 `pakgrid build -o lahore.sqlite --quadrant 11 --rows 135:146`.
 
 **Tests:** `pip install -e ".[test]"`, then `pytest`. GitHub Actions runs them on
-Python 3.10–3.13 for every push to `main` and every pull request, together with
+Python 3.10–3.14 for every push to `main` and every pull request, together with
 the `ruff` linter and the `mypy` type check (every function has type hints, and
 the package ships `py.typed`).
 

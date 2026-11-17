@@ -46,6 +46,17 @@ Steps 7 to 9 apply to whichever stage goes to real users.
 
 Follow [docs/django.md](django.md) §1–§6 exactly. It is tested code. In short:
 
+**Python version.** pakgrid needs Python 3.10 or later, and is tested on 3.10
+to 3.14 in CI. Dukaandaari's 3.14 is covered by the main test matrix and by
+the Django, PostgreSQL, ffmpeg and Celery job. On 3.14, the Pakistan edition
+built bit-for-bit identical to the official checksum. When you move to a
+newer Python (3.15 and later), run pakgrid's tests and `pakgrid verify` on
+it before deploying, and tell the pakgrid repository so it can be added to
+CI. Grid IDs cannot shift with the Python version: every row and column count
+is far from a rounding boundary, and boundaries are stored as integers. If a
+new Python ever changed a single stored value, `pakgrid verify` would fail
+against the official checksum, so a bad database never reaches production.
+
 1. Pin pakgrid to a **tag or commit** in `requirements.txt`, and use the same
    one in the Dockerfile's database stage (§1, §3).
 2. Build the **Pakistan edition** in the image build and check it with
