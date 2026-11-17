@@ -174,6 +174,7 @@ in the linked sections of [project.md](project.md).
 | Building and verifying the database | | `pakgrid build`, `build-places`, `verify`, `info` | | [§5](project.md#5-pre-built-catalogue-and-database) |
 | Ports to other languages (e.g. Dart) | | `pakgrid export-conformance` | | [conformance/](conformance/) |
 | Using it in a backend | | | | [docs/django.md](docs/django.md) |
+| Taking an app to production | | | | [docs/integrating.md](docs/integrating.md) |
 
 The viewer's JavaScript (`viewer/pakgrid.js`) repeats the grid, addresses,
 navigation, zones, GeoJSON, nearest lookup, blocks, roads, street access and
@@ -243,7 +244,9 @@ in Dart for a Flutter app) can prove it matches pakgrid.
 **Using it in a backend:** [docs/django.md](docs/django.md) sets up `pakgrid`
 in a Django REST Framework backend step by step: install, build and verify the
 database (against the official checksums), Docker, thread-safe sharing,
-models, endpoints and errors.
+models, endpoints and errors. [docs/integrating.md](docs/integrating.md) is the
+next step: what an app team (Dukaandaari first) does to run it in production,
+from permission rules and limits to monitoring, rollout and a checklist.
 
 **Map viewer:** `viewer/index.html` shows the rectangle, quadrants, cells and
 sub-cells on OpenStreetMap; tap anywhere to see its grid code. Run

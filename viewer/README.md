@@ -154,8 +154,8 @@ To use it on a phone, publish the repository with **GitHub Pages**
 
 ## Loading on a phone
 
-The page itself (the grid, border and code: ~390 KB compressed) is all the map
-needs, so it shows at once. The places data, `places.js` (9.4 MB, ~2.8 MB
+The page itself (the grid, border, Leaflet and code: ~435 KB compressed) is all
+the map needs, so it shows at once. The places data, `places.js` (9.4 MB, ~2.8 MB
 compressed), is loaded **after** the map is painted. Until it arrives the panel
 says "Loading place names…", and a tap, a search, a link such as `#Taxila` or
 the Roads, Blocks and Draw tools wait for it and then run (the latest of each).
@@ -170,13 +170,22 @@ compressed for the page, 3.2 MB for places) and checks that places stay out of
 the first load. `scripts/check_viewer_in_browser.js` repeats the browser check
 offline (see its header).
 
-**Map tiles** come from `tile.openstreetmap.org`, whose
+**Leaflet** is part of the viewer: an unmodified copy of 1.9.4 is in
+`vendor/leaflet/` (BSD 2-Clause), loaded with integrity hashes that a test
+checks against the files. The page loads nothing from another host except map
+tiles.
+
+**Map tiles** (the background map) are set in one file, `tiles.js`: a tile URL,
+the attribution the provider requires, and the deepest zoom it serves. Set the
+URL to `""` for no background map: the grid, border, places and tools still
+work, fully offline, and the data sources stay credited. The default is
+`tile.openstreetmap.org`, whose
 [tile usage policy](https://operations.osmfoundation.org/policies/tiles/)
-allows light use only: no heavy or bulk use, and an app must show the
-attribution. For an app's own users at any scale, switch the tile layer to a
-provider (or your own tile server) that allows it. Leaflet itself is loaded
-from unpkg, pinned to 1.9.4 with an integrity hash; to run the viewer without
-the internet, copy Leaflet beside it and change the two links.
+allows light use only: no heavy or bulk use, and the attribution must show. For
+an app's own users at any scale, point `tiles.js` at a provider (or your own
+tile server) that allows it. `scripts/check_viewer_in_browser.js` fails if the
+page fetches anything from another host but tiles, and checks the no-tiles
+setting too.
 
 ## How it stays correct
 
@@ -196,6 +205,7 @@ the internet, copy Leaflet beside it and change the two links.
 
 Map data, border data and localities © OpenStreetMap contributors (border via
 geoBoundaries, localities via the Humanitarian OpenStreetMap Team; ODbL).
-Tehsils, districts and provinces: UN OCHA (CC BY-IGO 3.0). Map tiles are loaded from
-`tile.openstreetmap.org`; for heavy use, switch to a tile provider that allows it
-(see "Loading on a phone").
+Tehsils, districts and provinces: UN OCHA (CC BY-IGO 3.0). Map tiles are set in
+`tiles.js` (by default `tile.openstreetmap.org`; for heavy use, switch to a
+provider that allows it, see "Loading on a phone"). Leaflet © Volodymyr
+Agafonkin and contributors, BSD 2-Clause (`vendor/leaflet/LICENSE`).

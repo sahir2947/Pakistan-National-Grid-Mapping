@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pakistan Grid Viewer</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=">
 <style>
   :root {
     --bg: #ffffff; --fg: #1f2937; --muted: #6b7280; --line: #e5e7eb; --accent: #d9480f;
@@ -109,8 +109,9 @@
 <div class="panel" id="panel"></div>
 <div class="status" id="status"></div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="vendor/leaflet/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="></script>
+<script src="tiles.js"></script>
 <script src="layout.js"></script>
 <script src="boundary.js"></script>
 <script src="pakgrid.js"></script>
@@ -143,12 +144,20 @@
   }
   var map = L.map("map", { zoomControl: true, worldCopyJump: false, zoomSnap: 0.25 })
     .fitBounds([[B.south, B.west], [B.north, B.east]], viewPadding());
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' +
-      ' · Border: <a href="https://www.geoboundaries.org">geoBoundaries</a> · Tehsils: UN OCHA (CC BY-IGO 3.0)' +
-      ' · Localities: OpenStreetMap via HOT (ODbL)'
-  }).addTo(map);
+  // The background map comes from tiles.js (edit that file to change provider, or set its url to
+  // "" for none). The grid's own data sources are credited whatever the background is.
+  var TILES = window.PAKGRID_TILES || {};
+  var DATA_CREDIT = 'Border: <a href="https://www.geoboundaries.org">geoBoundaries</a>' +
+    ' · Tehsils: UN OCHA (CC BY-IGO 3.0) · Localities: &copy; OpenStreetMap contributors via HOT (ODbL)';
+  if (TILES.url) {
+    var tileOptions = { maxZoom: TILES.maxZoom || 19,
+                        attribution: (TILES.attribution ? TILES.attribution + " · " : "") + DATA_CREDIT };
+    if (TILES.subdomains) tileOptions.subdomains = TILES.subdomains;
+    L.tileLayer(TILES.url, tileOptions).addTo(map);
+  } else {
+    map.setMaxZoom(19);                     // with no tile layer, nothing else limits the zoom
+    map.attributionControl.addAttribution(DATA_CREDIT);
+  }
   var canvas = L.canvas({ padding: 0.3 });
 
   // -- Rectangle, quadrants, midlines and corners ------------------------

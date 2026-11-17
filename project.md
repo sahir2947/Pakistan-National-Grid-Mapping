@@ -1019,9 +1019,9 @@ pakgrid/
 ├── __main__.py   `python -m pakgrid` runs the command-line tools
 └── py.typed      Marks the package as typed, for apps' type checkers (§14)
 scripts/          make_places_data.py: makes data/places-v2.json.gz from the source downloads
-viewer/           The map viewer (§7.3) and its JavaScript copy of the library (pakgrid.js)
+viewer/           The map viewer (§7.3), its JavaScript copy of the library (pakgrid.js), its tile setting (tiles.js) and Leaflet (vendor/)
 conformance/      Exact rules and test files for ports to other languages (navigation, walkthrough)
-docs/             Using pakgrid in a Django REST Framework backend (django.md)
+docs/             Using pakgrid in a Django REST Framework backend (django.md), and taking an app to production (integrating.md)
 tests/            Every feature's tests (§14), run on Linux, macOS and Windows
 .github/          Continuous integration (tests, checksums), issue forms, pull request checklist
 pyproject.toml    Package metadata, and the pytest, ruff and mypy settings
@@ -1283,7 +1283,10 @@ for checking the grid visually before it is used in an app:
 
 It needs no database. It recomputes the grid and the border flags from
 `viewer/layout.js` and `viewer/boundary.js` with the same formulas as the
-library, and `tests/test_viewer_js.py` checks that the two agree. See [viewer/README.md](viewer/README.md).
+library, and `tests/test_viewer_js.py` checks that the two agree. It loads
+nothing from other hosts except map tiles: Leaflet is vendored in
+`viewer/vendor/leaflet/`, and the tile provider is set in `viewer/tiles.js`
+(an empty URL gives no background map, fully offline). See [viewer/README.md](viewer/README.md).
 
 ### 7.4 HTTP API (on hold): 10 endpoints
 
@@ -2039,7 +2042,9 @@ framework) installs `pakgrid` with pip, builds and verifies the database once
 locates pins and stores the results. The phone app talks only to the app's
 own API, and runs what must work offline (live rider guidance, a
 walkthrough's rider rule) on the phone. Step-by-step backend setup, with
-tested code: [docs/django.md](docs/django.md).
+tested code: [docs/django.md](docs/django.md). Taking it to production (the
+app's permission rules, limits, monitoring, rollout and a checklist):
+[docs/integrating.md](docs/integrating.md).
 
 **What an app can use it for:**
 

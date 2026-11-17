@@ -144,6 +144,14 @@ first release. Pull request numbers are in brackets.
 - Documentation gaps closed: docstrings on every public method, the `ids`
   helpers, the last methods and command-line options in the reference, and the
   package layout. [#33]
+- `docs/integrating.md`: the ordered guide for an app team (written for
+  Dukaandaari) taking pakgrid to production. It covers permission rules and
+  their test matrix, a deploy check that refuses to start without them,
+  resource limits, Nginx and Celery settings, storage retention, the viewer
+  and the phone app, rolling out a grid database with a deployment receipt,
+  monitoring and runbooks, staging, a security and privacy review, a gradual
+  rollout, and an acceptance checklist. All of it is app-side work; pakgrid is
+  not changed for one app. [#PR]
 
 ### Fixed
 - From Codex's follow-up: smoothing was still quadratic when readings are
@@ -199,6 +207,14 @@ first release. Pull request numbers are in brackets.
   [#26]
 
 ### Changed
+- The map viewer loads nothing from other hosts but map tiles. Leaflet 1.9.4 is
+  vendored in `viewer/vendor/leaflet/` (unmodified, BSD 2-Clause), still
+  checked by its integrity hashes, which a test compares with the files. The
+  background map is set in one file, `viewer/tiles.js` (provider URL,
+  attribution, deepest zoom); with its URL set to `""` the viewer runs fully
+  offline, and the data sources stay credited. `scripts/check_viewer_in_browser.js`
+  now fails if the page asks another host for anything but tiles, and checks
+  the no-tiles setting. [#PR]
 - The map viewer loads the places data (`places.js`, ~2.8 MB compressed) after
   the map is painted, instead of before it: the grid shows at once, and taps,
   searches, links and tools that need places wait for them. With the CPU slowed
