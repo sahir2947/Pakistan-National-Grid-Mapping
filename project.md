@@ -957,6 +957,9 @@ rider's GPS.
 - the app's own rule for who may record and publish for an address
   (`CAN_UPLOAD`, required: without it only staff may), track and upload limits,
   and refusals with a `code`;
+- a photo job that survives failures: it publishes only while it holds its
+  claim, and switches to a complete new set of photos in one transaction, so a
+  storage or database failure leaves the previous photos and no stray files;
 - `GET walkthroughs/for/<place_ref>/` for riders, with each photo's URL;
 - the Django admin.
 

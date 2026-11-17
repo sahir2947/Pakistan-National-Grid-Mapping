@@ -565,7 +565,7 @@ def rider_can_view(user, walkthrough):        # only a rider with an active orde
 | `GET walkthroughs/<id>/` | The owner's review screen: the status, and the walkthrough JSON with each photo's `url` |
 | `POST walkthroughs/<id>/approve/` · `reject/` | The owner approves (`live`, replacing the address's previous live walkthrough) or rejects, with an optional `note` |
 | `POST walkthroughs/<id>/retry/` · `DELETE walkthroughs/<id>/` | Retry a failed photo job · delete it with its photos |
-| `GET walkthroughs/?place_ref=` | The walkthroughs the user may manage (staff: all) |
+| `GET walkthroughs/?place_ref=` | The walkthroughs the user may manage (by `CAN_MANAGE`; by default their own, staff all), newest first, at most 200: the same ones the detail view opens |
 | `GET walkthroughs/for/<place_ref>/` | **For the rider app**, when an order is assigned: the live walkthrough's JSON with each photo's `url`. Download the photos then, so it works with a weak signal at the door |
 
 Anything a user may not see answers 404, so a walkthrough's existence is not
@@ -592,7 +592,8 @@ ffmpeg cannot read; the video is kept so it can be retried) and `replaced`.
 - `"celery"`: the task `pakgrid.walkthroughs.take_photos`.
 - `"command"` (the default): a cron job runs `python manage.py
   process_walkthroughs` every minute. A job whose worker died is started again
-  after 30 minutes.
+  after 30 minutes without news from it (a working job reports after every
+  photo, however long the video).
 - `"thread"`: a thread in the web process (small sites).
 - `"sync"`: during the upload, from the uploaded file itself: the video is
   stored only if the photos fail (so it can be retried). Fast enough for 1–2
@@ -600,8 +601,19 @@ ffmpeg cannot read; the video is kept so it can be retried) and `replaced`.
 
 The job copies the video from your storage (local files or S3 via
 django-storages), takes each photo with ffmpeg, stores them under
-`walkthroughs/<id>/frame-NNN.jpg`, and deletes the video unless `KEEP_VIDEO`
-is set.
+`walkthroughs/<id>/<generation>/frame-NNN.jpg`, and deletes the video unless
+`KEEP_VIDEO` is set.
+
+**What happens when something fails.** The job holds a claim on the record
+(a token it renews after every photo) and publishes only if it still holds it,
+checked in the transaction that publishes: a worker thought dead that wakes up
+later stops and changes nothing. A whole job may take `JOB_TIMEOUT_S` (1,200 s)
+before it fails. The new photos are all stored first, under a new
+`<generation>` folder; then one transaction points the records at them, and
+the previous photos' files are deleted only once that commits. So a storage
+or database failure part-way leaves the previous photos as they were, records
+and files, and leaves no stray files behind. Deleting a walkthrough deletes its
+files once the deletion commits, too.
 
 **Where the files go:** `STORAGE` names a Django storage class for the videos
 and photos (default: Django's default storage). Its `url()` gives the links in
@@ -617,12 +629,16 @@ identifies the address by its own `place_ref`.
 **Other settings:** `AUTO_APPROVE` (no owner review), `PHOTO_WIDTH` (1280),
 `PHOTO_QUALITY` (3), `MAX_VIDEO_MB` (200), `MAX_TRACK_BYTES` (5,000,000),
 `UPLOAD_RATE` (uploads per user, `"30/hour"`; `None` for no limit, counted in
-Django's cache), `FFMPEG`, `FFMPEG_TIMEOUT_S`, and
-`CAN_MANAGE` (who may review, delete and retry: by default the uploader and
-staff). The Django admin lists walkthroughs with their photos and steps, and
-can approve or reject several at once. The steps are also plain functions
+Django's cache), `FFMPEG`, `FFMPEG_TIMEOUT_S`, `JOB_TIMEOUT_S` (1,200), and
+`CAN_MANAGE` (who may review, delete, retry and list: by default the uploader
+and staff). When `CAN_MANAGE` lets people manage others' walkthroughs (a team
+lead, say), also set `MANAGE_QUERYSET` to a dotted path to
+`f(user, queryset) -> queryset` that narrows the rows the same way in the
+database; without it the list checks `CAN_MANAGE` row by row. The Django admin
+lists walkthroughs with their photos and steps, and can approve or reject
+several at once. The steps are also plain functions
 (`pakgrid.contrib.walkthroughs.services`: `create`, `take_photos`, `approve`,
-`reject`, `live_for`, `payload`) for your own views.
+`reject`, `manageable`, `live_for`, `payload`) for your own views.
 
 The rider app runs the rider rule on the phone: a Dart port of
 [conformance/WALKTHROUGH.md](../conformance/WALKTHROUGH.md), checked with

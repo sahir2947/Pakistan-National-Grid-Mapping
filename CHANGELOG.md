@@ -167,6 +167,16 @@ first release. Pull request numbers are in brackets.
   (migration `0003`), and the later of two simultaneous approvals wins, tested
   on PostgreSQL (CR-03). Malformed tracks and over-long `place_ref`s answer
   400 with a `code` instead of 500 (CR-06). [#36]
+- From the same review, the rest of the walkthrough app: the list follows
+  `CAN_MANAGE` (a team lead sees the team's walkthroughs), applies it before
+  its 200-row limit, and can be narrowed in the database with
+  `MANAGE_QUERYSET` (CR-07). A photo job stores the new photos as a complete
+  set before switching the records over in one transaction, and old files are
+  deleted only after a commit, so a storage or database failure leaves the
+  previous photos intact and no stray files (CR-08). A photo job holds a
+  renewed claim and publishes only while it still holds it, so a worker
+  thought dead cannot overwrite the one that replaced it; a whole job may take
+  `JOB_TIMEOUT_S` (CR-09).
 - Verifier gaps, bad sensor readings in navigation, and documentation, from a
   review. [#18]
 - The JavaScript tests read output as UTF-8, which fixed the Windows run.
@@ -176,6 +186,9 @@ first release. Pull request numbers are in brackets.
   [#26]
 
 ### Changed
+- The walkthrough Django app stores photos under
+  `walkthroughs/<id>/<generation>/` (each photo job's own folder); records made
+  earlier keep their paths. Migration `0004` adds the job's claim token.
 - **The walkthrough Django app now needs `CAN_UPLOAD` for addresses:** without
   it, only staff may record a walkthrough with a `place_ref` (it used to be any
   signed-in user). Set it to your app's rule before upgrading. [#36]
