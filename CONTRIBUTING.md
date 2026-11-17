@@ -63,6 +63,20 @@ python -m ruff check .       # lint (settings in pyproject.toml)
 python -m mypy               # type check (settings in pyproject.toml)
 ```
 
+Some tests need a tool and skip without it: Node.js (the viewer and conformance
+tests), ffmpeg and Celery (the walkthrough photo job), and PostgreSQL (the
+walkthrough app's concurrency tests). To run those on PostgreSQL, point them at
+a server with database and user `postgres`:
+
+```
+PAKGRID_TEST_POSTGRES=localhost:5432 python -m pytest -q tests/test_django_walkthroughs.py
+```
+
+CI sets `PAKGRID_REQUIRE` (for example `PAKGRID_REQUIRE=node,ffmpeg`) so that a
+missing tool fails the run instead of skipping its tests; you can do the same.
+If you change the viewer, also run `scripts/check_viewer_in_browser.js` (see
+its header).
+
 ### The rules a change must keep
 
 - **Grid IDs never change.** The grid is version 1 and fixed for good: its
