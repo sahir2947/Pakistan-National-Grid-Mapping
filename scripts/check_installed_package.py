@@ -43,17 +43,21 @@ def main(expected_version: str) -> None:
     lat, lon = resolve_address(address_from_point(31.5204, 74.3587).text)
     assert abs(lat - 31.5204) < 1e-4 and abs(lon - 74.3587) < 1e-4
 
-    # the command line, and a small build that uses the packaged border and places data
-    for cmd in (["pakgrid", "--help"], [sys.executable, "-m", "pakgrid", "--help"]):
+    # the command line, as installed beside this Python (not whatever `pakgrid` is on PATH), and a
+    # small build that uses the packaged border and places data
+    scripts = os.path.dirname(sys.executable)
+    cli = os.path.join(scripts, "pakgrid.exe" if os.name == "nt" else "pakgrid")
+    assert os.path.isfile(cli), f"the pakgrid command was not installed: {cli}"
+    for cmd in ([cli, "--help"], [sys.executable, "-m", "pakgrid", "--help"]):
         subprocess.run(cmd, check=True, capture_output=True)
     with tempfile.TemporaryDirectory() as tmp:
         db = os.path.join(tmp, "g.sqlite")
-        subprocess.run(["pakgrid", "build", "-o", db, "--quadrant", "11", "--rows", "140:141"],
+        subprocess.run([cli, "build", "-o", db, "--quadrant", "11", "--rows", "140:141"],
                        check=True, capture_output=True)
-        out = subprocess.run(["pakgrid", "locate", "31.5204", "74.3587", "--db", db],
+        out = subprocess.run([cli, "locate", "31.5204", "74.3587", "--db", db],
                              check=True, capture_output=True, text=True).stdout
         assert '"11-0140-0471-00"' in out and "Lahore" in out, out
-        subprocess.run(["pakgrid", "verify", "--db", db], check=True, capture_output=True)
+        subprocess.run([cli, "verify", "--db", db], check=True, capture_output=True)
     print(f"pakgrid {pakgrid.__version__} installed correctly: {len(wanted)} files, CLI, build, lookup")
 
 
