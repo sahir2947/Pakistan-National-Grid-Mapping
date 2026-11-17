@@ -151,7 +151,7 @@ first release. Pull request numbers are in brackets.
   and the phone app, rolling out a grid database with a deployment receipt,
   monitoring and runbooks, staging, a security and privacy review, a gradual
   rollout, and an acceptance checklist. All of it is app-side work; pakgrid is
-  not changed for one app. [#PR]
+  not changed for one app. [#41]
 
 ### Fixed
 - From Codex's follow-up: smoothing was still quadratic when readings are
@@ -214,7 +214,7 @@ first release. Pull request numbers are in brackets.
   attribution, deepest zoom); with its URL set to `""` the viewer runs fully
   offline, and the data sources stay credited. `scripts/check_viewer_in_browser.js`
   now fails if the page asks another host for anything but tiles, and checks
-  the no-tiles setting. [#PR]
+  the no-tiles setting. [#41]
 - The map viewer loads the places data (`places.js`, ~2.8 MB compressed) after
   the map is painted, instead of before it: the grid shows at once, and taps,
   searches, links and tools that need places wait for them. With the CPU slowed
