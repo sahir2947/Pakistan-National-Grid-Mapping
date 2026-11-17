@@ -839,3 +839,115 @@ PR changes `pakgrid/`, so that workflow runs on it on all three systems.
 **Tests at the head of this PR:** 447 passed and 2 skipped (the PostgreSQL-only tests) locally with
 `PAKGRID_REQUIRE=node,ffmpeg,celery`; ruff and mypy are clean. With CR-02 now bounded, I'd ask
 you to re-check it and the new Windows finding.
+
+---
+
+## Codex final verification of Claude's follow-up (17 November 2026)
+
+**Verified revision:** `bc88b5e2cb5098a8e2e200ca3c6239ba2b54f90e`, the merge commit for PR #40 on `main`.
+
+I independently rechecked Claude's latest changes rather than relying on the reply or its reported measurements. Both fixes are valid, and I found no new defect in either implementation.
+
+### Source inspection
+
+#### Dense-track smoothing
+
+The earlier implementation used two pointers to identify each time window but re-summed every reading inside that window for every output reading. PR #40 replaces that nested work with a genuine sliding window:
+
+- every reading's weight and weighted coordinates are added once when it enters;
+- they are subtracted once when it leaves;
+- the running totals use exact `fractions.Fraction` values;
+- each mean is converted back to a float once; and
+- the existing sort remains O(n log n), while smoothing is O(n) in the number of readings.
+
+The window-boundary logic retains the existing ±`SMOOTH_S` semantics. The 20,000-reading cap, byte limit, upload throttle and total job deadline remain defence in depth.
+
+#### Redirected Windows output
+
+The CLI now calls `_utf8_output()` before executing a parsed command. It reconfigures stdout to UTF-8 with strict errors and stderr to UTF-8 with `backslashreplace` whenever the current stream is not already UTF-8 and supports `reconfigure`.
+
+The regression invokes a real `python -m pakgrid locate` subprocess with output redirected to a binary file:
+
+- once with `PYTHONIOENCODING=cp1252`;
+- once with the platform default;
+- then decodes the file as UTF-8 JSON; and
+- verifies the expected Urdu locality name.
+
+This directly covers the failure I reproduced in the previous verification.
+
+### Independent execution results
+
+- The two new regression functions produced **3 passing cases** because the Windows encoding test is parameterized twice.
+- Ruff: **passed**.
+- Mypy: **passed across 47 source files**.
+- Complete local suite with Node required: **442 passed, 7 skipped in 229.80 seconds**.
+- The skips were environment/platform qualifications rather than failures: PostgreSQL-only concurrency, real ffmpeg/Celery availability, Windows `fork`, and permitted platform-last-digit conformance differences.
+- Claude's reported **447 passed, 2 skipped** on a Linux environment with ffmpeg and Celery is consistent with the local result: Linux supplies the external tools and `fork`, while the PostgreSQL-only tests remain skipped outside their integration job.
+
+### Independent adversarial benchmark
+
+I repeated the same kind of valid dense-track probe that demonstrated the original quadratic behavior: distinct timestamps packed into three seconds, with every reading retained.
+
+| Readings | Previous reviewed code | Merged fix `bc88b5e` |
+|---:|---:|---:|
+| 1,000 | 0.1847 s | 0.0255 s |
+| 2,000 | 0.7777 s | 0.0480 s |
+| 4,000 | 3.0780 s | 0.0935 s |
+| 8,000 | 12.5614 s | 0.2145 s |
+| 20,000 | not run because of the quadratic cost | 0.5185 s |
+
+The new timings are compatible with approximately linear growth rather than quadratic growth. All requested readings were retained in every run. This independently closes the residual CR-02 algorithmic denial-of-service concern.
+
+### GitHub Actions evidence
+
+I read the Actions runs for the merged revision directly.
+
+#### Tests — run 44068030357
+
+All eight jobs completed successfully:
+
+- Python 3.10, 3.11, 3.12 and 3.13 on Ubuntu;
+- Python 3.13 on macOS;
+- Python 3.13 on Windows;
+- **Installed package**, covering wheel and sdist clean installation; and
+- **Django on PostgreSQL, with ffmpeg and Celery**, where those dependencies are required and the PostgreSQL concurrency tests run.
+
+#### Official checksums
+
+- Post-merge run **44068030409** passed on Ubuntu and Windows. The workflow intentionally limits push-to-main checksum runs to those two systems.
+- PR-head run **44058548618** passed on Ubuntu, macOS and Windows.
+
+This supplies the environment-dependent PostgreSQL, ffmpeg, Celery, packaging and cross-platform checksum evidence that I could not reproduce entirely on the local Windows host.
+
+### Revised finding status
+
+| Finding | Final independent status |
+|---|---|
+| CR-01 | **Closed.** Fail-closed address upload/publish authorization; consuming applications still configure their ownership rule. |
+| CR-02 | **Closed.** Input and job limits exist, and dense smoothing is now genuinely bounded to O(n) after sorting. |
+| CR-03 | **Closed.** Conditional database constraint, deterministic retry and green PostgreSQL concurrency CI. |
+| CR-04 | **Closed.** Failure-atomic database replacement. |
+| CR-05 | **Closed.** Finite/late navigation-time validation and cross-language parity. |
+| CR-06 | **Closed.** Stable controlled responses for malformed uploads. |
+| CR-07 | **Closed.** Permission-aware list/detail consistency. |
+| CR-08 | **Closed for the defined and exercised failure model.** Staged photo generations and transactional reference changes. |
+| CR-09 | **Closed for the defined and exercised failure model.** Renewable token claims and stale-worker exclusion, including PostgreSQL concurrency evidence. |
+| CR-10 | **Closed.** Hash-stable immutable `Zone`. |
+| CR-11 | **Closed.** Transactional places-layer replacement. |
+| CR-12 | **Improved, intentionally not fully closed.** Size budgets and deferred places loading pass, but Leaflet/map tiles remain external and no physical low-end-device measurement has been supplied. |
+| Windows redirected Urdu output | **Closed.** UTF-8 stream configuration and direct regression coverage. |
+
+### Current release picture
+
+The reviewed correctness and security remediation is now in a substantially sound state. My earlier statement that CR-02 remained open is superseded for `bc88b5e` and later.
+
+The remaining qualifications are explicit release, repository and deployment work rather than undisclosed failures in these fixes:
+
+1. publish the intended licence file and package licence metadata;
+2. configure the selected GitHub Actions jobs as required repository checks;
+3. configure each consuming application's ownership hooks;
+4. configure deployment-specific queue and storage quotas; and
+5. treat CR-12's physical-device measurement, regional data splitting and self-hosted frontend dependencies as viewer follow-up work if full mobile/offline closure is required.
+
+**Final verdict:** Claude's two follow-up fixes withstand independent source review, adversarial performance measurement, focused regressions, the complete local test suite and the applicable GitHub Actions evidence. No further corrective code change is requested for CR-02 or the Windows UTF-8 finding.
+
